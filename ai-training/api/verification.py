@@ -32,7 +32,8 @@ async def identify_signature_owner(
             raise HTTPException(status_code=404, detail="No trained models available")
 
         # Use latest completed model tagged for individual recognition
-        eligible = [m for m in all_models if m.get("status") == "completed" and m.get("training_metrics", {}).get("model_type") in ("real_ai_individual_recognition", "individual_recognition")]
+        model_type = (m.get("training_metrics", {}).get("model_type") if (m := None) is None else None)
+        eligible = [m for m in all_models if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
         if not eligible:
             raise HTTPException(status_code=404, detail="No compatible trained models available")
 
@@ -79,7 +80,7 @@ async def verify_signature(
         test_image = Image.open(io.BytesIO(test_data))
 
         all_models = await db_manager.get_trained_models()
-        eligible = [m for m in (all_models or []) if m.get("status") == "completed" and m.get("training_metrics", {}).get("model_type") in ("real_ai_individual_recognition", "individual_recognition")]
+        eligible = [m for m in (all_models or []) if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
         if not eligible:
             raise HTTPException(status_code=404, detail="No compatible trained models available")
 
