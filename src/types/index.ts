@@ -181,5 +181,19 @@ export interface Column<T> {
   sortable?: boolean;
 }
 
+// Training types
+export interface TrainingFile {
+  file: File;
+  preview: string;
+}
+
+export interface StudentTrainingCard {
+  id: string;
+  student: Student | null;
+  genuineFiles: TrainingFile[];
+  forgedFiles: TrainingFile[];
+  isExpanded: boolean;
+}
+
 // Utility types
 export type WithRequired<T, K extends keyof T> = T & { [P in K]-?: T[P] };

@@ -11,6 +11,7 @@ All colors MUST be HSL.
   * {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    outline: none;
   }
 
   /* Smooth page transitions */

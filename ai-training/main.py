@@ -36,8 +36,8 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(training_router, prefix="/api/training", tags=["training"])
-app.include_router(verification_router, prefix="/api/verification", tags=["verification"])
+app.include_router(training_router, prefix="/api/training", tags=["ai-training"])
+app.include_router(verification_router, prefix="/api/verification", tags=["ai-verification"])
 app.include_router(progress_router, prefix="/api/progress", tags=["progress"])
 app.include_router(versioning_router, prefix="/api/versioning", tags=["versioning"])
 app.include_router(utils_router, prefix="/api/utils", tags=["utils"])

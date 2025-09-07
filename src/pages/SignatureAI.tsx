@@ -6,10 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { FileUpload } from '@/components/ui/file-upload';
-import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/components/ui/use-toast';
 import { UnsavedChangesDialog } from '@/components/UnsavedChangesDialog';
 import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
@@ -27,30 +24,65 @@ import {
   ChevronRight,
   ChevronDown,
   User,
-  MoreVertical,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  X,
+  MoreVertical
 } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { aiService, AI_CONFIG } from '@/lib/aiService';
 import { fetchStudents } from '@/lib/supabaseService';
-import type { Student } from '@/types';
+import type { Student, StudentTrainingCard as StudentTrainingCardType, TrainingFile } from '@/types';
 import { Progress } from '@/components/ui/progress';
+import StudentTrainingCard from '@/components/StudentTrainingCard';
 
-interface TrainingFile {
-  file: File;
-  preview: string;
-}
+type TrainedModel = {
+  id: string | number;
+  student_name?: string;
+  student?: { id?: number; student_id?: string; firstname?: string; surname?: string; full_name?: string };
+  student_full_name?: string;
+  model_path?: string;
+  model?: { path?: string };
+  artifact_path?: string;
+  training_date?: string;
+  created_at?: string;
+  accuracy?: number;
+};
 
 const SignatureAI = () => {
   const { toast } = useToast();
   
-  // Training Section State
-  const [genuineFiles, setGenuineFiles] = useState<TrainingFile[]>([]);
-  const [forgedFiles, setForgedFiles] = useState<TrainingFile[]>([]);
-  const [currentTrainingSet, setCurrentTrainingSet] = useState<'genuine' | 'forged'>('genuine');
-  const [studentId, setStudentId] = useState<string>('');
+  // Multi-Student Training State
+  const [studentCards, setStudentCards] = useState<StudentTrainingCardType[]>([
+    {
+      id: '1',
+      student: null,
+      genuineFiles: [],
+      forgedFiles: [],
+      isExpanded: true
+    }
+  ]);
   const [isTraining, setIsTraining] = useState(false);
-  const [trainingResult, setTrainingResult] = useState<any>(null);
+  const [trainingResult, setTrainingResult] = useState<{
+    success: boolean;
+    message: string;
+    accuracy?: number;
+    val_accuracy?: number;
+    precision?: number;
+    recall?: number;
+    f1?: number;
+    train_time_s?: number;
+    profile?: {
+      status: string;
+      num_samples: number;
+      last_trained_at?: string;
+    };
+    calibration?: {
+      threshold: number;
+      far: number;
+      frr: number;
+    };
+  } | null>(null);
   
   // Training Progress State
   const [trainingProgress, setTrainingProgress] = useState(0);
@@ -79,24 +111,86 @@ const SignatureAI = () => {
   const [verificationFile, setVerificationFile] = useState<File | null>(null);
   const [verificationPreview, setVerificationPreview] = useState<string>('');
   const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationResult, setVerificationResult] = useState<any>(null);
+  const [verificationResult, setVerificationResult] = useState<{
+    success: boolean;
+    match: boolean;
+    score: number;
+    message?: string;
+    predicted_student_id?: number | null;
+    predicted_student?: {
+      id: number;
+      student_id: string;
+      firstname: string;
+      surname: string;
+    };
+  } | null>(null);
   const [useCamera, setUseCamera] = useState(false);
-  const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalImageIndex, setModalImageIndex] = useState(0);
   const [modalImages, setModalImages] = useState<string[]>([]);
   
-  // Dropdown State
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [isConfirmRemoveOpen, setIsConfirmRemoveOpen] = useState(false);
-  const [visibleCounts, setVisibleCounts] = useState<{ genuine: number; forged: number }>({ genuine: 60, forged: 60 });
-  const STORAGE_KEY = 'signatureAIState:v1';
-  const NAVIGATION_FLAG = 'signatureAIInternalNav:v1';
+  // Student Selection State
+  const [isStudentDialogOpen, setIsStudentDialogOpen] = useState(false);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [debouncedStudentSearch, setDebouncedStudentSearch] = useState('');
+  const [isStudentSearching, setIsStudentSearching] = useState(false);
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
+  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  const [currentCardId, setCurrentCardId] = useState<string>('');
+  const [studentSelectMode, setStudentSelectMode] = useState<'assign' | 'bulkAdd'>('assign');
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
+  const [studentPage, setStudentPage] = useState<number>(1);
+  const STUDENTS_PER_PAGE = 100;
+  
+  // Student Form Dialog State
+  const [isStudentFormDialogOpen, setIsStudentFormDialogOpen] = useState(false);
+  const [currentFormCardId, setCurrentFormCardId] = useState<string | null>(null);
+  const [trainingImagesSet, setTrainingImagesSet] = useState<'genuine' | 'forged'>('genuine');
+  
+  // Toggle between Student Cards and Trained Models view
+  const [isViewingModels, setIsViewingModels] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
+  const [confirmDeleteModelId, setConfirmDeleteModelId] = useState<string | number | null>(null);
+
+  // Temporary: generate mock models for UI design previews
+  const generateMockModels = React.useCallback((count: number = 20): TrainedModel[] => {
+    const now = new Date();
+    return Array.from({ length: count }).map((_, i) => {
+      const d = new Date(now.getTime() - i * 86400000);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const dateIso = `${yyyy}-${mm}-${dd}T12:00:00Z`;
+      const acc = Math.round((80 + Math.random() * 20) * 10) / 1000; // 0.800 - 0.999
+      return {
+        id: `mock-${i + 1}`,
+        student_name: `Student ${i + 1}`,
+        student_full_name: `Student ${i + 1}`,
+        model_path: `/models/model_${i + 1}.keras`,
+        training_date: dateIso,
+        created_at: dateIso,
+        accuracy: acc,
+      } as TrainedModel;
+    });
+  }, []);
 
   // Unsaved changes handling
   const navigate = useNavigate();
+  
+  // Page-scoped set of uploaded image hashes to prevent duplicates within this page
+  const [uploadedImageHashes, setUploadedImageHashes] = useState<Set<string>>(new Set());
+
+  // Compute a stable content hash for a File using SHA-256
+  const computeFileHash = async (file: File): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(digest));
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+  };
   const location = useLocation();
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   
@@ -111,7 +205,6 @@ const SignatureAI = () => {
     handleOpenChange,
   } = useUnsavedChanges({
     onClose: () => {
-      // Execute the pending navigation when user confirms
       if (pendingNavigation) {
         navigate(pendingNavigation);
         setPendingNavigation(null);
@@ -133,7 +226,7 @@ const SignatureAI = () => {
         if (href && href.startsWith('/') && href !== location.pathname) {
           event.preventDefault();
           setPendingNavigation(href);
-          handleClose(); // This will show the unsaved changes dialog
+          handleClose();
         }
       }
     };
@@ -141,110 +234,6 @@ const SignatureAI = () => {
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, [hasUnsavedChanges, location.pathname, handleClose]);
-
-  type SerializableStudent = Pick<Student, 'id' | 'student_id' | 'firstname' | 'surname' | 'program' | 'year' | 'section'>;
-  type SerializableTraining = { name: string; type: string; size: number };
-
-  // No longer serializing file contents to avoid storage quota issues
-
-  // No deserialization from data URLs
-
-  const saveSessionState = async (extra?: { addGenuine?: File[]; addForged?: File[] }) => {
-    try {
-      // Prepare serializable lists. Append newly added files efficiently.
-      const genuineSerial: SerializableTraining[] = [];
-      for (const item of genuineFiles) {
-        genuineSerial.push({
-          name: item.file.name,
-          type: item.file.type,
-          size: item.file.size,
-        });
-      }
-      const forgedSerial: SerializableTraining[] = [];
-      for (const item of forgedFiles) {
-        forgedSerial.push({
-          name: item.file.name,
-          type: item.file.type,
-          size: item.file.size,
-        });
-      }
-      const studentSerial: SerializableStudent | null = selectedStudent
-        ? {
-            id: selectedStudent.id,
-            student_id: selectedStudent.student_id,
-            firstname: selectedStudent.firstname,
-            surname: selectedStudent.surname,
-            program: selectedStudent.program,
-            year: selectedStudent.year,
-            section: selectedStudent.section,
-          }
-        : null;
-      const payload = {
-        selectedStudent: studentSerial,
-        currentTrainingSet,
-        visibleCounts,
-        genuine: genuineSerial,
-        forged: forgedSerial,
-        timestamp: Date.now(), // Add timestamp for debugging
-      };
-      const json = JSON.stringify(payload);
-      if (json.length < 1500000) {
-        sessionStorage.setItem(STORAGE_KEY, json);
-      }
-      // Mark that we're navigating internally (not refreshing)
-      sessionStorage.setItem(NAVIGATION_FLAG, 'true');
-      console.log('State saved successfully', { timestamp: payload.timestamp });
-    } catch (e) {
-      console.warn('Failed saving session state', e);
-    }
-  };
-
-  const loadSessionState = async () => {
-    try {
-      // Check if we have a navigation flag indicating internal navigation
-      const hasNavigationFlag = sessionStorage.getItem(NAVIGATION_FLAG);
-      
-      // Only clear state on actual browser refresh/restart, preserve for internal navigation
-      if (!hasNavigationFlag && window.performance.navigation && window.performance.navigation.type === 1) {
-        // This is a browser refresh without navigation flag - clear state for fresh start
-        console.log('Page reload detected, clearing saved state');
-        sessionStorage.removeItem(STORAGE_KEY);
-        sessionStorage.removeItem(NAVIGATION_FLAG);
-        return;
-      }
-      const raw = sessionStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        console.log('No saved state found');
-        return;
-      }
-      console.log('Loading saved state...');
-      const parsed = JSON.parse(raw) as {
-        selectedStudent: SerializableStudent | null;
-        currentTrainingSet: 'genuine' | 'forged';
-        visibleCounts: { genuine: number; forged: number };
-        genuine: SerializableTraining[];
-        forged: SerializableTraining[];
-        timestamp?: number;
-      };
-      console.log('State loaded successfully', { 
-        timestamp: parsed.timestamp,
-        studentSelected: !!parsed.selectedStudent,
-        genuineCount: parsed.genuine?.length || 0,
-        forgedCount: parsed.forged?.length || 0 
-      });
-      if (parsed.selectedStudent) {
-        setSelectedStudent(parsed.selectedStudent as unknown as Student);
-      }
-      setVisibleCounts(parsed.visibleCounts || { genuine: 60, forged: 60 });
-      setCurrentTrainingSet(parsed.currentTrainingSet || 'genuine');
-      // Do not rehydrate file blobs from storage
-      
-      // Clear navigation flag after successful load
-      sessionStorage.removeItem(NAVIGATION_FLAG);
-    } catch (e) {
-      console.warn('Failed loading session state', e);
-    }
-  };
 
   // Warn before unload if there are any interactions/changes
   React.useEffect(() => {
@@ -257,27 +246,12 @@ const SignatureAI = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
-  // Student Selection State
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [isStudentDialogOpen, setIsStudentDialogOpen] = useState(false);
-  const [studentSearch, setStudentSearch] = useState('');
-  const [isStudentCollapsed, setIsStudentCollapsed] = useState(true);
-  const [debouncedStudentSearch, setDebouncedStudentSearch] = useState('');
-  const [isStudentSearching, setIsStudentSearching] = useState(false);
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
-  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
-  
-  // Student switch confirmation state
-  const [isStudentSwitchConfirmOpen, setIsStudentSwitchConfirmOpen] = useState(false);
-  const [pendingStudent, setPendingStudent] = useState<Student | null>(null);
-
   // Fetch students on component mount
   React.useEffect(() => {
     const loadStudents = async () => {
       setIsLoadingStudents(true);
       try {
         const students = await fetchStudents();
-        // Sort alphabetically by name (firstname + surname)
         const sortedStudents = students.sort((a, b) => {
           const nameA = `${a.firstname} ${a.surname}`.toLowerCase();
           const nameB = `${b.firstname} ${b.surname}`.toLowerCase();
@@ -296,33 +270,7 @@ const SignatureAI = () => {
       }
     };
     loadStudents();
-  }, []);
-
-  // Restore persisted state on mount
-  React.useEffect(() => {
-    loadSessionState();
-  }, []);
-
-  // Persist on critical state changes
-  React.useEffect(() => {
-    saveSessionState();
-  }, [selectedStudent, genuineFiles, forgedFiles, currentTrainingSet, visibleCounts]);
-
-  // Ensure state is persisted on internal navigation or tab hide
-  React.useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        // Best-effort save before the page is backgrounded or navigating away
-        saveSessionState();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      // Save once more on unmount to capture any last-moment changes
-      saveSessionState();
-    };
-  }, [selectedStudent, genuineFiles, forgedFiles, currentTrainingSet, visibleCounts]);
+  }, [toast]);
 
   React.useEffect(() => {
     setIsStudentSearching(true);
@@ -338,128 +286,174 @@ const SignatureAI = () => {
         s.student_id.includes(debouncedStudentSearch) ||
         `${s.firstname} ${s.surname}`.toLowerCase().includes(debouncedStudentSearch.toLowerCase())
       ))
-    : allStudents.slice(0, 5); // Show first 5 by default
-  
+    : allStudents;
+
+  const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / STUDENTS_PER_PAGE));
+  const pagedStudents = filteredStudents.slice(
+    (studentPage - 1) * STUDENTS_PER_PAGE,
+    studentPage * STUDENTS_PER_PAGE
+  );
+
   const verificationInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Refs for components
+  const verificationCardRef = useRef<HTMLDivElement>(null);
+  const studentContainerRef = useRef<HTMLDivElement>(null);
+  
 
   // Validation functions
-  const hasUploadedImages = () => {
-    return genuineFiles.length > 0 || forgedFiles.length > 0;
+  const hasUploadedImages = (card: StudentTrainingCardType) => {
+    return card.genuineFiles.length > 0 || card.forgedFiles.length > 0;
   };
 
   const canTrainModel = () => {
-    return selectedStudent !== null && hasUploadedImages();
+    return studentCards.some(card => card.student !== null && hasUploadedImages(card));
   };
 
-  // Data Quality Functions
-  const getDataBalance = () => {
-    const genuineCount = genuineFiles.length;
-    const forgedCount = forgedFiles.length;
-    const total = genuineCount + forgedCount;
-    
-    if (total === 0) return { ratio: 0, status: 'none', message: 'No data uploaded' };
-    
-    const genuineRatio = genuineCount / total;
-    const forgedRatio = forgedCount / total;
-    
-    if (genuineRatio === 0 || forgedRatio === 0) {
-      return { ratio: 0, status: 'unbalanced', message: 'Need both genuine and forged samples' };
-    }
-    
-    const ratio = Math.min(genuineRatio, forgedRatio) / Math.max(genuineRatio, forgedRatio);
-    
-    if (ratio >= 0.7) {
-      return { ratio, status: 'balanced', message: 'Good data balance' };
-    } else if (ratio >= 0.4) {
-      return { ratio, status: 'fair', message: 'Moderate imbalance - consider adding more samples' };
-    } else {
-      return { ratio, status: 'poor', message: 'Poor balance - add more samples of the minority class' };
-    }
+  const getTotalTrainingData = () => {
+    return studentCards.reduce((acc, card) => ({
+      genuine: acc.genuine + card.genuineFiles.length,
+      forged: acc.forged + card.forgedFiles.length
+    }), { genuine: 0, forged: 0 });
   };
 
-  const getImageQualityScore = (file: File): number => {
-    // Basic quality assessment based on file size only
-    const sizeScore = Math.min(file.size / (1024 * 1024), 10) / 10; // Max 10MB = 1.0
-    return sizeScore;
+  const getSelectedStudentIds = () => {
+    return studentCards
+      .filter(card => card.student !== null)
+      .map(card => card.student!.id);
   };
 
-  const getOverallDataQuality = () => {
-    const balance = getDataBalance();
-    const totalImages = genuineFiles.length + forgedFiles.length;
-    
-    if (totalImages === 0) {
-      return { score: 0, status: 'poor', message: 'No training data available' };
-    }
-    
-    if (totalImages < 10) {
-      return { score: 0.3, status: 'poor', message: 'Very few samples - recommend at least 10 images' };
-    }
-    
-    if (totalImages < 20) {
-      return { score: 0.6, status: 'fair', message: 'Limited samples - more data would improve accuracy' };
-    }
-    
-    if (balance.status === 'balanced' && totalImages >= 20) {
-      return { score: 0.9, status: 'excellent', message: 'Good training dataset' };
-    }
-    
-    return { score: 0.7, status: 'good', message: 'Decent training dataset' };
+  const isStudentAlreadySelected = (studentId: number, currentCardId: string) => {
+    return studentCards.some(card => 
+      card.id !== currentCardId && 
+      card.student !== null && 
+      card.student.id === studentId
+    );
   };
 
   const getTrainModelErrorMessage = () => {
-    if (!selectedStudent && !hasUploadedImages()) {
-      return "Please select a student and upload at least one signature image to train the model.";
+    const hasAnyData = studentCards.some(card => hasUploadedImages(card));
+    const hasAnyStudent = studentCards.some(card => card.student !== null);
+    
+    if (!hasAnyStudent && !hasAnyData) {
+      return "Please add at least one student and upload signature images to train the model.";
     }
-    if (!selectedStudent) {
-      return "Please select a student to train the model.";
+    if (!hasAnyStudent) {
+      return "Please select students for the training cards.";
     }
-    if (!hasUploadedImages()) {
+    if (!hasAnyData) {
       return "Please upload at least one signature image to train the model.";
     }
     return "";
   };
 
-  const handleStudentSelection = (student: Student) => {
-    // Check if we have uploaded images and a different student is selected
-    if (hasUploadedImages() && selectedStudent && selectedStudent.id !== student.id) {
-      setPendingStudent(student);
-      setIsStudentSwitchConfirmOpen(true);
-    } else {
-      setSelectedStudent(student);
-      setIsStudentDialogOpen(false);
-    }
-  };
+  // Student Card Management Functions
+  const addStudentCard = React.useCallback(() => {
+    // Deprecated: no longer create empty cards.
+    // Open the student selector in bulk add mode instead
+    setStudentSelectMode('bulkAdd');
+    setSelectedStudentIds(new Set());
+    setStudentPage(1);
+    setIsStudentDialogOpen(true);
+  }, []);
 
-  const confirmStudentSwitch = () => {
-    // Clear all uploaded images
-    genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    setGenuineFiles([]);
-    setForgedFiles([]);
-    
-    // Set new student
-    setSelectedStudent(pendingStudent);
-    setIsStudentDialogOpen(false);
-    setIsStudentSwitchConfirmOpen(false);
-    setPendingStudent(null);
-    markDirty();
-    
-    toast({
-      title: "Student Changed",
-      description: "All uploaded images have been cleared for the new student.",
+  const removeStudentCard = React.useCallback((cardId: string) => {
+    setStudentCards(prev => {
+      if (prev.length <= 1) {
+        // Reset the only card instead of removing it
+        return prev.map(card => {
+          if (card.id !== cardId) return card;
+          // Revoke previews to avoid memory leaks
+          card.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
+          card.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
+          return {
+            ...card,
+            student: null,
+            genuineFiles: [],
+            forgedFiles: [],
+          };
+        });
+      }
+      
+      const card = prev.find(c => c.id === cardId);
+      if (card) {
+        card.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
+        card.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
+      }
+      
+      return prev.filter(c => c.id !== cardId);
     });
+  }, [toast]);
+
+  const updateStudentCard = React.useCallback((cardId: string, updates: Partial<StudentTrainingCardType>) => {
+    setStudentCards(prev => prev.map(card => 
+      card.id === cardId ? { ...card, ...updates } : card
+    ));
+  }, []);
+
+  const handleStudentSelection = (student: Student, keepFormOpen = false) => {
+    if (currentCardId) {
+      // Check if student is already selected in another card
+      const isAlreadySelected = isStudentAlreadySelected(student.id, currentCardId);
+      
+      if (isAlreadySelected) {
+        toast({
+          title: "Student Already Selected",
+          description: "This student is already selected in another training card. Please choose a different student.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const card = studentCards.find(c => c.id === currentCardId);
+      if (card && hasUploadedImages(card) && card.student && card.student.id !== student.id) {
+        card.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
+        card.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
+        updateStudentCard(currentCardId, {
+          student,
+          genuineFiles: [],
+          forgedFiles: []
+        });
+        toast({
+          title: "Student Changed",
+          description: "All uploaded images have been cleared for the new student.",
+        });
+      } else {
+        updateStudentCard(currentCardId, { student });
+        toast({
+          title: "Student Selected",
+          description: `${student.firstname} ${student.surname} has been added to the training card.`,
+        });
+      }
+    }
+    
+    // Only close the student dialog if not keeping form open
+    if (!keepFormOpen) {
+      setIsStudentDialogOpen(false);
+      setCurrentCardId('');
+    }
+    markDirty();
   };
 
-  const cancelStudentSwitch = () => {
-    setIsStudentSwitchConfirmOpen(false);
-    setPendingStudent(null);
+  const openStudentDialog = (cardId: string) => {
+    setCurrentCardId(cardId);
+    setStudentSelectMode('assign');
+    setSelectedStudentIds(new Set());
+    setStudentPage(1);
+    setIsStudentDialogOpen(true);
+  };
+
+  const openStudentFormDialog = (cardId: string) => {
+    setCurrentFormCardId(cardId);
+    setIsStudentFormDialogOpen(true);
+    setTrainingImagesSet('genuine');
   };
 
   // Training Functions
   const validateFiles = (files: File[]): File[] => {
-    const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB to align with backend
+    const MAX_SIZE_BYTES = 10 * 1024 * 1024;
     const valid: File[] = [];
     let rejected = 0;
     files.forEach((f) => {
@@ -483,12 +477,39 @@ const SignatureAI = () => {
     return valid;
   };
 
-  const handleTrainingFilesChange = async (files: File[], setType: 'genuine' | 'forged') => {
+  const handleTrainingFilesChange = async (files: File[], setType: 'genuine' | 'forged', cardId: string) => {
     const safeFiles = validateFiles(files);
-    const newFilesPromises = safeFiles.map(async (file) => {
+    if (safeFiles.length === 0) return;
+
+    // Compute hashes and filter duplicates within this page
+    const fileEntries = await Promise.all(safeFiles.map(async (file) => {
+      const hash = await computeFileHash(file);
+      return { file, hash };
+    }));
+
+    const uniqueEntries = fileEntries.filter(({ hash }) => !uploadedImageHashes.has(hash));
+
+    if (uniqueEntries.length === 0) {
+      toast({
+        title: 'Duplicate images blocked',
+        description: 'This image has already been uploaded on this page.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Warn if some were filtered out
+    if (uniqueEntries.length < fileEntries.length) {
+      toast({
+        title: 'Some duplicates were ignored',
+        description: 'This image has already been uploaded on this page.',
+        variant: 'destructive',
+      });
+    }
+
+    const previews = await Promise.all(uniqueEntries.map(async ({ file }) => {
       let preview = '';
       try {
-        // Use native preview for most images; fallback to backend preview for TIFF or unknown
         if (file.type.startsWith('image/') && file.type !== 'image/tiff' && !file.name.toLowerCase().endsWith('.tif') && !file.name.toLowerCase().endsWith('.tiff')) {
           preview = URL.createObjectURL(file);
         } else {
@@ -498,34 +519,102 @@ const SignatureAI = () => {
         preview = URL.createObjectURL(file);
       }
       return { file, preview };
+    }));
+
+    // Add to page-level hash set
+    setUploadedImageHashes(prev => {
+      const next = new Set(prev);
+      uniqueEntries.forEach(({ hash }) => next.add(hash));
+      return next;
     });
-    const newFiles = await Promise.all(newFilesPromises);
-    if (setType === 'genuine') {
-      setGenuineFiles(prev => [...prev, ...newFiles]);
-    } else {
-      setForgedFiles(prev => [...prev, ...newFiles]);
-    }
+
+    // Update the target card's files
+    setStudentCards(prev => prev.map(card => {
+      if (card.id === cardId) {
+        if (setType === 'genuine') {
+          return { ...card, genuineFiles: [...card.genuineFiles, ...previews] };
+        } else {
+          return { ...card, forgedFiles: [...card.forgedFiles, ...previews] };
+        }
+      }
+      return card;
+    }));
     markDirty();
   };
 
-  const removeTrainingFile = (index: number, setType: 'genuine' | 'forged') => {
-    if (setType === 'genuine') {
-      setGenuineFiles(prev => {
-        const newFiles = [...prev];
-        URL.revokeObjectURL(newFiles[index].preview);
-        newFiles.splice(index, 1);
-        return newFiles;
-      });
-    } else {
-      setForgedFiles(prev => {
-        const newFiles = [...prev];
-        URL.revokeObjectURL(newFiles[index].preview);
-        newFiles.splice(index, 1);
-        return newFiles;
-      });
-    }
+  const removeTrainingFile = (index: number, setType: 'genuine' | 'forged', cardId: string) => {
+    setStudentCards(prev => prev.map(card => {
+      if (card.id === cardId) {
+        if (setType === 'genuine') {
+          const newFiles = [...card.genuineFiles];
+          const removed = newFiles[index];
+          URL.revokeObjectURL(removed.preview);
+          newFiles.splice(index, 1);
+          // Attempt to compute and remove the hash from the page-level set
+          removed.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
+            const hashArray = Array.from(new Uint8Array(digest));
+            const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+            setUploadedImageHashes(prev => {
+              const next = new Set(prev);
+              next.delete(hashHex);
+              return next;
+            });
+          }).catch(() => { /* noop */ });
+          return { ...card, genuineFiles: newFiles };
+        } else {
+          const newFiles = [...card.forgedFiles];
+          const removed = newFiles[index];
+          URL.revokeObjectURL(removed.preview);
+          newFiles.splice(index, 1);
+          removed.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
+            const hashArray = Array.from(new Uint8Array(digest));
+            const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+            setUploadedImageHashes(prev => {
+              const next = new Set(prev);
+              next.delete(hashHex);
+              return next;
+            });
+          }).catch(() => { /* noop */ });
+          return { ...card, forgedFiles: newFiles };
+        }
+      }
+      return card;
+    }));
     markDirty();
   };
+
+  const removeAllSamples = React.useCallback((cardId: string) => {
+    setStudentCards(prev => prev.map(card => {
+      if (card.id === cardId) {
+        // Revoke all object URLs to prevent memory leaks
+        card.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
+        card.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
+        // Remove hashes for these files from the page-level set
+        const removeHashes = async () => {
+          const all = [...card.genuineFiles, ...card.forgedFiles];
+          for (const tf of all) {
+            try {
+              const buf = await tf.file.arrayBuffer();
+              const digest = await crypto.subtle.digest('SHA-256', buf);
+              const hashArray = Array.from(new Uint8Array(digest));
+              const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+              setUploadedImageHashes(prev => {
+                const next = new Set(prev);
+                next.delete(hashHex);
+                return next;
+              });
+            } catch {
+              // ignore
+            }
+          }
+        };
+        removeHashes();
+        return { ...card, genuineFiles: [], forgedFiles: [] };
+      }
+      return card;
+    }));
+    markDirty();
+  }, [markDirty]);
 
   const handleTrainModel = async () => {
     if (!canTrainModel()) {
@@ -547,60 +636,54 @@ const SignatureAI = () => {
     setCurrentEpochProgress(null);
     trainingStartTimeRef.current = Date.now();
     
-    // Add initial log entry
-    setTrainingLogs(['Training started...']);
-    // Close any previous stream
+    setTrainingLogs(['Training started for multiple students...']);
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
 
     try {
-      // Start async training job
+      const allGenuineFiles: File[] = [];
+      const allForgedFiles: File[] = [];
+      const studentIds: string[] = [];
+      
+      studentCards.forEach(card => {
+        if (card.student && hasUploadedImages(card)) {
+          studentIds.push(card.student.student_id);
+          allGenuineFiles.push(...card.genuineFiles.map(f => f.file));
+          allForgedFiles.push(...card.forgedFiles.map(f => f.file));
+        }
+      });
+
       const asyncResponse = await aiService.startAsyncTraining(
-        selectedStudent.student_id,
-        genuineFiles.map(g => g.file),
-        forgedFiles.map(f => f.file)
+        studentIds.join(','),
+        allGenuineFiles,
+        allForgedFiles
       );
       
       setJobId(asyncResponse.job_id);
-      
-      // Add job created log entry
       setTrainingLogs(prev => [...prev, `Job created: ${asyncResponse.job_id}`]);
       
-      // Subscribe to real-time progress updates
       const eventSource = aiService.subscribeToJobProgress(
         asyncResponse.job_id,
         (job) => {
-          // Normalize stage
-          if (job.current_stage) setTrainingStage(job.current_stage as any);
+          if (job.current_stage) setTrainingStage(job.current_stage as 'idle' | 'preprocessing' | 'training' | 'validation' | 'completed' | 'error');
           setTrainingStatus(job.current_stage || '');
           
-          // Add stage update log entry
           if (job.current_stage && job.current_stage !== 'idle') {
             setTrainingLogs(prev => {
               const newLogs = [...prev];
               const stageLog = `Stage: ${job.current_stage} - Progress: ${Math.round(job.progress || 0)}%`;
-              // Only add if it's a new stage or significant progress change
               if (newLogs.length === 0 || !newLogs[newLogs.length - 1].includes(job.current_stage)) {
                 newLogs.push(stageLog);
               }
-              return newLogs.slice(-15); // Keep last 15 entries
+              return newLogs.slice(-15);
             });
           }
           
-          // Guard progress to be monotonically non-decreasing
           const newProgress = Math.max(0, Math.min(100, job.progress || 0));
-          console.log('Training progress update:', { 
-            jobId: job.job_id, 
-            progress: job.progress, 
-            newProgress, 
-            stage: job.current_stage,
-            metrics: job.training_metrics 
-          });
           setTrainingProgress((prev) => Math.max(prev, newProgress));
           
-          // ETA
           if (typeof job.estimated_time_remaining === 'number') {
             const minutes = Math.floor(job.estimated_time_remaining / 60);
             const seconds = job.estimated_time_remaining % 60;
@@ -609,16 +692,10 @@ const SignatureAI = () => {
             setEstimatedTimeRemaining('');
           }
           
-          // Update training metrics if available
           if (job.training_metrics) {
-            // Create real-time training log entry
             const metrics = job.training_metrics;
             if (metrics.current_epoch > 0) {
-              // Create log entry with batch info if available
               let logEntry = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}`;
-              if (metrics.current_batch) {
-                logEntry += ` - Batch ${metrics.current_batch}`;
-              }
               logEntry += ` - Accuracy: ${(metrics.accuracy * 100).toFixed(1)}% - Loss: ${metrics.loss.toFixed(4)}`;
               if (metrics.val_accuracy > 0) {
                 logEntry += ` - Val Accuracy: ${(metrics.val_accuracy * 100).toFixed(1)}% - Val Loss: ${metrics.val_loss.toFixed(4)}`;
@@ -626,24 +703,21 @@ const SignatureAI = () => {
               
               setTrainingLogs(prev => {
                 const newLogs = [...prev];
-                // Update the last log entry if it's the same epoch and batch, otherwise add new one
                 const lastLogIndex = newLogs.length - 1;
-                const epochBatchKey = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}${metrics.current_batch ? ` - Batch ${metrics.current_batch}` : ''}`;
+                const epochKey = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}`;
                 
-                if (lastLogIndex >= 0 && newLogs[lastLogIndex].startsWith(epochBatchKey)) {
+                if (lastLogIndex >= 0 && newLogs[lastLogIndex].startsWith(epochKey)) {
                   newLogs[lastLogIndex] = logEntry;
                 } else {
                   newLogs.push(logEntry);
                 }
-                // Keep only last 15 log entries for better visibility
                 return newLogs.slice(-15);
               });
               
-              // Update current epoch progress
               setCurrentEpochProgress({
                 epoch: metrics.current_epoch,
                 totalEpochs: metrics.total_epochs,
-                batch: metrics.current_batch || 0,
+                batch: 0,
                 totalBatches: 0,
                 accuracy: metrics.accuracy,
                 loss: metrics.loss,
@@ -652,13 +726,13 @@ const SignatureAI = () => {
               });
             }
           }
-          // Completion handling
+          
           if (job.status === 'completed') {
             setTrainingProgress(100);
             setTrainingStage('completed');
             setTrainingStatus('Training completed!');
             setTrainingResult(job.result);
-            toast({ title: "Training Completed", description: "AI model has been successfully trained for this student" });
+            toast({ title: "Training Completed", description: "AI model has been successfully trained for all students" });
             eventSource.close();
             eventSourceRef.current = null;
             setIsTraining(false);
@@ -703,7 +777,6 @@ const SignatureAI = () => {
     const valid = raw ? validateFiles([raw]) : [];
     const file = valid[0];
     if (file) {
-      // Revoke previous preview URL if any
       if (verificationPreview) {
         URL.revokeObjectURL(verificationPreview);
       }
@@ -724,9 +797,6 @@ const SignatureAI = () => {
       markDirty();
     }
   };
-
-  // Reference files are optional UI-wise; if none provided, we'll fall back to
-  // the currently uploaded Genuine training files for the selected student.
 
   const startCamera = async () => {
     try {
@@ -766,10 +836,8 @@ const SignatureAI = () => {
             setVerificationResult(null);
             markDirty();
             
-            // Stop camera stream
             const stream = video.srcObject as MediaStream;
             stream?.getTracks().forEach(track => track.stop());
-            // Auto-trigger verification on capture
             setTimeout(() => {
               handleVerifySignature();
             }, 0);
@@ -805,22 +873,19 @@ const SignatureAI = () => {
     };
   }, [isTraining]);
 
-  const formatDuration = (ms: number): string => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
-
   // Modal Functions
-  type ModalContext = { kind: 'training', setType: 'genuine' | 'forged' } | { kind: 'verification' } | null;
+  type ModalContext = { kind: 'training', setType: 'genuine' | 'forged', cardId: string } | { kind: 'verification' } | null;
   const [modalContext, setModalContext] = useState<ModalContext>(null);
+  
   const getModalFilename = (): string => {
     if (!isModalOpen) return '';
     if (modalContext?.kind === 'training') {
-      const files = modalContext.setType === 'genuine' ? genuineFiles : forgedFiles;
-      const idx = files.findIndex(f => f.preview === modalImages[modalImageIndex]);
-      return idx >= 0 ? files[idx].file.name : '';
+      const card = studentCards.find(c => c.id === modalContext.cardId);
+      if (card) {
+        const files = modalContext.setType === 'genuine' ? card.genuineFiles : card.forgedFiles;
+        const idx = files.findIndex(f => f.preview === modalImages[modalImageIndex]);
+        return idx >= 0 ? files[idx].file.name : '';
+      }
     }
     if (modalContext?.kind === 'verification') {
       return verificationFile?.name || '';
@@ -849,32 +914,22 @@ const SignatureAI = () => {
     setModalImageIndex(prev => prev < modalImages.length - 1 ? prev + 1 : 0);
   };
 
-  const removeAllTrainingFiles = () => {
-    genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    setGenuineFiles([]);
-    setForgedFiles([]);
-    setIsDropdownOpen(false);
-    toast({
-      title: "Samples Removed",
-      description: "All training samples have been removed",
-    });
-    markDirty();
-  };
-
   const deleteModalCurrentImage = () => {
     if (!modalContext || modalContext.kind !== 'training') return;
     const targetPreview = modalImages[modalImageIndex];
-    if (modalContext.setType === 'genuine') {
-      const idx = genuineFiles.findIndex(f => f.preview === targetPreview);
-      if (idx !== -1) removeTrainingFile(idx, 'genuine');
-      const updated = genuineFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
-      setModalImages(updated);
-    } else {
-      const idx = forgedFiles.findIndex(f => f.preview === targetPreview);
-      if (idx !== -1) removeTrainingFile(idx, 'forged');
-      const updated = forgedFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
-      setModalImages(updated);
+    const card = studentCards.find(c => c.id === modalContext.cardId);
+    if (card) {
+      if (modalContext.setType === 'genuine') {
+        const idx = card.genuineFiles.findIndex(f => f.preview === targetPreview);
+        if (idx !== -1) removeTrainingFile(idx, 'genuine', modalContext.cardId);
+        const updated = card.genuineFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
+        setModalImages(updated);
+      } else {
+        const idx = card.forgedFiles.findIndex(f => f.preview === targetPreview);
+        if (idx !== -1) removeTrainingFile(idx, 'forged', modalContext.cardId);
+        const updated = card.forgedFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
+        setModalImages(updated);
+      }
     }
     setModalImageIndex(prev => Math.max(0, prev - (modalImages.length === 1 ? 0 : 1)));
     if (modalImages.length <= 1) closeImageModal();
@@ -894,14 +949,15 @@ const SignatureAI = () => {
     setVerificationResult(null);
 
     try {
-      // Identification-based verify: only test_file
       const result = await aiService.verifySignature(verificationFile);
       setVerificationResult(result);
       
       if (result.success) {
         toast({
           title: "Verification Complete",
-          description: `Result: ${result.match ? 'Match found' : 'No match'}`,
+          description: result.match 
+            ? "Match found" 
+            : "No match found",
         });
       } else {
         toast({
@@ -931,648 +987,388 @@ const SignatureAI = () => {
       >
         {/* Page Header */}
         <div className="space-y-0.5">
-          <h1 className="text-lg font-bold text-education-navy">SIGNATURE AI</h1>
+          <h1 className="text-lg font-bold text-education-navy">SIGNATURE AI TRAINING & VERIFICATION</h1>
           <p className="text-sm text-muted-foreground">
-            Train AI models and verify signatures using machine learning
+            Train AI models for multiple students and verify signatures using machine learning
           </p>
         </div>
 
-        {/* Student Selection Card */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="h-fit">
-          <CardHeader className="py-3">
-            {/* Collapsed header */}
-            {isStudentCollapsed ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-left">
-                  <span className="text-sm font-medium">
-                    {selectedStudent ? `${selectedStudent.firstname} ${selectedStudent.surname}` : 'No student selected'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-transform ${isStudentCollapsed ? 'rotate-180' : ''}`}
-                    onClick={() => setIsStudentCollapsed(false)}
-                    aria-label="Expand"
-                  >
-                    <ChevronDown className="h-4 w-4" />
+        {/* Model Training Card - Full Width */}
+        <Card ref={studentContainerRef} className="w-full">
+          <CardHeader>
+            <div className="flex items-start justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Brain className="w-5 h-5" />
+                  Model Training
+                </CardTitle>
+                <CardDescription>
+                  Train AI models with uploaded signature data
+                </CardDescription>
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <MoreVertical className="w-4 h-4" />
                   </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setIsStudentDialogOpen(true)}>
-                        {selectedStudent ? 'Change' : 'Select'}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            ) : (
-              // Expanded header
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2">
-                    Select Student
-                  </CardTitle>
-                  <CardDescription>
-                    Choose a student to train the AI model for signature verification
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-transform ${isStudentCollapsed ? 'rotate-180' : ''}`}
-                    onClick={() => setIsStudentCollapsed(true)}
-                    aria-label="Collapse"
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setIsStudentDialogOpen(true)}>
-                        {selectedStudent ? 'Change' : 'Select'}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            )}
-          </CardHeader>
-          {/* Collapsible content */}
-          <div className={`overflow-hidden transition-all ${isStudentCollapsed ? 'max-h-0 py-0' : 'max-h-[500px]'}`}>
-            {!isStudentCollapsed && (
-              <CardContent>
-                {selectedStudent ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
-                    <div>
-                      <Label className="text-muted-foreground">ID</Label>
-                      <div className="font-medium">{selectedStudent?.student_id ?? '—'}</div>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">Name</Label>
-                      <div className="font-medium">{selectedStudent ? `${selectedStudent.firstname} ${selectedStudent.surname}` : '—'}</div>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">Program</Label>
-                      <div className="font-medium">{selectedStudent?.program ?? '—'}</div>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">Year</Label>
-                      <div className="font-medium">{selectedStudent?.year ?? '—'}</div>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">Section</Label>
-                      <div className="font-medium">{selectedStudent?.section ?? '—'}</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">No student selected.</div>
-                )}
-              </CardContent>
-            )}
-          </div>
-          </Card>
-        </div>
-
-        {/* Main Content - Two Cards Side by Side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          
-          {/* Model Training Section */}
-          <Card className="h-fit">
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2">
-                    <Brain className="w-5 h-5" />
-                    Model Training
-                  </CardTitle>
-                  <CardDescription>
-                    Upload signature samples to train AI model for a specific student
-                  </CardDescription>
-                </div>
-                <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
-                  <DropdownMenuTrigger asChild>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem 
-                      onClick={() => setIsConfirmRemoveOpen(true)} 
-                      className="text-red-600"
-                      disabled={(genuineFiles.length + forgedFiles.length) === 0}
-                    >
-                      Remove All Samples
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Upload Buttons: Forged (left, normal) and Genuine (right, highlighted) */}
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
-                  onClick={() => {
-                    setCurrentTrainingSet('forged');
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.multiple = true;
-                    input.onchange = (e) => {
-                      const files = Array.from((e.target as HTMLInputElement).files || []);
-                      handleTrainingFilesChange(files, 'forged');
-                    };
-                    input.click();
-                  }}
-                >
-                  <Upload className="w-4 h-4" />
-                  Forged
-                </Button>
-                <Button
-                  variant="default"
-                  size="sm"
-                  className="flex items-center gap-2"
-                  onClick={() => {
-                    setCurrentTrainingSet('genuine');
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.multiple = true;
-                    input.onchange = (e) => {
-                      const files = Array.from((e.target as HTMLInputElement).files || []);
-                      handleTrainingFilesChange(files, 'genuine');
-                    };
-                    input.click();
-                  }}
-                >
-                  <Upload className="w-4 h-4" />
-                  Genuine
-                </Button>
-              </div>
-
-              {/* Large Square Preview Box for Training Images (Genuine/Forged switch) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Training Images Preview</Label>
-                  <div className="text-xs text-muted-foreground">
-                    {currentTrainingSet === 'genuine' ? (
-                      <span>Genuine ({genuineFiles.length})</span>
-                    ) : (
-                      <span>Forged ({forgedFiles.length})</span>
-                    )}
-                  </div>
-                </div>
-                <div className="relative w-full h-64 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50 group">
-                  {/* Hover Previous/Next inside box */}
-                  <button
-                    className="hidden group-hover:flex absolute left-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow"
-                    onClick={() => setCurrentTrainingSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
-                    aria-label="Previous"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    className="hidden group-hover:flex absolute right-2 top-1/2 -translate-y-1/2 bg-white/80 hover:bg-white rounded-full p-2 shadow"
-                    onClick={() => setCurrentTrainingSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
-                    aria-label="Next"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-
-                  {((currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles).length > 0) ? (
-                    <div className="grid grid-cols-3 gap-2 w-full h-full p-4 overflow-y-auto">
-                      {(currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles)
-                        .slice(0, visibleCounts[currentTrainingSet])
-                        .map((item, index) => (
-                        <div key={index} className="relative group/itm cursor-pointer" onClick={() => openImageModal((currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles).map(f => f.preview), index, { kind: 'training', setType: currentTrainingSet })}>
-                          <img
-                            src={item.preview}
-                            alt={`Sample ${index + 1}`}
-                            className="w-full h-16 object-cover rounded border hover:opacity-80 transition-opacity"
-                            loading="lazy"
-                          />
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            className="absolute top-1 right-1 w-6 h-6 p-0 opacity-0 group-hover/itm:opacity-100 transition-opacity flex items-center justify-center"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeTrainingFile(index, currentTrainingSet);
-                            }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                      {(currentTrainingSet === 'genuine' ? genuineFiles.length : forgedFiles.length) > visibleCounts[currentTrainingSet] && (
-                        <div className="col-span-3 flex justify-center pt-2">
-                          <button
-                            className="text-xs text-foreground hover:underline"
-                            onClick={() =>
-                              setVisibleCounts((prev) => ({
-                                ...prev,
-                                [currentTrainingSet]: prev[currentTrainingSet] + 60,
-                              }))
-                            }
-                          >
-                            Show more
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {!isViewingModels ? (
+                    <>
+                      <DropdownMenuItem onClick={() => addStudentCard()}>Add Student</DropdownMenuItem>
+                      <DropdownMenuItem onClick={async () => {
+                        setIsViewingModels(true);
+                        setIsLoadingModels(true);
+                        const models = await aiService.getTrainedModels();
+                        if (!models || models.length === 0) {
+                          setTrainedModels(generateMockModels(20));
+                        } else {
+                          setTrainedModels(models as TrainedModel[]);
+                        }
+                        setIsLoadingModels(false);
+                      }}>View Models</DropdownMenuItem>
+                    </>
                   ) : (
-                    <div className="text-center text-gray-500">
-                      <Upload className="w-8 h-8 mx-auto mb-2" />
-                      <p>No {currentTrainingSet === 'genuine' ? 'genuine' : 'forged'} images uploaded</p>
-                    </div>
+                    <>
+                      <DropdownMenuItem onClick={() => setIsViewingModels(false)}>Train</DropdownMenuItem>
+                    </>
                   )}
-                </div>
-              </div>
-
-
-
-
-
-              {/* Train Button */}
-              <Button
-                onClick={handleTrainModel}
-                disabled={!canTrainModel() || isTraining}
-                className="w-full"
-              >
-                {isTraining ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {trainingStatus} {Math.round(trainingProgress)}%
-                  </>
-                ) : (
-                  <>
-                    <Brain className="w-4 h-4 mr-2" />
-                    Train Model
-                  </>
-                )}
-              </Button>
-
-              {isTraining && (
-                <div className="space-y-3">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Progress: {Math.round(trainingProgress)}%</span>
-                    <span>{estimatedTimeRemaining || ''}</span>
-                  </div>
-                  
-                  {/* Real-time Training Logs Display */}
-                  {trainingLogs.length > 0 && (
-                    <div className="bg-gray-900 text-green-400 rounded-lg p-3 font-mono text-xs max-h-64 overflow-y-auto">
-                      <div className="text-green-300 text-sm font-semibold mb-2">Training Progress (Live)</div>
-                      {trainingLogs.map((log, index) => (
-                        <div key={index} className="mb-1">
-                          {log}
-                        </div>
-                      ))}
-                      {currentEpochProgress && (
-                        <div className="mt-2 pt-2 border-t border-gray-700">
-                          <div className="text-yellow-400">
-                            Current: Epoch {currentEpochProgress.epoch}/{currentEpochProgress.totalEpochs}
-                            {currentEpochProgress.batch > 0 && ` - Batch ${currentEpochProgress.batch}`} - 
-                            Acc: {(currentEpochProgress.accuracy * 100).toFixed(1)}% - 
-                            Loss: {currentEpochProgress.loss.toFixed(4)}
-                            {currentEpochProgress.valAccuracy > 0 && (
-                              <> - Val Acc: {(currentEpochProgress.valAccuracy * 100).toFixed(1)}% - Val Loss: {currentEpochProgress.valLoss.toFixed(4)}</>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Training Results */}
-              {trainingResult && (
-                <div className="space-y-3">
-                  <Alert className={trainingResult.success ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}>
-                    <div className="flex items-center gap-2">
-                      {trainingResult.success ? (
-                        <CheckCircle className="w-4 h-4 text-green-600" />
-                      ) : (
-                        <AlertCircle className="w-4 h-4 text-red-600" />
-                      )}
-                      <AlertDescription>
-                        <div className="space-y-2">
-                          <p>
-                            <strong>Status:</strong> {trainingResult.success ? 'Training Completed' : 'Training Failed'}
-                          </p>
-                          {trainingResult.profile && (
-                            <>
-                              <p>
-                                <strong>Model Status:</strong>{' '}
-                                <Badge variant={trainingResult.profile.status === 'ready' ? 'default' : 'secondary'}>
-                                  {trainingResult.profile.status}
-                                </Badge>
-                              </p>
-                              <p>
-                                <strong>Samples:</strong> {trainingResult.profile.num_samples}
-                              </p>
-                              {trainingResult.profile.last_trained_at && (
-                                <p>
-                                  <strong>Last Trained:</strong>{' '}
-                                  {new Date(trainingResult.profile.last_trained_at).toLocaleString()}
-                                </p>
-                              )}
-                            </>
-                          )}
-                          <p className="text-sm text-muted-foreground">
-                            {trainingResult.message}
-                          </p>
-                        </div>
-                    </AlertDescription>
-                  </div>
-                </Alert>
-                
-                {/* Training Metrics */}
-                {trainingResult.success && (
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <h4 className="text-sm font-medium text-green-900 mb-3">Training Metrics</h4>
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Train Acc:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.accuracy === 'number' ? trainingResult.accuracy.toFixed(3) : '—'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Val Acc:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.val_accuracy === 'number' ? trainingResult.val_accuracy.toFixed(3) : '—'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Precision:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.precision === 'number' ? trainingResult.precision.toFixed(3) : '—'}</span>
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Recall:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.recall === 'number' ? trainingResult.recall.toFixed(3) : '—'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-green-700">F1 Score:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.f1 === 'number' ? trainingResult.f1.toFixed(3) : '—'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Training Time:</span>
-                          <span className="font-medium text-green-800">{typeof trainingResult.train_time_s === 'number' ? `${trainingResult.train_time_s}s` : '—'}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 text-xs text-green-700">
-                      Model is ready for signature verification!
-                      {trainingResult.calibration && (
-                        <div className="mt-2 grid grid-cols-3 gap-2">
-                          <div><strong>Thr:</strong> {typeof trainingResult.calibration.threshold === 'number' ? trainingResult.calibration.threshold.toFixed(4) : '—'}</div>
-                          <div><strong>FAR:</strong> {typeof trainingResult.calibration.far === 'number' ? trainingResult.calibration.far.toFixed(3) : '—'}</div>
-                          <div><strong>FRR:</strong> {typeof trainingResult.calibration.frr === 'number' ? trainingResult.calibration.frr.toFixed(3) : '—'}</div>
-                        </div>
-                      )}
-                      <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
-                        <strong>Data Augmentation Applied:</strong> Rotation, scale, brightness, blur, and thickness variations for improved robustness
-                      </div>
-                    </div>
-                  </div>
-                )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Signature Verification Section */}
-          <Card className="h-fit">
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2">
-                    <Scan className="w-5 h-5" />
-                    Signature Verification
-                  </CardTitle>
-                  <CardDescription>
-                    Upload or capture a signature to verify against trained models
-                  </CardDescription>
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setVerificationFile(null);
-                        setVerificationPreview('');
-                        stopCamera();
-                      }}
-                      disabled={!verificationFile && !useCamera && !verificationPreview}
-                    >
-                      Clear
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Camera/Upload Toggle */}
-              <div className="flex gap-2">
-                <Button
-                  variant={useCamera ? "default" : "outline"}
-                  size="sm"
-                  onClick={startCamera}
-                  className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
-                >
-                  <Camera className="w-4 h-4" />
-                  Camera
-                </Button>
-                <Button
-                  variant={!useCamera ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => {
-                    setUseCamera(false);
-                    stopCamera();
-                    verificationInputRef.current?.click();
-                  }}
-                  className="flex items-center gap-2"
-                >
-                  <Upload className="w-4 h-4" />
-                  Upload
-                </Button>
-              </div>
-
-              {/* Large Square Preview Box */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Signature Preview</Label>
-                  <div className="text-xs text-muted-foreground">{useCamera ? 'Camera' : 'Upload'}</div>
-                </div>
-                <div className="w-full h-64 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
-                  {useCamera ? (
-                    <div className="w-full h-full">
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        className="w-full h-full object-cover rounded-lg"
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Student Training Cards / Trained Models - Shared container */}
+            <div className={`grid ${isViewingModels ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-6'} gap-2 min-h-[424px] max-h-[424px] overflow-auto pr-1 content-start justify-start auto-rows-[40px] items-start`}>
+              {!isViewingModels ? (
+                <>
+                  {studentCards.map((card, index) => (
+                    <div key={card.id}>
+                      <StudentTrainingCard
+                        card={card}
+                        index={index}
+                        onUpdate={(updates) => updateStudentCard(card.id, updates)}
+                        onRemove={() => removeStudentCard(card.id)}
+                        onOpenStudentDialog={() => openStudentDialog(card.id)}
+                        onTrainingFilesChange={handleTrainingFilesChange}
+                        onRemoveTrainingFile={removeTrainingFile}
+                        onOpenImageModal={openImageModal}
+                        onRemoveAllSamples={removeAllSamples}
+                        onCardClick={() => openStudentFormDialog(card.id)}
                       />
                     </div>
-                  ) : verificationPreview ? (
-                    <img
-                      src={verificationPreview}
-                      alt="Signature preview"
-                      className="w-full h-full object-contain rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-                      onClick={() => openImageModal([verificationPreview], 0)}
-                    />
-                  ) : (
-                    <div className="text-center text-gray-500">
-                      <Upload className="w-8 h-8 mx-auto mb-2" />
-                      <p>No signature selected</p>
+                  ))}
+                  {/* Add Student Placeholder */}
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg hover:border-gray-400 transition-colors cursor-pointer h-10 flex items-center justify-center px-2" onClick={addStudentCard}>
+                    <div className="text-sm text-gray-500 hover:text-gray-600">
+                      Add Student
                     </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {isLoadingModels ? (
+                    <div className="col-span-2 flex items-center justify-center text-sm text-muted-foreground">Loading models...</div>
+                  ) : trainedModels.length === 0 ? (
+                    <div className="col-span-2 flex items-center justify-center text-sm text-muted-foreground">No trained models yet.</div>
+                  ) : (
+                    trainedModels.map((m: TrainedModel) => (
+                      <div key={m.id} className="group">
+                        <Card className="h-10">
+                          <CardContent className="py-0 px-2 pr-1 h-full flex items-center">
+                            <div className="flex-1 min-w-0 text-xs">
+                              <div className="font-medium truncate">{m.student_name || m.student?.full_name || m.student_full_name || 'Unknown Student'}</div>
+                              <div className="text-[10px] text-muted-foreground truncate">{m.model_path || m.model?.path || m.artifact_path || 'n/a'}</div>
+                            </div>
+                            <div className="text-[10px] text-muted-foreground mr-2 whitespace-nowrap">{m.training_date?.split('T')[0] || m.created_at?.split('T')[0] || ''}</div>
+                            <div className="text-[10px] font-medium mr-2 whitespace-nowrap">{m.accuracy ? `${Math.round(m.accuracy * 100)}%` : ''}</div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-transparent"
+                              onClick={() => setConfirmDeleteModelId(m.id)}
+                              aria-label="Delete model"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    ))
                   )}
-                </div>
-              </div>
-
-              {/* Camera Controls */}
-              {useCamera && (
-                <div className="flex gap-2">
-                  <Button onClick={capturePhoto} size="sm" className="flex-1">
-                    Capture
-                  </Button>
-                  <Button onClick={stopCamera} variant="outline" size="sm" className="flex-1">
-                    Cancel
-                  </Button>
-                </div>
+                </>
               )}
+            </div>
 
-              {/* Hidden File Input */}
-              <Input
-                ref={verificationInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleVerificationFileChange}
-                className="hidden"
-              />
+            {/* Delete Model Confirmation Dialog */}
+            <Dialog open={confirmDeleteModelId !== null} onOpenChange={(open) => { if (!open) setConfirmDeleteModelId(null); }}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Delete Trained Model?</DialogTitle>
+                </DialogHeader>
+                <div className="text-sm text-muted-foreground">
+                  Are you sure you want to delete this trained model? You will need to retrain to recreate it.
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => setConfirmDeleteModelId(null)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      if (confirmDeleteModelId === null) return;
+                      setTrainedModels(prev => prev.filter(x => x.id !== confirmDeleteModelId));
+                      setConfirmDeleteModelId(null);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
 
-              {/* Verify Button */}
-              <Button
-                onClick={handleVerifySignature}
-                disabled={!verificationFile || isVerifying}
-                className="w-full"
-              >
-                {isVerifying ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Verifying...
-                  </>
-                ) : (
-                  <>
-                    <Scan className="w-4 h-4 mr-2" />
-                    Verify Signature
-                  </>
-                )}
-              </Button>
+            {/* Training Progress (moved below button) */}
 
-              {/* Reference images are optional now; if not provided,
-                 Genuine training uploads will be used for verification */}
-
-              {/* Verification Result */}
-              {verificationResult && (
-                <Alert className={verificationResult.match ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}>
+            {/* Training Results */}
+            {trainingResult && (
+              <div>
+                <Alert className={trainingResult.success ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}>
                   <div className="flex items-center gap-2">
-                    {verificationResult.match ? (
+                    {trainingResult.success ? (
                       <CheckCircle className="w-4 h-4 text-green-600" />
                     ) : (
-                      <XCircle className="w-4 h-4 text-red-600" />
+                      <AlertCircle className="w-4 h-4 text-red-600" />
                     )}
-                    <AlertDescription>
-                      <div className="space-y-2">
-                        <p>
-                          <strong>Result:</strong> {verificationResult.match ? 'Match Found' : 'No Match'}
-                        </p>
-                        <p>
-                          <strong>Confidence:</strong> {(verificationResult.score * 100).toFixed(1)}%
-                        </p>
-                        {verificationResult.predicted_student && (
-                          <p>
-                            <strong>Predicted Student:</strong> {verificationResult.predicted_student.firstname} {verificationResult.predicted_student.surname}
-                          </p>
-                        )}
-                        <p className="text-sm text-muted-foreground">
-                          {verificationResult.message}
-                        </p>
-                        
-                        {/* Anti-Spoofing Warnings */}
-                        {verificationResult.antispoofing && (
-                          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                            <div className="flex items-start gap-2">
-                              <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                              <div className="space-y-2 text-sm">
-                                <p className="font-medium text-amber-800">
-                                  {verificationResult.antispoofing.warning_message}
-                                </p>
-                                {verificationResult.antispoofing.is_potentially_spoofed && (
-                                  <div className="grid grid-cols-2 gap-2 text-xs text-amber-700">
-                                    {verificationResult.antispoofing.is_likely_printed && (
-                                      <div>
-                                        <strong>Printed:</strong> {(verificationResult.antispoofing.printed_confidence * 100).toFixed(1)}%
-                                      </div>
-                                    )}
-                                    {verificationResult.antispoofing.is_low_quality && (
-                                      <div>
-                                        <strong>Quality:</strong> {(verificationResult.antispoofing.quality_score * 100).toFixed(1)}%
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                    <AlertDescription className="text-sm">
+                      <strong>{trainingResult.success ? 'Training Completed' : 'Training Failed'}</strong>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {trainingResult.message}
+                      </p>
                     </AlertDescription>
                   </div>
                 </Alert>
-              )}
-            </CardContent>
+              </div>
+            )}
+
+            {/* Train Model Button at Bottom */}
+            <div className="pt-4 border-t">
+              <div className="flex flex-col items-center space-y-4">
+                <Button
+                  onClick={handleTrainModel}
+                  disabled={isViewingModels || !canTrainModel() || isTraining}
+                  className="w-full max-w-[280px]"
+                  size="lg"
+                >
+                  {isTraining ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Training... {Math.round(trainingProgress)}%
+                    </>
+                  ) : (
+                    <>
+                      <Brain className="w-4 h-4 mr-2" />
+                      Train Model
+                    </>
+                  )}
+                </Button>
+                
+                <div className="text-center text-sm text-muted-foreground">
+                  {studentCards.filter(c => c.student).length} students • {getTotalTrainingData().genuine + getTotalTrainingData().forged} samples ready
+                </div>
+              </div>
+            </div>
+
+            {isTraining && (
+              <div className="space-y-3 mt-4">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Progress: {Math.round(trainingProgress)}%</span>
+                  <span>{estimatedTimeRemaining || ''}</span>
+                </div>
+                <Progress value={trainingProgress} className="w-full" />
+                {trainingLogs.length > 0 && (
+                  <div className="bg-gray-900 text-green-400 rounded-lg p-3 font-mono text-xs max-h-32 overflow-y-auto">
+                    <div className="text-green-300 text-sm font-semibold mb-2">Training Progress</div>
+                    {trainingLogs.slice(-5).map((log, index) => (
+                      <div key={index} className="mb-1">
+                        {log}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Verification Card - Below Model Training */}
+        <div className="mt-6">
+          <Card ref={verificationCardRef} className="h-fit">
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="flex items-center gap-2">
+                      <Scan className="w-5 h-5" />
+                      Signature Verification
+                    </CardTitle>
+                    <CardDescription>
+                      Upload or capture a signature to verify against trained models
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-4">
+                    {/* Camera/Upload Toggle */}
+                    <div className="flex gap-2">
+                  <Button
+                    variant={useCamera ? "default" : "outline"}
+                    size="sm"
+                    onClick={startCamera}
+                    className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
+                  >
+                    <Camera className="w-4 h-4" />
+                    Camera
+                  </Button>
+                  <Button
+                    variant={!useCamera ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      setUseCamera(false);
+                      stopCamera();
+                      verificationInputRef.current?.click();
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Upload
+                  </Button>
+                    </div>
+
+                    {/* Large Square Preview Box */}
+                    <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Signature Preview</Label>
+                    <div className="text-xs text-muted-foreground">{useCamera ? 'Camera' : 'Upload'}</div>
+                  </div>
+                  <div className="w-full h-64 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
+                    {useCamera ? (
+                      <div className="w-full h-full">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          className="w-full h-full object-cover rounded-lg"
+                        />
+                      </div>
+                    ) : verificationPreview ? (
+                      <img
+                        src={verificationPreview}
+                        alt="Signature preview"
+                        className="w-full h-full object-contain rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
+                        onClick={() => openImageModal([verificationPreview], 0)}
+                      />
+                    ) : (
+                      <div className="text-center text-gray-500">
+                        <Upload className="w-8 h-8 mx-auto mb-2" />
+                        <p>No signature selected</p>
+                      </div>
+                    )}
+                      </div>
+                    </div>
+
+                    {/* Camera Controls */}
+                    {useCamera && (
+                      <div className="flex gap-2">
+                        <Button onClick={capturePhoto} size="sm" className="flex-1">
+                          Capture
+                        </Button>
+                        <Button onClick={stopCamera} variant="outline" size="sm" className="flex-1">
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Hidden File Input */}
+                    <Input
+                      ref={verificationInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleVerificationFileChange}
+                      className="hidden"
+                    />
+
+                    {/* Verify Button */}
+                    <Button
+                      onClick={handleVerifySignature}
+                      disabled={!verificationFile || isVerifying}
+                      className="w-full"
+                    >
+                      {isVerifying ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Verifying...
+                        </>
+                      ) : (
+                        <>
+                          <Scan className="w-4 h-4 mr-2" />
+                          Verify Signature
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-3 md:pl-2 md:border-l md:border-border">
+                    <div className="text-sm font-semibold">Verification Result</div>
+                    {verificationResult ? (
+                      <Alert className={
+                        verificationResult.match 
+                          ? "border-green-200 bg-green-50" 
+                          : "border-red-200 bg-red-50"
+                      }>
+                        <div className="flex items-start gap-2">
+                          {verificationResult.match ? (
+                            <CheckCircle className="w-4 h-4 text-green-600 mt-0.5" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-red-600 mt-0.5" />
+                          )}
+                          <AlertDescription>
+                            <div className="space-y-2">
+                              <p>
+                                <strong>Result:</strong> {
+                                  verificationResult.match 
+                                    ? 'Match Found' 
+                                    : 'No Match'
+                                }
+                              </p>
+                              <p>
+                                <strong>Confidence:</strong> {
+                                  `${(verificationResult.score * 100).toFixed(1)}%`
+                                }
+                              </p>
+                              {verificationResult.predicted_student && (
+                                <p>
+                                  <strong>Predicted Student:</strong> {verificationResult.predicted_student.firstname} {verificationResult.predicted_student.surname}
+                                </p>
+                              )}
+                              {verificationResult.message && (
+                                <p className="text-sm text-muted-foreground">
+                                  {verificationResult.message}
+                                </p>
+                              )}
+                            </div>
+                          </AlertDescription>
+                        </div>
+                      </Alert>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">Run a verification to see results here.</div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
           </Card>
         </div>
 
-        {/* Image Preview Modal */
-        }
+        {/* Image Preview Modal */}
         <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
           <DialogContent className="max-w-4xl max-h-[90vh] p-0">
             <DialogHeader className="p-6 pb-0">
@@ -1596,7 +1392,6 @@ const SignatureAI = () => {
                       alt={`Preview ${modalImageIndex + 1}`}
                       className="w-full h-auto max-h-[60vh] object-contain mx-auto"
                     />
-                    {/* Prev/Next Arrows - inside image boundary, show on hover */}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1617,7 +1412,6 @@ const SignatureAI = () => {
                     </Button>
                   </div>
 
-                  {/* Count + Trash inline with translucent background (old style) */}
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
                     <div className="bg-black/50 text-white px-3 py-1 rounded-full text-sm flex items-center gap-3">
                       <span>{modalImageIndex + 1} / {modalImages.length}</span>
@@ -1636,17 +1430,43 @@ const SignatureAI = () => {
 
         {/* Student Selection Dialog */}
         <Dialog open={isStudentDialogOpen} onOpenChange={setIsStudentDialogOpen}>
-          <DialogContent className="max-w-xl">
+          <DialogContent className="max-w-6xl w-full h-[85vh]">
             <DialogHeader>
               <DialogTitle>Select Student</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <Input
-                placeholder="Search by ID or Name"
-                value={studentSearch}
-                onChange={(e) => setStudentSearch(e.target.value)}
-              />
-              <div className="max-h-64 overflow-auto border rounded-md">
+            <div className="flex flex-col h-full gap-4">
+              <div className="flex items-center justify-between gap-3">
+                <Input
+                  placeholder="Search by ID or Name"
+                  value={studentSearch}
+                  onChange={(e) => setStudentSearch(e.target.value)}
+                  className="w-full max-w-sm"
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (selectedStudentIds.size === pagedStudents.length) {
+                        setSelectedStudentIds(prev => {
+                          const next = new Set(prev);
+                          pagedStudents.forEach(s => next.delete(s.id));
+                          return next;
+                        });
+                      } else {
+                        setSelectedStudentIds(prev => {
+                          const next = new Set(prev);
+                          pagedStudents.forEach(s => next.add(s.id));
+                          return next;
+                        });
+                      }
+                    }}
+                  >
+                    {selectedStudentIds.size === pagedStudents.length ? 'Unselect All (page)' : 'Select All (page)'}
+                  </Button>
+                </div>
+              </div>
+              <div className="overflow-auto border rounded-md h-[60vh]">
                 {isLoadingStudents ? (
                   <div className="p-4 text-sm text-muted-foreground">Loading students…</div>
                 ) : isStudentSearching ? (
@@ -1655,55 +1475,269 @@ const SignatureAI = () => {
                   <div className="p-4 text-sm text-muted-foreground">No results</div>
                 ) : (
                   <ul className="divide-y">
-                    {filteredStudents.map((s) => (
-                      <li key={s.id}>
-                        <button
-                          className="w-full text-left p-3 hover:bg-muted/50"
-                          onClick={() => handleStudentSelection(s)}
-                        >
-                          <div className="font-medium">{`${s.firstname} ${s.surname}`}</div>
-                          <div className="text-xs text-muted-foreground">ID: {s.student_id} • {s.program} • Year {s.year} • Sec {s.section}</div>
-                        </button>
-                      </li>
-                    ))}
+                    {pagedStudents.map((s) => {
+                      const isAssignedElsewhere = isStudentAlreadySelected(s.id, currentCardId);
+                      const checked = selectedStudentIds.has(s.id);
+                      return (
+                        <li key={s.id}>
+                          <label className={`flex items-center justify-between p-2 gap-2 ${isAssignedElsewhere ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4"
+                                disabled={isAssignedElsewhere}
+                                checked={checked}
+                                onChange={(e) => {
+                                  const isChecked = e.target.checked;
+                                  setSelectedStudentIds(prev => {
+                                    const next = new Set(prev);
+                                    if (isChecked) next.add(s.id); else next.delete(s.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                              <div>
+                                <div className="font-medium text-sm">{`${s.firstname} ${s.surname}`}</div>
+                                <div className="text-[11px] text-muted-foreground">ID: {s.student_id} • {s.program} • Year {s.year} • Sec {s.section}</div>
+                              </div>
+                            </div>
+                            {isAssignedElsewhere && (
+                              <Badge variant="secondary" className="text-xs">In use</Badge>
+                            )}
+                          </label>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={studentPage <= 1} onClick={() => setStudentPage(p => Math.max(1, p - 1))}>Previous</Button>
+                  <Button variant="outline" size="sm" disabled={studentPage >= totalStudentPages} onClick={() => setStudentPage(p => Math.min(totalStudentPages, p + 1))}>Next</Button>
+                </div>
+                <div className="flex-1 text-center text-xs text-muted-foreground">Page {studentPage} of {totalStudentPages}</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsStudentDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      if (studentSelectMode === 'bulkAdd') {
+                        if (selectedStudentIds.size === 0) return setIsStudentDialogOpen(false);
+                        const selected = allStudents.filter(s => selectedStudentIds.has(s.id));
+                        setStudentCards(prev => {
+                          let base = prev;
+                          if (
+                            prev.length === 1 &&
+                            prev[0].student === null &&
+                            prev[0].genuineFiles.length === 0 &&
+                            prev[0].forgedFiles.length === 0
+                          ) {
+                            base = [];
+                          }
+                          return ([
+                            ...base,
+                            ...selected.map(s => ({ id: `${Date.now()}-${s.id}`, student: s, genuineFiles: [], forgedFiles: [], isExpanded: true }))
+                          ]);
+                        });
+                        setIsStudentDialogOpen(false);
+                      } else {
+                        const chosen = allStudents.find(s => selectedStudentIds.has(s.id));
+                        if (chosen && currentCardId) {
+                          handleStudentSelection(chosen);
+                          setIsStudentDialogOpen(false);
+                        }
+                      }
+                    }}
+                    disabled={selectedStudentIds.size === 0}
+                  >
+                    {studentSelectMode === 'bulkAdd' ? 'Add Selected' : 'Assign'}
+                  </Button>
+                </div>
               </div>
             </div>
           </DialogContent>
         </Dialog>
-        {/* Confirm Remove All Samples */}
-        <Dialog open={isConfirmRemoveOpen} onOpenChange={setIsConfirmRemoveOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Remove all samples?</DialogTitle>
-            </DialogHeader>
-            <div className="text-sm text-muted-foreground">
-              This action will remove all Genuine and Forged samples. This cannot be undone.
-            </div>
-            <div className="flex justify-end gap-2 pt-4">
-              <Button variant="outline" size="sm" onClick={() => setIsConfirmRemoveOpen(false)}>Cancel</Button>
-              <Button variant="destructive" size="sm" onClick={() => { removeAllTrainingFiles(); setIsConfirmRemoveOpen(false); }}>Remove</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
-        {/* Student Switch Confirmation Dialog */}
-        <Dialog open={isStudentSwitchConfirmOpen} onOpenChange={setIsStudentSwitchConfirmOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Change Student?</DialogTitle>
+        {/* Student Form Dialog - Original Expanded Card Structure */}
+        <Dialog open={isStudentFormDialogOpen} onOpenChange={setIsStudentFormDialogOpen}>
+          <DialogContent className="max-w-2xl h-[90vh] overflow-y-auto p-6 pt-4">
+            <DialogHeader className="p-0 m-0 !space-y-0">
+              <DialogTitle className="mb-0">Student Training Details</DialogTitle>
             </DialogHeader>
-            <div className="text-sm text-muted-foreground mb-4">
-              You have uploaded signature images for the current student. Changing the student will automatically clear all uploaded images.
-            </div>
-            <div className="flex gap-2 justify-end">
-              <Button variant="outline" onClick={cancelStudentSwitch}>
-                Cancel
-              </Button>
-              <Button variant="destructive" onClick={confirmStudentSwitch}>
-                Change Student
-              </Button>
+            <div className="flex flex-col gap-0 h-full">
+              {currentFormCardId && (() => {
+                const card = studentCards.find(c => c.id === currentFormCardId);
+                if (!card) return null;
+                
+                return (
+                  <>
+                    {/* Student Info - Original Grid Layout */}
+                    {card.student ? (
+                      <div className="space-y-0">
+                        {/* Student Name */}
+                        <div>
+                          <div className="text-base font-semibold">
+                            Name: {card.student.firstname} {card.student.surname}
+                          </div>
+                        </div>
+                        {/* Student Details Grid */}
+                        <div className="grid grid-cols-2 gap-1 text-xs">
+                          <div>
+                            <div className="font-medium">ID: {card.student.student_id}</div>
+                          </div>
+                          <div>
+                            <div className="font-medium">Program: {card.student.program}</div>
+                          </div>
+                          <div>
+                            <div className="font-medium">Year: {card.student.year}</div>
+                          </div>
+                          <div>
+                            <div className="font-medium">Section: {card.student.section}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-8">
+                        <User className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground mb-4">No student selected</p>
+                        <Button
+                          onClick={() => {
+                            openStudentDialog(card.id);
+                          }}
+                          size="lg"
+                          variant="outline"
+                          className="flex items-center gap-2 mx-auto"
+                        >
+                          <User className="w-4 h-4" />
+                          Select Student
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Upload Buttons - Original Layout */}
+                    {card.student && (
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
+                          onClick={() => {
+                            const input = document.createElement('input');
+                            input.type = 'file';
+                            input.accept = 'image/*';
+                            input.multiple = true;
+                            input.onchange = (e) => {
+                              const files = Array.from((e.target as HTMLInputElement).files || []);
+                              handleTrainingFilesChange(files, 'forged', card.id);
+                            };
+                            input.click();
+                          }}
+                        >
+                          <Upload className="w-4 h-4" />
+                          Forged
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="flex items-center gap-2"
+                          onClick={() => {
+                            const input = document.createElement('input');
+                            input.type = 'file';
+                            input.accept = 'image/*';
+                            input.multiple = true;
+                            input.onchange = (e) => {
+                              const files = Array.from((e.target as HTMLInputElement).files || []);
+                              handleTrainingFilesChange(files, 'genuine', card.id);
+                            };
+                            input.click();
+                          }}
+                        >
+                          <Upload className="w-4 h-4" />
+                          Genuine
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Training Images Preview - Expands to fill space with compact grid and toggles */}
+                    {card.student && (
+                      <div className="flex flex-col gap-2 flex-1 min-h-0">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm">Training Images</Label>
+                          <div className="text-xs text-muted-foreground">
+                            <span className={`${trainingImagesSet==='genuine' ? 'font-semibold' : ''}`}>Genuine ({card.genuineFiles.length})</span>
+                            <span className="mx-1">/</span>
+                            <span className={`${trainingImagesSet==='forged' ? 'font-semibold' : ''}`}>Forged ({card.forgedFiles.length})</span>
+                          </div>
+                        </div>
+                        <div className="relative w-full h-[480px] border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 group overflow-hidden">
+                          {((trainingImagesSet === 'genuine') ? card.genuineFiles.length : card.forgedFiles.length) > 0 ? (
+                            <div className="grid grid-cols-4 gap-2 w-full h-full p-2 overflow-y-auto">
+                              {((trainingImagesSet === 'genuine') ? card.genuineFiles : card.forgedFiles).map((item, index) => (
+                                <div 
+                                  key={index} 
+                                  className="relative group/itm cursor-pointer pb-[100%] overflow-hidden rounded-md border border-border"
+                                  onClick={() => openImageModal(
+                                    ((trainingImagesSet === 'genuine') ? card.genuineFiles : card.forgedFiles).map(f => f.preview), 
+                                    index, 
+                                    { kind: 'training', setType: trainingImagesSet, cardId: card.id }
+                                  )}
+                                >
+                                  <img
+                                    src={item.preview}
+                                    alt={`Sample ${index + 1}`}
+                                    className="absolute inset-0 w-full h-full object-cover hover:opacity-80 transition-opacity"
+                                    loading="lazy"
+                                  />
+                                  <button
+                                    type="button"
+                                    className="absolute top-1 right-1 bg-black/50 hover:bg-black/70 text-white rounded p-1 opacity-0 group-hover/itm:opacity-100 transition-opacity"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      removeTrainingFile(index, trainingImagesSet, card.id);
+                                    }}
+                                    aria-label="Delete image"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                              <Upload className="w-6 h-6 mb-1" />
+                              <p className="text-xs">No images</p>
+                            </div>
+                          )}
+                          {/* Chevron controls on hover to toggle between sets */}
+                          <button
+                            className="hidden group-hover:flex absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center"
+                            onClick={() => setTrainingImagesSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
+                            aria-label="Previous"
+                            type="button"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <button
+                            className="hidden group-hover:flex absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center"
+                            onClick={() => setTrainingImagesSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
+                            aria-label="Next"
+                            type="button"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Data Summary removed as requested */}
+                  </>
+                );
+              })()}
             </div>
           </DialogContent>
         </Dialog>
@@ -1713,12 +1747,10 @@ const SignatureAI = () => {
           open={showConfirmDialog}
           onConfirm={() => {
             confirmClose();
-            // Clear any pending navigation
             setPendingNavigation(null);
           }}
           onCancel={() => {
             cancelClose();
-            // Clear any pending navigation
             setPendingNavigation(null);
           }}
         />

@@ -8,7 +8,7 @@ import tensorflow as tf
 from tensorflow import keras
 import os
 from config import settings
-from utils.storage import download_from_supabase
+from utils.storage import download_from_supabase, load_model_from_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -45,37 +45,28 @@ class ModelCache:
                 return None
     
     async def _load_model(self, model_path: str, embedding_path: Optional[str] = None) -> Optional[keras.Model]:
-        """Load model from storage"""
+        """Load model directly from Supabase storage without downloading to disk"""
         try:
             # Try embedding model first (lighter/faster)
             if embedding_path:
                 try:
-                    local_path = await self._download_if_needed(embedding_path)
-                    model = keras.models.load_model(local_path, safe_mode=False)
-                    logger.info(f"✅ Loaded embedding model from {local_path}")
+                    logger.info(f"📥 Loading embedding model directly from Supabase: {embedding_path}")
+                    model = await load_model_from_supabase(embedding_path)
+                    logger.info(f"✅ Loaded embedding model from Supabase")
                     return model
                 except Exception as e:
                     logger.warning(f"Failed to load embedding model: {e}")
             
             # Fallback to full model
-            local_path = await self._download_if_needed(model_path)
-            model = keras.models.load_model(local_path, safe_mode=False)
-            logger.info(f"✅ Loaded full model from {local_path}")
+            logger.info(f"📥 Loading full model directly from Supabase: {model_path}")
+            model = await load_model_from_supabase(model_path)
+            logger.info(f"✅ Loaded full model from Supabase")
             return model
             
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             return None
     
-    async def _download_if_needed(self, remote_path: str) -> str:
-        """Download model from Supabase if not already local"""
-        if remote_path.startswith("models/"):
-            local_path = os.path.join(settings.LOCAL_MODELS_DIR, os.path.basename(remote_path))
-            if not os.path.exists(local_path):
-                logger.info(f"📥 Downloading model from {remote_path} to {local_path}")
-                await download_from_supabase(remote_path, local_path)
-            return local_path
-        return remote_path
     
     async def clear_cache(self):
         """Clear the model cache"""

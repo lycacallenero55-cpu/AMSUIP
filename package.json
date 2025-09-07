@@ -60,6 +60,7 @@
     "@types/fs-extra": "^11.0.4",
     "@types/qrcode": "^1.5.5",
     "@types/react-dropzone": "^4.2.2",
+    "@types/uuid": "^10.0.0",
     "axios": "^1.11.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -88,6 +89,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.7.1",
     "use-debounce": "^10.0.5",
+    "uuid": "^12.0.0",
     "vaul": "^0.9.3",
     "xlsx": "^0.18.5",
     "zod": "^3.25.76"
