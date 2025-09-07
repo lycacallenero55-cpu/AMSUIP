@@ -592,155 +592,129 @@ const SignatureAI = () => {
     setTrainingLogs([]);
     setCurrentEpochProgress(null);
     trainingStartTimeRef.current = Date.now();
-    
-    // Add initial log entry
     setTrainingLogs(['Training started...']);
-    // Close any previous stream
+
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
 
-    try {
-      // Start async training job
-      const asyncResponse = await aiService.startAsyncTraining(
-        selectedStudent.student_id,
-        genuineFiles.map(g => g.file),
-        forgedFiles.map(f => f.file)
-      );
-      
-      setJobId(asyncResponse.job_id);
-      
-      // Add job created log entry
-      setTrainingLogs(prev => [...prev, `Job created: ${asyncResponse.job_id}`]);
-      
-      // Subscribe to real-time progress updates
-      const eventSource = aiService.subscribeToJobProgress(
-        asyncResponse.job_id,
-        (job) => {
-          // Normalize stage
-          if (job.current_stage) setTrainingStage(job.current_stage as any);
-          setTrainingStatus(job.current_stage || '');
-          
-          // Add stage update log entry
-          if (job.current_stage && job.current_stage !== 'idle') {
-            setTrainingLogs(prev => {
-              const newLogs = [...prev];
-              const stageLog = `Stage: ${job.current_stage} - Progress: ${Math.round(job.progress || 0)}%`;
-              // Only add if it's a new stage or significant progress change
-              if (newLogs.length === 0 || !newLogs[newLogs.length - 1].includes(job.current_stage)) {
-                newLogs.push(stageLog);
-              }
-              return newLogs.slice(-15); // Keep last 15 entries
+    const preparedCards = cards.filter(c => !!c.selectedStudent && ((c.genuineFiles.length + c.forgedFiles.length) > 0));
+    const preparedIds = preparedCards.map(c => c.id);
+    setCardProgress({});
+
+    const computeGlobal = (map: Record<string, number>) => {
+      if (preparedIds.length === 0) return 0;
+      const total = preparedIds.reduce((sum, id) => sum + (map[id] || 0), 0);
+      return total / preparedIds.length;
+    };
+
+    let index = 0;
+    const trainNext = async () => {
+      if (index >= preparedCards.length) {
+        setGlobalProgress(100);
+        setTrainingStage('completed');
+        setTrainingStatus('All trainings completed');
+        setIsTraining(false);
+        return;
+      }
+      const card = preparedCards[index];
+      setActiveCardId(card.id);
+      setTrainingStatus(`Training ${index + 1} of ${preparedCards.length}`);
+
+      try {
+        const asyncResponse = await aiService.startAsyncTraining(
+          card.selectedStudent!.student_id,
+          card.genuineFiles.map(g => g.file),
+          card.forgedFiles.map(f => f.file)
+        );
+        setJobId(asyncResponse.job_id);
+        setTrainingLogs(prev => [...prev, `Job created: ${asyncResponse.job_id}`].slice(-15));
+
+        const es = aiService.subscribeToJobProgress(
+          asyncResponse.job_id,
+          (job) => {
+            if (job.current_stage) setTrainingStage(job.current_stage as any);
+            setTrainingStatus(job.current_stage || `Training ${index + 1} of ${preparedCards.length}`);
+
+            const newProgress = Math.max(0, Math.min(100, job.progress || 0));
+            setCardProgress(prev => {
+              const updated = { ...prev, [card.id]: Math.max(prev[card.id] || 0, newProgress) };
+              setGlobalProgress(computeGlobal(updated));
+              setTrainingProgress(computeGlobal(updated));
+              return updated;
             });
-          }
-          
-          // Guard progress to be monotonically non-decreasing
-          const newProgress = Math.max(0, Math.min(100, job.progress || 0));
-          console.log('Training progress update:', { 
-            jobId: job.job_id, 
-            progress: job.progress, 
-            newProgress, 
-            stage: job.current_stage,
-            metrics: job.training_metrics 
-          });
-          setTrainingProgress((prev) => Math.max(prev, newProgress));
-          
-          // ETA
-          if (typeof job.estimated_time_remaining === 'number') {
-            const minutes = Math.floor(job.estimated_time_remaining / 60);
-            const seconds = job.estimated_time_remaining % 60;
-            setEstimatedTimeRemaining(`~${minutes}:${seconds.toString().padStart(2, '0')} remaining`);
-          } else {
-            setEstimatedTimeRemaining('');
-          }
-          
-          // Update training metrics if available
-          if (job.training_metrics) {
-            // Create real-time training log entry
-            const metrics = job.training_metrics;
-            if (metrics.current_epoch > 0) {
-              // Create log entry with batch info if available
-              let logEntry = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}`;
-              if (metrics.current_batch) {
-                logEntry += ` - Batch ${metrics.current_batch}`;
-              }
-              logEntry += ` - Accuracy: ${(metrics.accuracy * 100).toFixed(1)}% - Loss: ${metrics.loss.toFixed(4)}`;
-              if (metrics.val_accuracy > 0) {
-                logEntry += ` - Val Accuracy: ${(metrics.val_accuracy * 100).toFixed(1)}% - Val Loss: ${metrics.val_loss.toFixed(4)}`;
-              }
-              
-              setTrainingLogs(prev => {
-                const newLogs = [...prev];
-                // Update the last log entry if it's the same epoch and batch, otherwise add new one
-                const lastLogIndex = newLogs.length - 1;
-                const epochBatchKey = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}${metrics.current_batch ? ` - Batch ${metrics.current_batch}` : ''}`;
-                
-                if (lastLogIndex >= 0 && newLogs[lastLogIndex].startsWith(epochBatchKey)) {
-                  newLogs[lastLogIndex] = logEntry;
-                } else {
-                  newLogs.push(logEntry);
-                }
-                // Keep only last 15 log entries for better visibility
-                return newLogs.slice(-15);
-              });
-              
-              // Update current epoch progress
-              setCurrentEpochProgress({
-                epoch: metrics.current_epoch,
-                totalEpochs: metrics.total_epochs,
-                batch: metrics.current_batch || 0,
-                totalBatches: 0,
-                accuracy: metrics.accuracy,
-                loss: metrics.loss,
-                valAccuracy: metrics.val_accuracy || 0,
-                valLoss: metrics.val_loss || 0
-              });
+
+            if (typeof job.estimated_time_remaining === 'number') {
+              const minutes = Math.floor(job.estimated_time_remaining / 60);
+              const seconds = job.estimated_time_remaining % 60;
+              setEstimatedTimeRemaining(`~${minutes}:${seconds.toString().padStart(2, '0')} remaining`);
+            } else {
+              setEstimatedTimeRemaining('');
             }
-          }
-          // Completion handling
-          if (job.status === 'completed') {
-            setTrainingProgress(100);
-            setTrainingStage('completed');
-            setTrainingStatus('Training completed!');
-            setTrainingResult(job.result);
-            toast({ title: "Training Completed", description: "AI model has been successfully trained for this student" });
-            eventSource.close();
-            eventSourceRef.current = null;
-            setIsTraining(false);
-          } else if (job.status === 'failed') {
+
+            if (job.training_metrics) {
+              const metrics = job.training_metrics;
+              if (metrics.current_epoch > 0) {
+                let logEntry = `Epoch ${metrics.current_epoch}/${metrics.total_epochs}`;
+                if (metrics.current_batch) logEntry += ` - Batch ${metrics.current_batch}`;
+                logEntry += ` - Acc: ${(metrics.accuracy * 100).toFixed(1)}% - Loss: ${metrics.loss.toFixed(4)}`;
+                if (metrics.val_accuracy > 0) {
+                  logEntry += ` - Val Acc: ${(metrics.val_accuracy * 100).toFixed(1)}% - Val Loss: ${metrics.val_loss.toFixed(4)}`;
+                }
+                setTrainingLogs(prev => [...prev, logEntry].slice(-15));
+                setCurrentEpochProgress({
+                  epoch: metrics.current_epoch,
+                  totalEpochs: metrics.total_epochs,
+                  batch: metrics.current_batch || 0,
+                  totalBatches: 0,
+                  accuracy: metrics.accuracy,
+                  loss: metrics.loss,
+                  valAccuracy: metrics.val_accuracy || 0,
+                  valLoss: metrics.val_loss || 0,
+                });
+              }
+            }
+
+            if (job.status === 'completed') {
+              setTrainingResult(job.result);
+              es.close();
+              eventSourceRef.current = null;
+              index += 1;
+              setTimeout(trainNext, 0);
+            } else if (job.status === 'failed') {
+              setTrainingStage('error');
+              setTrainingStatus('Training failed');
+              toast({ title: "Training Failed", description: job.error || "Failed to complete training", variant: "destructive" });
+              es.close();
+              eventSourceRef.current = null;
+              index += 1; // proceed to next to avoid blocking
+              setTimeout(trainNext, 0);
+            }
+          },
+          (error) => {
+            console.error('Training progress error:', error);
             setTrainingStage('error');
-            setTrainingStatus('Training failed');
-            toast({ title: "Training Failed", description: job.error || "Failed to complete training", variant: "destructive" });
-            eventSource.close();
+            setTrainingStatus('Connection error');
+            toast({ title: "Connection Error", description: "Lost connection to training progress updates", variant: "destructive" });
+            es.close();
             eventSourceRef.current = null;
-            setIsTraining(false);
+            index += 1;
+            setTimeout(trainNext, 0);
           }
-        },
-        (error) => {
-          console.error('Training progress error:', error);
-          setTrainingStage('error');
-          setTrainingStatus('Connection error');
-          toast({ title: "Connection Error", description: "Lost connection to training progress updates", variant: "destructive" });
-          eventSource.close();
-          eventSourceRef.current = null;
-          setIsTraining(false);
-        }
-      );
-      eventSourceRef.current = eventSource;
-      
-    } catch (error) {
-      console.error('Training error:', error);
-      setTrainingStage('error');
-      setTrainingStatus('Training failed');
-      setTrainingProgress(0);
-      toast({
-        title: "Error",
-        description: "An unexpected error occurred during training",
-        variant: "destructive",
-      });
-      setIsTraining(false);
-    }
+        );
+        eventSourceRef.current = es;
+      } catch (error) {
+        console.error('Training error:', error);
+        setTrainingStage('error');
+        setTrainingStatus('Training failed');
+        toast({ title: "Error", description: "An unexpected error occurred during training", variant: "destructive" });
+        index += 1;
+        setTimeout(trainNext, 0);
+      }
+    };
+
+    trainNext();
   };
 
   // Verification Functions
@@ -864,7 +838,9 @@ const SignatureAI = () => {
   const getModalFilename = (): string => {
     if (!isModalOpen) return '';
     if (modalContext?.kind === 'training') {
-      const files = modalContext.setType === 'genuine' ? genuineFiles : forgedFiles;
+      const card = getActiveCard();
+      if (!card) return '';
+      const files = modalContext.setType === 'genuine' ? card.genuineFiles : card.forgedFiles;
       const idx = files.findIndex(f => f.preview === modalImages[modalImageIndex]);
       return idx >= 0 ? files[idx].file.name : '';
     }
@@ -1287,10 +1263,9 @@ const SignatureAI = () => {
             </div>
           </div>
         </div>
-            {/*
-            {/* Removed duplicate training & verification sections */}
             {/* START REMOVE LEGACY */}
             {/* END REMOVE LEGACY */}
+            {/* LEGACY BLOCK REMOVED
             <CardHeader>
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -1375,9 +1350,9 @@ const SignatureAI = () => {
                   <Label>Training Images Preview</Label>
                   <div className="text-xs text-muted-foreground">
                     {currentTrainingSet === 'genuine' ? (
-                      <span>Genuine ({genuineFiles.length})</span>
+                      <span>Genuine</span>
                     ) : (
-                      <span>Forged ({forgedFiles.length})</span>
+                      <span>Forged</span>
                     )}
                   </div>
                 </div>
@@ -1398,14 +1373,15 @@ const SignatureAI = () => {
                     <ChevronRight className="w-4 h-4" />
                   </button>
 
-                  {((currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles).length > 0) ? (
+                  {/* This legacy preview block is removed in favor of per-card previews above */}
+                  {false ? (
                     <div className="grid grid-cols-3 gap-2 w-full h-full p-4 overflow-y-auto">
-                      {(currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles)
-                        .slice(0, visibleCounts[currentTrainingSet])
+                      {[]
+                        .slice(0, visibleCounts[currentTrainingSet] || 0)
                         .map((item, index) => (
                         <div key={index} className="relative group/itm cursor-pointer" onClick={() => openImageModal((currentTrainingSet === 'genuine' ? genuineFiles : forgedFiles).map(f => f.preview), index, { kind: 'training', setType: currentTrainingSet })}>
                           <img
-                            src={item.preview}
+                            src={''}
                             alt={`Sample ${index + 1}`}
                             className="w-full h-16 object-cover rounded border hover:opacity-80 transition-opacity"
                             loading="lazy"
@@ -1416,14 +1392,14 @@ const SignatureAI = () => {
                             className="absolute top-1 right-1 w-6 h-6 p-0 opacity-0 group-hover/itm:opacity-100 transition-opacity flex items-center justify-center"
                             onClick={(e) => {
                               e.stopPropagation();
-                              removeTrainingFile(index, currentTrainingSet);
+                              // legacy
                             }}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
                         </div>
                       ))}
-                      {(currentTrainingSet === 'genuine' ? genuineFiles.length : forgedFiles.length) > visibleCounts[currentTrainingSet] && (
+                      {false && (
                         <div className="col-span-3 flex justify-center pt-2">
                           <button
                             className="text-xs text-foreground hover:underline"
@@ -1442,7 +1418,7 @@ const SignatureAI = () => {
                   ) : (
                     <div className="text-center text-gray-500">
                       <Upload className="w-8 h-8 mx-auto mb-2" />
-                      <p>No {currentTrainingSet === 'genuine' ? 'genuine' : 'forged'} images uploaded</p>
+                      <p>No images uploaded</p>
                     </div>
                   )}
                 </div>
@@ -1601,7 +1577,7 @@ const SignatureAI = () => {
             </CardContent>
           </Card>
 
-          {/* Signature Verification Section */}
+          {/* Signature Verification Section (legacy duplicate) */}
           <Card className="h-fit">
             <CardHeader>
               <div className="flex items-start justify-between">
@@ -1825,10 +1801,8 @@ const SignatureAI = () => {
             </CardContent>
           </Card>
         </div>
-
-        */}
+            */}
         {/* Image Preview Modal */
-        }
         <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
           <DialogContent className="max-w-4xl max-h-[90vh] p-0">
             <DialogHeader className="p-6 pb-0">

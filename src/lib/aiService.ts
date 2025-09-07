@@ -17,6 +17,7 @@ export interface AITrainingResponse {
   error?: string;
 }
 
+// Unified verification response shape (identify/verify)
 export interface AIVerificationResponse {
   success: boolean;
   match: boolean;
@@ -28,6 +29,10 @@ export interface AIVerificationResponse {
     surname: string;
   };
   score: number;
+  decision?: 'match' | 'no_match' | 'error';
+  message?: string;
+  error?: string;
+  is_unknown?: boolean;
 }
 
 export interface AsyncTrainingResponse {
@@ -68,21 +73,7 @@ export interface TrainingJob {
   };
 }
 
-export interface AIVerificationResponse {
-  success: boolean;
-  match: boolean;
-  predicted_student_id: number | null;
-  predicted_student?: {
-    id: number;
-    student_id: string;
-    firstname: string;
-    surname: string;
-  };
-  score: number;
-  decision: 'match' | 'no_match' | 'error';
-  message: string;
-  error?: string;
-}
+// (Removed duplicate AIVerificationResponse definition)
 
 export class AIService {
   private baseUrl: string;
