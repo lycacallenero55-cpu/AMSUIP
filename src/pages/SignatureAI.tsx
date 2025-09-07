@@ -342,23 +342,21 @@ const SignatureAI = () => {
   // Persist on critical state changes
   React.useEffect(() => {
     saveSessionState();
-  }, [selectedStudent, genuineFiles, forgedFiles, currentTrainingSet, visibleCounts]);
+  }, [cards, currentTrainingSet, visibleCounts]);
 
   // Ensure state is persisted on internal navigation or tab hide
   React.useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        // Best-effort save before the page is backgrounded or navigating away
         saveSessionState();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      // Save once more on unmount to capture any last-moment changes
       saveSessionState();
     };
-  }, [selectedStudent, genuineFiles, forgedFiles, currentTrainingSet, visibleCounts]);
+  }, [cards, currentTrainingSet, visibleCounts]);
 
   React.useEffect(() => {
     setIsStudentSearching(true);
@@ -915,16 +913,18 @@ const SignatureAI = () => {
 
   const deleteModalCurrentImage = () => {
     if (!modalContext || modalContext.kind !== 'training') return;
+    const card = getActiveCard();
+    if (!card) return;
     const targetPreview = modalImages[modalImageIndex];
     if (modalContext.setType === 'genuine') {
-      const idx = genuineFiles.findIndex(f => f.preview === targetPreview);
-      if (idx !== -1) removeTrainingFile(idx, 'genuine');
-      const updated = genuineFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
+      const idx = card.genuineFiles.findIndex(f => f.preview === targetPreview);
+      if (idx !== -1) removeTrainingFile(idx, 'genuine', card.id);
+      const updated = card.genuineFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
       setModalImages(updated);
     } else {
-      const idx = forgedFiles.findIndex(f => f.preview === targetPreview);
-      if (idx !== -1) removeTrainingFile(idx, 'forged');
-      const updated = forgedFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
+      const idx = card.forgedFiles.findIndex(f => f.preview === targetPreview);
+      if (idx !== -1) removeTrainingFile(idx, 'forged', card.id);
+      const updated = card.forgedFiles.filter(f => f.preview !== targetPreview).map(f => f.preview);
       setModalImages(updated);
     }
     setModalImageIndex(prev => Math.max(0, prev - (modalImages.length === 1 ? 0 : 1)));
@@ -1287,7 +1287,7 @@ const SignatureAI = () => {
             </div>
           </div>
         </div>
-            {/* Legacy block below should have been removed; keeping layout clean */}
+            {/*
             {/* Removed duplicate training & verification sections */}
             {/* START REMOVE LEGACY */}
             {/* END REMOVE LEGACY */}
@@ -1826,6 +1826,7 @@ const SignatureAI = () => {
           </Card>
         </div>
 
+        */}
         {/* Image Preview Modal */
         }
         <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>

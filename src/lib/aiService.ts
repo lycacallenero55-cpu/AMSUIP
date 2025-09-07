@@ -64,6 +64,7 @@ export interface TrainingJob {
     learning_rate: number;
     batch_progress: string;
     epoch_progress: string;
+    current_batch?: number;
   };
 }
 
