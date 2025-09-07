@@ -143,6 +143,7 @@ const SignatureAI = () => {
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [studentPage, setStudentPage] = useState<number>(1);
   const STUDENTS_PER_PAGE = 100;
+  const [showSelectedStudents, setShowSelectedStudents] = useState<boolean>(false);
   
   // Student Form Dialog State
   const [isStudentFormDialogOpen, setIsStudentFormDialogOpen] = useState(false);
@@ -281,18 +282,49 @@ const SignatureAI = () => {
     return () => clearTimeout(t);
   }, [studentSearch]);
 
-  const filteredStudents = debouncedStudentSearch 
+  const baseFilteredStudents = debouncedStudentSearch 
     ? allStudents.filter((s) => (
         s.student_id.includes(debouncedStudentSearch) ||
         `${s.firstname} ${s.surname}`.toLowerCase().includes(debouncedStudentSearch.toLowerCase())
       ))
     : allStudents;
 
-  const totalStudentPages = Math.max(1, Math.ceil(filteredStudents.length / STUDENTS_PER_PAGE));
-  const pagedStudents = filteredStudents.slice(
+  const selectedElsewhereIds = React.useMemo(() => {
+    const ids = new Set<number>();
+    studentCards.forEach(card => {
+      if (card.id !== currentCardId && card.student) ids.add(card.student.id);
+    });
+    return ids;
+  }, [studentCards, currentCardId]);
+
+  const visibleStudents = showSelectedStudents
+    ? baseFilteredStudents
+    : baseFilteredStudents.filter((s) => !selectedElsewhereIds.has(s.id));
+
+  const totalStudentPages = Math.max(1, Math.ceil(visibleStudents.length / STUDENTS_PER_PAGE));
+  const pagedStudents = visibleStudents.slice(
     (studentPage - 1) * STUDENTS_PER_PAGE,
     studentPage * STUDENTS_PER_PAGE
   );
+
+  // Per-page selection helpers (exclude students already selected elsewhere)
+  const selectablePagedStudentIds = React.useMemo(() => {
+    return new Set<number>(
+      pagedStudents
+        .filter((s) => !selectedElsewhereIds.has(s.id))
+        .map((s) => s.id)
+    );
+  }, [pagedStudents, selectedElsewhereIds]);
+
+  const selectedCountOnPage = React.useMemo(() => {
+    let count = 0;
+    selectablePagedStudentIds.forEach((id) => {
+      if (selectedStudentIds.has(id)) count++;
+    });
+    return count;
+  }, [selectablePagedStudentIds, selectedStudentIds]);
+
+  const allSelectedOnPage = selectablePagedStudentIds.size > 0 && selectedCountOnPage === selectablePagedStudentIds.size;
 
   const verificationInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -422,6 +454,19 @@ const SignatureAI = () => {
         });
       } else {
         updateStudentCard(currentCardId, { student });
+        // Load persisted signatures for preview from S3
+        (async () => {
+          try {
+            const persisted = await aiService.listSignatures(student.id);
+            const toPreview = (rec: { id:number; s3_url:string; s3_key:string; label:'genuine'|'forged' }) => ({ file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label } as TrainingFile);
+            updateStudentCard(currentCardId, {
+              genuineFiles: persisted.filter(x => x.label === 'genuine').map(x => toPreview(x)),
+              forgedFiles: persisted.filter(x => x.label === 'forged').map(x => toPreview(x)),
+            });
+          } catch (e) {
+            // ignore
+          }
+        })();
         toast({
           title: "Student Selected",
           description: `${student.firstname} ${student.surname} has been added to the training card.`,
@@ -507,19 +552,31 @@ const SignatureAI = () => {
       });
     }
 
-    const previews = await Promise.all(uniqueEntries.map(async ({ file }) => {
-      let preview = '';
+    // Upload to backend → S3 and use returned URLs for persistent previews
+    const card = studentCards.find(c => c.id === cardId);
+    if (!card?.student) return;
+    const uploaded: TrainingFile[] = [];
+    for (const { file } of uniqueEntries) {
       try {
-        if (file.type.startsWith('image/') && file.type !== 'image/tiff' && !file.name.toLowerCase().endsWith('.tif') && !file.name.toLowerCase().endsWith('.tiff')) {
-          preview = URL.createObjectURL(file);
-        } else {
-          preview = await aiService.getPreviewURL(file);
+        const rec = await aiService.uploadSignature(card.student.id, setType, file);
+        uploaded.push({ file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label });
+      } catch (e: any) {
+        // Duplicate handling (HTTP 409)
+        if (e instanceof Error && e.message.includes('Duplicate')) {
+          toast({ title: 'Duplicate image', description: 'This image was already uploaded.', variant: 'destructive' });
+          continue;
         }
-      } catch {
-        preview = URL.createObjectURL(file);
+        // fallback to local preview if upload fails
+        try {
+          const fallback = file.type.startsWith('image/') && file.type !== 'image/tiff' && !file.name.toLowerCase().endsWith('.tif') && !file.name.toLowerCase().endsWith('.tiff')
+            ? URL.createObjectURL(file)
+            : await aiService.getPreviewURL(file);
+          uploaded.push({ file, preview: fallback });
+        } catch {
+          // ignore
+        }
       }
-      return { file, preview };
-    }));
+    }
 
     // Add to page-level hash set
     setUploadedImageHashes(prev => {
@@ -532,9 +589,9 @@ const SignatureAI = () => {
     setStudentCards(prev => prev.map(card => {
       if (card.id === cardId) {
         if (setType === 'genuine') {
-          return { ...card, genuineFiles: [...card.genuineFiles, ...previews] };
+          return { ...card, genuineFiles: [...card.genuineFiles, ...uploaded] };
         } else {
-          return { ...card, forgedFiles: [...card.forgedFiles, ...previews] };
+          return { ...card, forgedFiles: [...card.forgedFiles, ...uploaded] };
         }
       }
       return card;
@@ -542,41 +599,29 @@ const SignatureAI = () => {
     markDirty();
   };
 
+  // (Deletion remains as previously implemented below in file)
+
   const removeTrainingFile = (index: number, setType: 'genuine' | 'forged', cardId: string) => {
     setStudentCards(prev => prev.map(card => {
       if (card.id === cardId) {
-        if (setType === 'genuine') {
-          const newFiles = [...card.genuineFiles];
-          const removed = newFiles[index];
-          URL.revokeObjectURL(removed.preview);
-          newFiles.splice(index, 1);
-          // Attempt to compute and remove the hash from the page-level set
-          removed.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
-            const hashArray = Array.from(new Uint8Array(digest));
-            const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-            setUploadedImageHashes(prev => {
-              const next = new Set(prev);
-              next.delete(hashHex);
-              return next;
-            });
-          }).catch(() => { /* noop */ });
-          return { ...card, genuineFiles: newFiles };
-        } else {
-          const newFiles = [...card.forgedFiles];
-          const removed = newFiles[index];
-          URL.revokeObjectURL(removed.preview);
-          newFiles.splice(index, 1);
-          removed.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
-            const hashArray = Array.from(new Uint8Array(digest));
-            const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-            setUploadedImageHashes(prev => {
-              const next = new Set(prev);
-              next.delete(hashHex);
-              return next;
-            });
-          }).catch(() => { /* noop */ });
-          return { ...card, forgedFiles: newFiles };
+        const list = setType === 'genuine' ? [...card.genuineFiles] : [...card.forgedFiles];
+        const removed = list[index];
+        // Best-effort backend delete when we know record id
+        if (removed?.id) {
+          aiService.deleteSignature(removed.id, removed.s3Key).catch(() => { /* ignore */ });
         }
+        // Revoke only blob URLs
+        if (removed && removed.preview.startsWith('blob:')) {
+          URL.revokeObjectURL(removed.preview);
+        }
+        list.splice(index, 1);
+        // Remove hash from page-level set
+        removed?.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
+          const hashArray = Array.from(new Uint8Array(digest));
+          const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+          setUploadedImageHashes(prev => { const next = new Set(prev); next.delete(hashHex); return next; });
+        }).catch(() => { /* noop */ });
+        return setType === 'genuine' ? { ...card, genuineFiles: list } : { ...card, forgedFiles: list };
       }
       return card;
     }));
@@ -884,7 +929,12 @@ const SignatureAI = () => {
       if (card) {
         const files = modalContext.setType === 'genuine' ? card.genuineFiles : card.forgedFiles;
         const idx = files.findIndex(f => f.preview === modalImages[modalImageIndex]);
-        return idx >= 0 ? files[idx].file.name : '';
+        if (idx >= 0) {
+          const f = files[idx];
+          // Avoid showing long S3 URLs; show simple label
+          return f.label ? `${f.label.toUpperCase()} sample` : 'Signature sample';
+        }
+        return '';
       }
     }
     if (modalContext?.kind === 'verification') {
@@ -1016,6 +1066,44 @@ const SignatureAI = () => {
                   {!isViewingModels ? (
                     <>
                       <DropdownMenuItem onClick={() => addStudentCard()}>Add Student</DropdownMenuItem>
+                      <DropdownMenuItem onClick={async () => {
+                        try {
+                          const items = await aiService.listStudentsWithImages();
+                          const byId = new Map(allStudents.map(s => [s.id, s]));
+                          const toAdd = items
+                            .map(it => byId.get(it.student_id))
+                            .filter((s): s is Student => Boolean(s));
+                          // Add cards for these students
+                          let addedIds: number[] = [];
+                          setStudentCards(prev => {
+                            const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
+                            const newCards = toAdd
+                              .filter(s => !existingIds.has(s.id))
+                              .map(s => ({ id: `${Date.now()}-${s.id}`, student: s, genuineFiles: [], forgedFiles: [], isExpanded: true }));
+                            addedIds = newCards.map(c => (c.student as any).id);
+                            return [...prev, ...newCards];
+                          });
+                          // For each added student, load their images and populate previews
+                          for (const sid of addedIds) {
+                            try {
+                              const persisted = await aiService.listSignatures(sid);
+                              setStudentCards(prev => prev.map(c => {
+                                if (c.student && c.student.id === sid) {
+                                  const mapRec = (rec: any) => ({ file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label });
+                                  return {
+                                    ...c,
+                                    genuineFiles: persisted.filter(x => x.label === 'genuine').map(mapRec),
+                                    forgedFiles: persisted.filter(x => x.label === 'forged').map(mapRec),
+                                  };
+                                }
+                                return c;
+                              }));
+                            } catch {}
+                          }
+                        } catch (e) {
+                          toast({ title: 'Error', description: 'Failed to load students with images', variant: 'destructive' });
+                        }
+                      }}>Load students with images</DropdownMenuItem>
                       <DropdownMenuItem onClick={async () => {
                         setIsViewingModels(true);
                         setIsLoadingModels(true);
@@ -1442,27 +1530,39 @@ const SignatureAI = () => {
                   onChange={(e) => setStudentSearch(e.target.value)}
                   className="w-full max-w-sm"
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={showSelectedStudents}
+                      onChange={(e) => {
+                        setShowSelectedStudents(e.target.checked);
+                        setStudentPage(1);
+                      }}
+                    />
+                    Show selected
+                  </label>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      if (selectedStudentIds.size === pagedStudents.length) {
+                      if (allSelectedOnPage) {
                         setSelectedStudentIds(prev => {
                           const next = new Set(prev);
-                          pagedStudents.forEach(s => next.delete(s.id));
+                          selectablePagedStudentIds.forEach(id => next.delete(id));
                           return next;
                         });
                       } else {
                         setSelectedStudentIds(prev => {
                           const next = new Set(prev);
-                          pagedStudents.forEach(s => next.add(s.id));
+                          selectablePagedStudentIds.forEach(id => next.add(id));
                           return next;
                         });
                       }
                     }}
                   >
-                    {selectedStudentIds.size === pagedStudents.length ? 'Unselect All (page)' : 'Select All (page)'}
+                    {allSelectedOnPage ? 'Unselect All (page)' : 'Select All (page)'}
                   </Button>
                 </div>
               </div>
@@ -1471,12 +1571,12 @@ const SignatureAI = () => {
                   <div className="p-4 text-sm text-muted-foreground">Loading students…</div>
                 ) : isStudentSearching ? (
                   <div className="p-4 text-sm text-muted-foreground">Searching…</div>
-                ) : filteredStudents.length === 0 ? (
+                ) : visibleStudents.length === 0 ? (
                   <div className="p-4 text-sm text-muted-foreground">No results</div>
                 ) : (
                   <ul className="divide-y">
                     {pagedStudents.map((s) => {
-                      const isAssignedElsewhere = isStudentAlreadySelected(s.id, currentCardId);
+                      const isAssignedElsewhere = selectedElsewhereIds.has(s.id);
                       const checked = selectedStudentIds.has(s.id);
                       return (
                         <li key={s.id}>
@@ -1528,7 +1628,7 @@ const SignatureAI = () => {
                     onClick={() => {
                       if (studentSelectMode === 'bulkAdd') {
                         if (selectedStudentIds.size === 0) return setIsStudentDialogOpen(false);
-                        const selected = allStudents.filter(s => selectedStudentIds.has(s.id));
+                        const selected = allStudents.filter(s => selectedStudentIds.has(s.id) && !selectedElsewhereIds.has(s.id));
                         setStudentCards(prev => {
                           let base = prev;
                           if (
@@ -1546,7 +1646,7 @@ const SignatureAI = () => {
                         });
                         setIsStudentDialogOpen(false);
                       } else {
-                        const chosen = allStudents.find(s => selectedStudentIds.has(s.id));
+                        const chosen = allStudents.find(s => selectedStudentIds.has(s.id) && !selectedElsewhereIds.has(s.id));
                         if (chosen && currentCardId) {
                           handleStudentSelection(chosen);
                           setIsStudentDialogOpen(false);
@@ -1689,7 +1789,7 @@ const SignatureAI = () => {
                                 >
                                   <img
                                     src={item.preview}
-                                    alt={`Sample ${index + 1}`}
+                                    alt={item.label ? `${item.label} sample ${index + 1}` : `Sample ${index + 1}`}
                                     className="absolute inset-0 w-full h-full object-cover hover:opacity-80 transition-opacity"
                                     loading="lazy"
                                   />

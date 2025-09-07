@@ -160,6 +160,90 @@ class DatabaseManager:
             logger.error(f"Error getting trained model: {e}")
             return None
 
+    # Student Signatures (S3-backed) -------------------------------------
+    async def add_student_signature(self, student_id: int, label: str, s3_key: str, s3_url: str):
+        """Insert a student signature record referencing S3 storage."""
+        try:
+            response = self.client.table("student_signatures").insert({
+                "student_id": student_id,
+                "label": label,
+                "s3_key": s3_key,
+                "s3_url": s3_url,
+            }).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error adding student signature: {e}")
+            raise
+
+    async def list_student_signatures(self, student_id: int):
+        """List all signatures for a given student."""
+        try:
+            response = self.client.table("student_signatures").select("*").eq("student_id", student_id).order("created_at", desc=False).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error listing student signatures: {e}")
+            return []
+
+    async def list_all_signatures(self):
+        """List all signatures across students for global training manifest."""
+        try:
+            response = self.client.table("student_signatures").select("student_id,label,s3_key,s3_url,created_at").order("student_id", desc=False).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error listing all signatures: {e}")
+            return []
+
+    async def find_signature_by_hash(self, content_hash: str):
+        try:
+            response = self.client.table("student_signatures").select("*").eq("content_hash", content_hash).limit(1).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error finding signature by hash: {e}")
+            return None
+
+    async def add_signature_with_hash(self, student_id: int, label: str, s3_key: str, s3_url: str, content_hash: str):
+        try:
+            response = self.client.table("student_signatures").insert({
+                "student_id": student_id,
+                "label": label,
+                "s3_key": s3_key,
+                "s3_url": s3_url,
+                "content_hash": content_hash,
+            }).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error adding signature with hash: {e}")
+            raise
+
+    async def delete_signature(self, record_id: int):
+        try:
+            response = self.client.table("student_signatures").delete().eq("id", record_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting signature: {e}")
+            return False
+
+    async def list_students_with_images(self):
+        try:
+            # Select distinct students with aggregated signatures
+            response = self.client.rpc("list_students_with_images").execute()
+            return response.data or []
+        except Exception:
+            # Fallback if RPC not present
+            try:
+                rows = self.client.table("student_signatures").select("student_id,label,s3_url").execute().data or []
+                by = {}
+                for r in rows:
+                    sid = r["student_id"]
+                    by.setdefault(sid, []).append(r)
+                out = []
+                for sid, items in by.items():
+                    out.append({"student_id": sid, "signatures": items})
+                return out
+            except Exception as e2:
+                logger.error(f"Error listing students with images: {e2}")
+                return []
+
     # A/B Testing Methods
     async def create_ab_test(self, ab_test_data: dict):
         """Create an A/B test."""

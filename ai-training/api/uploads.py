@@ -1,0 +1,120 @@
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from typing import Optional, List
+import hashlib
+
+from models.database import db_manager
+from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key
+from config import settings
+
+
+router = APIRouter()
+
+
+@router.post("/signature")
+async def upload_signature(
+    student_id: int = Form(...),
+    label: str = Form(...),  # 'genuine' | 'forged'
+    file: UploadFile = File(...),
+):
+    if label not in ("genuine", "forged"):
+        raise HTTPException(status_code=400, detail="label must be 'genuine' or 'forged'")
+    data = await file.read()
+    # hash for duplicate detection
+    content_hash = hashlib.sha256(data).hexdigest()
+    existing = await db_manager.find_signature_by_hash(content_hash)
+    if existing:
+        raise HTTPException(status_code=409, detail="Duplicate image detected. This signature was already uploaded.")
+    try:
+        key, url = upload_bytes(student_id, label, file.filename or "signature.png", data, file.content_type)
+        # store with hash
+        try:
+            record = await db_manager.add_signature_with_hash(student_id, label, key, url, content_hash)
+        except Exception:
+            # fallback if column not present yet
+            record = await db_manager.add_student_signature(student_id, label, key, url)
+        return {"success": True, "record": record}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@router.get("/list")
+async def list_signatures(student_id: int):
+    try:
+        rows = await db_manager.list_student_signatures(student_id)
+        if settings.S3_USE_PRESIGNED_GET:
+            for r in rows:
+                r["s3_url"] = create_presigned_get(r["s3_key"])  # type: ignore[index]
+        return {"signatures": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List failed: {str(e)}")
+
+
+@router.post("/presign")
+async def presign_upload(
+    student_id: int = Form(...),
+    label: str = Form(...),
+    filename: str = Form(...),
+    content_type: Optional[str] = Form(None),
+):
+    if label not in ("genuine", "forged"):
+        raise HTTPException(status_code=400, detail="label must be 'genuine' or 'forged'")
+    try:
+        post = create_presigned_post(student_id, label, filename, content_type)
+        return {"success": True, **post}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Presign failed: {str(e)}")
+
+
+@router.get("/manifest")
+async def generate_manifest():
+    try:
+        rows = await db_manager.list_all_signatures()
+        return {"items": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Manifest failed: {str(e)}")
+
+
+@router.delete("/signature/{record_id}")
+async def delete_signature(record_id: int, s3_key: Optional[str] = None):
+    try:
+        # if s3_key not provided, fetch it
+        key = s3_key
+        if not key:
+            # quick fetch by id
+            # Supabase select
+            # We reuse list_all_signatures then filter to minimize new DB call surface
+            # Better: add a dedicated DB method to get by id (omitted for brevity)
+            from supabase import APIError  # type: ignore
+            try:
+                # direct fetch
+                resp = db_manager.client.table("student_signatures").select("s3_key").eq("id", record_id).execute()
+                if resp.data:
+                    key = resp.data[0]["s3_key"]
+            except Exception:
+                pass
+        if key:
+            delete_key(key)
+        ok = await db_manager.delete_signature(record_id)
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to delete record")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+@router.get("/students-with-images")
+async def students_with_images():
+    try:
+        items = await db_manager.list_students_with_images()
+        # Optionally presign GETs for each url
+        if settings.S3_USE_PRESIGNED_GET:
+            for it in items:
+                for s in it.get("signatures", []):
+                    s["s3_url"] = create_presigned_get(s["s3_url"].split("/", 3)[-1]) if "amazonaws.com" in s["s3_url"] else s["s3_url"]
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List students failed: {str(e)}")
+
+

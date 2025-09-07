@@ -8,6 +8,15 @@ class Settings:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
     
+    # AWS / S3 Configuration
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+    S3_BUCKET = os.getenv("S3_BUCKET")
+    # If your bucket is public, this will be the base for URLs; otherwise presign GETs
+    S3_PUBLIC_BASE_URL = os.getenv("S3_PUBLIC_BASE_URL", None)
+    S3_USE_PRESIGNED_GET = os.getenv("S3_USE_PRESIGNED_GET", "false").lower() == "true"
+    
     # Server Configuration
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", 8000))

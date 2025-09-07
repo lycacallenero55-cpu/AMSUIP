@@ -110,6 +110,58 @@ export class AIService {
     }
   }
 
+  // S3-backed student signatures -------------------------------------
+  async uploadSignature(studentId: number, label: 'genuine'|'forged', file: File) {
+    const form = new FormData();
+    form.append('student_id', String(studentId));
+    form.append('label', label);
+    form.append('file', file);
+    const res = await fetch(`${this.baseUrl}/api/uploads/signature`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Upload failed');
+    return data.record as { id:number; student_id:number; label:'genuine'|'forged'; s3_url:string; s3_key:string };
+  }
+
+  async listSignatures(studentId: number) {
+    const res = await fetch(`${this.baseUrl}/api/uploads/list?student_id=${studentId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'List failed');
+    return data.signatures as Array<{ id:number; student_id:number; label:'genuine'|'forged'; s3_url:string; s3_key:string }>;
+  }
+
+  async presignSignature(studentId: number, label: 'genuine'|'forged', file: File) {
+    const form = new FormData();
+    form.append('student_id', String(studentId));
+    form.append('label', label);
+    form.append('filename', file.name);
+    form.append('content_type', file.type || 'application/octet-stream');
+    const ps = await fetch(`${this.baseUrl}/api/uploads/presign`, { method: 'POST', body: form });
+    const pd = await ps.json();
+    if (!ps.ok) throw new Error(pd.detail || 'Presign failed');
+    const uploadForm = new FormData();
+    Object.entries(pd.fields).forEach(([k, v]) => uploadForm.append(k, String(v)));
+    uploadForm.append('file', file);
+    const up = await fetch(pd.url, { method: 'POST', body: uploadForm });
+    if (!up.ok) throw new Error('S3 direct upload failed');
+    return { key: pd.key as string, s3_url: pd.public_url as string };
+  }
+
+  async deleteSignature(recordId: number, s3Key?: string) {
+    const url = new URL(`${this.baseUrl}/api/uploads/signature/${recordId}`);
+    if (s3Key) url.searchParams.set('s3_key', s3Key);
+    const res = await fetch(url.toString(), { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Delete failed');
+    return true;
+  }
+
+  async listStudentsWithImages() {
+    const res = await fetch(`${this.baseUrl}/api/uploads/students-with-images`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'List failed');
+    return data.items as Array<{ student_id:number; signatures: Array<{ label:'genuine'|'forged'; s3_url:string }> }>;
+  }
+
   /**
    * Train AI model for a specific student
    */

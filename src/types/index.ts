@@ -185,6 +185,9 @@ export interface Column<T> {
 export interface TrainingFile {
   file: File;
   preview: string;
+  id?: number; // signature record id (DB)
+  s3Key?: string;
+  label?: 'genuine' | 'forged';
 }
 
 export interface StudentTrainingCard {

@@ -19,6 +19,7 @@ from utils.job_queue import job_queue
 from utils.training_callback import RealTimeMetricsCallback
 from services.model_versioning import model_versioning_service
 from config import settings
+from models.global_signature_model import GlobalSignatureVerificationModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -179,6 +180,39 @@ async def start_async_training(
         raise
     except Exception as e:
         logger.error(f"Error starting async training: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/train-global")
+async def train_global_model():
+    try:
+        # Build manifest from DB (S3 URLs)
+        rows = await db_manager.list_all_signatures()
+        if not rows:
+            raise HTTPException(status_code=400, detail="No signatures available")
+
+        import requests, io
+        from PIL import Image
+        from utils.image_processing import preprocess_image
+
+        data_by_student = {}
+        for r in rows:
+            sid = int(r["student_id"])  # type: ignore[index]
+            url = r["s3_url"]  # type: ignore[index]
+            label = r["label"]  # type: ignore[index]
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            image = Image.open(io.BytesIO(resp.content))
+            image = preprocess_image(image)
+            bucket = data_by_student.setdefault(sid, {"genuine_images": [], "forged_images": []})
+            (bucket["genuine_images"] if label == "genuine" else bucket["forged_images"]).append(image)
+
+        gsm = GlobalSignatureVerificationModel()
+        history = gsm.train_global_model(data_by_student)
+        return {"success": True, "history": {k: list(map(float, v)) for k, v in history.history.items()}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Global training failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 async def run_async_training(job, student, genuine_data, forged_data):

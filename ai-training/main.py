@@ -8,6 +8,7 @@ from api.verification import router as verification_router
 from api.progress import router as progress_router
 from api.versioning import router as versioning_router
 from api.utils import router as utils_router
+from api.uploads import router as uploads_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +42,7 @@ app.include_router(verification_router, prefix="/api/verification", tags=["ai-ve
 app.include_router(progress_router, prefix="/api/progress", tags=["progress"])
 app.include_router(versioning_router, prefix="/api/versioning", tags=["versioning"])
 app.include_router(utils_router, prefix="/api/utils", tags=["utils"])
+app.include_router(uploads_router, prefix="/api/uploads", tags=["uploads"])
 
 @app.get("/")
 async def root():
