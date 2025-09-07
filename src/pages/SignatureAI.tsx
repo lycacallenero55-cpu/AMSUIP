@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,14 +41,36 @@ interface TrainingFile {
   preview: string;
 }
 
+type TrainingCard = {
+  id: string;
+  selectedStudent: Student | null;
+  genuineFiles: TrainingFile[];
+  forgedFiles: TrainingFile[];
+};
+
 const SignatureAI = () => {
   const { toast } = useToast();
+  const pageRef = useRef<HTMLDivElement>(null);
   
-  // Training Section State
-  const [genuineFiles, setGenuineFiles] = useState<TrainingFile[]>([]);
-  const [forgedFiles, setForgedFiles] = useState<TrainingFile[]>([]);
+  // Training Section State (multi-card)
+  const [cards, setCards] = useState<TrainingCard[]>([{
+    id: crypto.randomUUID(),
+    selectedStudent: null,
+    genuineFiles: [],
+    forgedFiles: [],
+  }]);
+  // Focused card context for uploads and UI toggles
+  const [activeCardId, setActiveCardId] = useState<string>(() => cards[0]?.id || '');
+  const getActiveCard = () => cards.find(c => c.id === activeCardId) || cards[0];
   const [currentTrainingSet, setCurrentTrainingSet] = useState<'genuine' | 'forged'>('genuine');
-  const [studentId, setStudentId] = useState<string>('');
+  const [studentDialogForCardId, setStudentDialogForCardId] = useState<string | null>(null);
+  const centerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const verificationCardRef = useRef<HTMLDivElement | null>(null);
+  const leftCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [connectorPaths, setConnectorPaths] = useState<{ id: string; d: string }[]>([]);
+  const [verifyConnector, setVerifyConnector] = useState<string>('');
+  const [cardProgress, setCardProgress] = useState<Record<string, number>>({});
+  const [globalProgress, setGlobalProgress] = useState<number>(0);
   const [isTraining, setIsTraining] = useState(false);
   const [trainingResult, setTrainingResult] = useState<any>(null);
   
@@ -92,7 +114,7 @@ const SignatureAI = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isConfirmRemoveOpen, setIsConfirmRemoveOpen] = useState(false);
   const [visibleCounts, setVisibleCounts] = useState<{ genuine: number; forged: number }>({ genuine: 60, forged: 60 });
-  const STORAGE_KEY = 'signatureAIState:v1';
+  const STORAGE_KEY = 'signatureAIState:v2-multicard';
   const NAVIGATION_FLAG = 'signatureAIInternalNav:v1';
 
   // Unsaved changes handling
@@ -153,7 +175,7 @@ const SignatureAI = () => {
     try {
       // Prepare serializable lists. Append newly added files efficiently.
       const genuineSerial: SerializableTraining[] = [];
-      for (const item of genuineFiles) {
+      for (const item of (getActiveCard()?.genuineFiles || [])) {
         genuineSerial.push({
           name: item.file.name,
           type: item.file.type,
@@ -161,25 +183,39 @@ const SignatureAI = () => {
         });
       }
       const forgedSerial: SerializableTraining[] = [];
-      for (const item of forgedFiles) {
+      for (const item of (getActiveCard()?.forgedFiles || [])) {
         forgedSerial.push({
           name: item.file.name,
           type: item.file.type,
           size: item.file.size,
         });
       }
-      const studentSerial: SerializableStudent | null = selectedStudent
+      const studentSerial: SerializableStudent | null = (getActiveCard()?.selectedStudent as SerializableStudent) 
         ? {
-            id: selectedStudent.id,
-            student_id: selectedStudent.student_id,
-            firstname: selectedStudent.firstname,
-            surname: selectedStudent.surname,
-            program: selectedStudent.program,
-            year: selectedStudent.year,
-            section: selectedStudent.section,
+            id: (getActiveCard()!.selectedStudent as Student).id,
+            student_id: (getActiveCard()!.selectedStudent as Student).student_id,
+            firstname: (getActiveCard()!.selectedStudent as Student).firstname,
+            surname: (getActiveCard()!.selectedStudent as Student).surname,
+            program: (getActiveCard()!.selectedStudent as Student).program,
+            year: (getActiveCard()!.selectedStudent as Student).year,
+            section: (getActiveCard()!.selectedStudent as Student).section,
           }
         : null;
       const payload = {
+        cards: cards.map(c => ({
+          id: c.id,
+          selectedStudent: c.selectedStudent ? {
+            id: c.selectedStudent.id,
+            student_id: c.selectedStudent.student_id,
+            firstname: c.selectedStudent.firstname,
+            surname: c.selectedStudent.surname,
+            program: c.selectedStudent.program,
+            year: c.selectedStudent.year,
+            section: c.selectedStudent.section,
+          } : null,
+          genuine: c.genuineFiles.map(f => ({ name: f.file.name, type: f.file.type, size: f.file.size })),
+          forged: c.forgedFiles.map(f => ({ name: f.file.name, type: f.file.type, size: f.file.size })),
+        })),
         selectedStudent: studentSerial,
         currentTrainingSet,
         visibleCounts,
@@ -345,18 +381,21 @@ const SignatureAI = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Validation functions
-  const hasUploadedImages = () => {
-    return genuineFiles.length > 0 || forgedFiles.length > 0;
+  const hasUploadedImages = (card?: TrainingCard) => {
+    const c = card || getActiveCard();
+    return (c?.genuineFiles.length || 0) > 0 || (c?.forgedFiles.length || 0) > 0;
   };
 
   const canTrainModel = () => {
-    return selectedStudent !== null && hasUploadedImages();
+    // Enable when at least one card has student + images
+    return cards.some(c => !!c.selectedStudent && hasUploadedImages(c));
   };
 
   // Data Quality Functions
   const getDataBalance = () => {
-    const genuineCount = genuineFiles.length;
-    const forgedCount = forgedFiles.length;
+    const c = getActiveCard();
+    const genuineCount = c?.genuineFiles.length || 0;
+    const forgedCount = c?.forgedFiles.length || 0;
     const total = genuineCount + forgedCount;
     
     if (total === 0) return { ratio: 0, status: 'none', message: 'No data uploaded' };
@@ -387,7 +426,8 @@ const SignatureAI = () => {
 
   const getOverallDataQuality = () => {
     const balance = getDataBalance();
-    const totalImages = genuineFiles.length + forgedFiles.length;
+    const c = getActiveCard();
+    const totalImages = (c?.genuineFiles.length || 0) + (c?.forgedFiles.length || 0);
     
     if (totalImages === 0) {
       return { score: 0, status: 'poor', message: 'No training data available' };
@@ -422,34 +462,44 @@ const SignatureAI = () => {
   };
 
   const handleStudentSelection = (student: Student) => {
-    // Check if we have uploaded images and a different student is selected
-    if (hasUploadedImages() && selectedStudent && selectedStudent.id !== student.id) {
+    const targetCardId = studentDialogForCardId || activeCardId;
+    const card = cards.find(c => c.id === targetCardId) || getActiveCard();
+    if (!card) return;
+
+    const hasImgs = hasUploadedImages(card);
+    const currentStudent = card.selectedStudent;
+    if (hasImgs && currentStudent && currentStudent.id !== student.id) {
       setPendingStudent(student);
       setIsStudentSwitchConfirmOpen(true);
     } else {
+      setCards(prev => prev.map(c => c.id === card.id ? { ...c, selectedStudent: student } : c));
       setSelectedStudent(student);
       setIsStudentDialogOpen(false);
+      setStudentDialogForCardId(null);
     }
   };
 
   const confirmStudentSwitch = () => {
-    // Clear all uploaded images
-    genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    setGenuineFiles([]);
-    setForgedFiles([]);
-    
-    // Set new student
+    const targetCard = cards.find(c => c.id === (studentDialogForCardId || activeCardId)) || getActiveCard();
+    if (!targetCard) return;
+    // Clear previews
+    targetCard.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
+    targetCard.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
+
+    setCards(prev => prev.map(c => c.id === targetCard.id ? ({
+      ...c,
+      selectedStudent: pendingStudent,
+      genuineFiles: [],
+      forgedFiles: [],
+    }) : c));
+
     setSelectedStudent(pendingStudent);
     setIsStudentDialogOpen(false);
     setIsStudentSwitchConfirmOpen(false);
     setPendingStudent(null);
+    setStudentDialogForCardId(null);
     markDirty();
-    
-    toast({
-      title: "Student Changed",
-      description: "All uploaded images have been cleared for the new student.",
-    });
+    toast({ title: "Student Changed", description: "All uploaded images have been cleared for the new student." });
   };
 
   const cancelStudentSwitch = () => {
@@ -483,7 +533,10 @@ const SignatureAI = () => {
     return valid;
   };
 
-  const handleTrainingFilesChange = async (files: File[], setType: 'genuine' | 'forged') => {
+  const handleTrainingFilesChange = async (files: File[], setType: 'genuine' | 'forged', cardId?: string) => {
+    const targetId = cardId || activeCardId;
+    const targetCard = cards.find(c => c.id === targetId) || getActiveCard();
+    if (!targetCard) return;
     const safeFiles = validateFiles(files);
     const newFilesPromises = safeFiles.map(async (file) => {
       let preview = '';
@@ -500,30 +553,25 @@ const SignatureAI = () => {
       return { file, preview };
     });
     const newFiles = await Promise.all(newFilesPromises);
-    if (setType === 'genuine') {
-      setGenuineFiles(prev => [...prev, ...newFiles]);
-    } else {
-      setForgedFiles(prev => [...prev, ...newFiles]);
-    }
+    setCards(prev => prev.map(c => {
+      if (c.id !== targetCard.id) return c;
+      if (setType === 'genuine') {
+        return { ...c, genuineFiles: [...c.genuineFiles, ...newFiles] };
+      }
+      return { ...c, forgedFiles: [...c.forgedFiles, ...newFiles] };
+    }));
     markDirty();
   };
 
-  const removeTrainingFile = (index: number, setType: 'genuine' | 'forged') => {
-    if (setType === 'genuine') {
-      setGenuineFiles(prev => {
-        const newFiles = [...prev];
-        URL.revokeObjectURL(newFiles[index].preview);
-        newFiles.splice(index, 1);
-        return newFiles;
-      });
-    } else {
-      setForgedFiles(prev => {
-        const newFiles = [...prev];
-        URL.revokeObjectURL(newFiles[index].preview);
-        newFiles.splice(index, 1);
-        return newFiles;
-      });
-    }
+  const removeTrainingFile = (index: number, setType: 'genuine' | 'forged', cardId?: string) => {
+    const targetId = cardId || activeCardId;
+    setCards(prev => prev.map(c => {
+      if (c.id !== targetId) return c;
+      const list = setType === 'genuine' ? [...c.genuineFiles] : [...c.forgedFiles];
+      if (list[index]) URL.revokeObjectURL(list[index].preview);
+      list.splice(index, 1);
+      return setType === 'genuine' ? { ...c, genuineFiles: list } : { ...c, forgedFiles: list };
+    }));
     markDirty();
   };
 
@@ -849,11 +897,14 @@ const SignatureAI = () => {
     setModalImageIndex(prev => prev < modalImages.length - 1 ? prev + 1 : 0);
   };
 
-  const removeAllTrainingFiles = () => {
-    genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    setGenuineFiles([]);
-    setForgedFiles([]);
+  const removeAllTrainingFiles = (cardId?: string) => {
+    const id = cardId || activeCardId;
+    setCards(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      c.genuineFiles.forEach(f => URL.revokeObjectURL(f.preview));
+      c.forgedFiles.forEach(f => URL.revokeObjectURL(f.preview));
+      return { ...c, genuineFiles: [], forgedFiles: [] };
+    }));
     setIsDropdownOpen(false);
     toast({
       title: "Samples Removed",
@@ -939,128 +990,307 @@ const SignatureAI = () => {
           </p>
         </div>
 
-        {/* Student Selection Card */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="h-fit">
-          <CardHeader className="py-3">
-            {/* Collapsed header */}
-            {isStudentCollapsed ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-left">
-                  <span className="text-sm font-medium">
-                    {selectedStudent ? `${selectedStudent.firstname} ${selectedStudent.surname}` : 'No student selected'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-transform ${isStudentCollapsed ? 'rotate-180' : ''}`}
-                    onClick={() => setIsStudentCollapsed(false)}
-                    aria-label="Expand"
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setIsStudentDialogOpen(true)}>
-                        {selectedStudent ? 'Change' : 'Select'}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            ) : (
-              // Expanded header
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="flex items-center gap-2">
-                    Select Student
-                  </CardTitle>
-                  <CardDescription>
-                    Choose a student to train the AI model for signature verification
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={`h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-transform ${isStudentCollapsed ? 'rotate-180' : ''}`}
-                    onClick={() => setIsStudentCollapsed(true)}
-                    aria-label="Collapse"
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setIsStudentDialogOpen(true)}>
-                        {selectedStudent ? 'Change' : 'Select'}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
+        {/* Merged Left Cards + Center Train + Right Verification */}
+        <div ref={pageRef} className="relative">
+          {/* Connectors Overlay */}
+          <svg className="pointer-events-none absolute inset-0 z-0" xmlns="http://www.w3.org/2000/svg">
+            {connectorPaths.map(p => (
+              <path key={p.id} d={p.d} stroke="#94a3b8" strokeWidth="2" fill="none" />
+            ))}
+            {verifyConnector && (
+              <path d={verifyConnector} stroke="#94a3b8" strokeWidth="2" fill="none" />
             )}
-          </CardHeader>
-          {/* Collapsible content */}
-          <div className={`overflow-hidden transition-all ${isStudentCollapsed ? 'max-h-0 py-0' : 'max-h-[500px]'}`}>
-            {!isStudentCollapsed && (
-              <CardContent>
-                {selectedStudent ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
-                    <div>
-                      <Label className="text-muted-foreground">ID</Label>
-                      <div className="font-medium">{selectedStudent?.student_id ?? '—'}</div>
+          </svg>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 relative z-10">
+            {/* Left: Multiple merged student + training cards */}
+            <div className="space-y-4">
+              {cards.map((card) => (
+                <Card key={card.id} className={`h-fit ${activeCardId === card.id ? 'ring-2 ring-education-navy' : ''}`} ref={(el) => { leftCardRefs.current[card.id] = el; }}>
+                  <CardHeader className="py-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-left">
+                        <span className="text-sm font-medium">
+                          {card.selectedStudent ? `${card.selectedStudent.firstname} ${card.selectedStudent.surname}` : 'No student selected'}
+                        </span>
+                        {card.selectedStudent && (
+                          <Badge variant="secondary" className="ml-2">{card.selectedStudent.student_id}</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={() => { setActiveCardId(card.id); setStudentDialogForCardId(card.id); setIsStudentDialogOpen(true); }}>
+                          {card.selectedStudent ? 'Change' : 'Select'}
+                        </Button>
+                        <Button variant={activeCardId === card.id ? 'default' : 'outline'} size="icon" onClick={() => setActiveCardId(card.id)} aria-label="Make Active">
+                          <User className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
-                    <div>
-                      <Label className="text-muted-foreground">Name</Label>
-                      <div className="font-medium">{selectedStudent ? `${selectedStudent.firstname} ${selectedStudent.surname}` : '—'}</div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Upload buttons */}
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
+                        onClick={() => {
+                          setActiveCardId(card.id);
+                          setCurrentTrainingSet('forged');
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = 'image/*';
+                          input.multiple = true;
+                          input.onchange = (e) => {
+                            const files = Array.from((e.target as HTMLInputElement).files || []);
+                            handleTrainingFilesChange(files, 'forged', card.id);
+                          };
+                          input.click();
+                        }}
+                      >
+                        <Upload className="w-4 h-4" />
+                        Forged ({card.forgedFiles.length})
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="flex items-center gap-2"
+                        onClick={() => {
+                          setActiveCardId(card.id);
+                          setCurrentTrainingSet('genuine');
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = 'image/*';
+                          input.multiple = true;
+                          input.onchange = (e) => {
+                            const files = Array.from((e.target as HTMLInputElement).files || []);
+                            handleTrainingFilesChange(files, 'genuine', card.id);
+                          };
+                          input.click();
+                        }}
+                      >
+                        <Upload className="w-4 h-4" />
+                        Genuine ({card.genuineFiles.length})
+                      </Button>
                     </div>
-                    <div>
-                      <Label className="text-muted-foreground">Program</Label>
-                      <div className="font-medium">{selectedStudent?.program ?? '—'}</div>
+
+                    {/* Preview grid */}
+                    <div className="relative w-full h-48 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
+                      {(card.genuineFiles.length + card.forgedFiles.length) > 0 ? (
+                        <div className="grid grid-cols-3 gap-2 w-full h-full p-3 overflow-y-auto">
+                          {(currentTrainingSet === 'genuine' ? card.genuineFiles : card.forgedFiles).slice(0, 60).map((item, index) => (
+                            <div key={index} className="relative group/itm cursor-pointer">
+                              <img src={item.preview} alt={`Sample ${index+1}`} className="w-full h-16 object-cover rounded border hover:opacity-80 transition-opacity" />
+                              <Button size="sm" variant="destructive" className="absolute top-1 right-1 w-6 h-6 p-0 opacity-0 group-hover/itm:opacity-100 transition-opacity flex items-center justify-center"
+                                onClick={(e) => { e.stopPropagation(); removeTrainingFile(index, currentTrainingSet, card.id); }}>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center text-gray-500">
+                          <Upload className="w-8 h-8 mx-auto mb-2" />
+                          <p>No images uploaded</p>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <Label className="text-muted-foreground">Year</Label>
-                      <div className="font-medium">{selectedStudent?.year ?? '—'}</div>
+
+                    {/* Add another card + remove samples */}
+                    <div className="flex items-center justify-between">
+                      <Button variant="secondary" size="sm" onClick={() => removeAllTrainingFiles(card.id)} disabled={(card.genuineFiles.length + card.forgedFiles.length) === 0}>Remove All</Button>
+                      <Button variant="outline" size="sm" onClick={() => setCards(prev => [...prev, { id: crypto.randomUUID(), selectedStudent: null, genuineFiles: [], forgedFiles: [] }])}>Add</Button>
                     </div>
-                    <div>
-                      <Label className="text-muted-foreground">Section</Label>
-                      <div className="font-medium">{selectedStudent?.section ?? '—'}</div>
+                    {typeof cardProgress[card.id] === 'number' && (
+                      <div className="text-xs text-muted-foreground">Progress: {Math.round(cardProgress[card.id])}%</div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Center: Train Model button */}
+            <div className="flex items-start justify-center">
+              <div className="w-full max-w-sm">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Brain className="w-5 h-5" />Train Model</CardTitle>
+                    <CardDescription>Train all prepared student cards together</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Button ref={centerButtonRef} onClick={handleTrainModel} disabled={!canTrainModel() || isTraining} className="w-full">
+                      {isTraining ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" />Training {Math.round(globalProgress)}%</>) : (<><Brain className="w-4 h-4 mr-2" />Train Model</>)}
+                    </Button>
+                    {isTraining && (
+                      <div className="text-xs text-muted-foreground">Overall progress: {Math.round(globalProgress)}%</div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+
+            {/* Right: Verification */}
+            <div ref={verificationCardRef}>
+              {/* Signature Verification Section */}
+              <Card className="h-fit">
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="flex items-center gap-2">
+                        <Scan className="w-5 h-5" />
+                        Signature Verification
+                      </CardTitle>
+                      <CardDescription>
+                        Upload or capture a signature to verify against trained models
+                      </CardDescription>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 opacity-60 text-muted-foreground hover:opacity-100 hover:text-foreground hover:bg-transparent transition-colors"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setVerificationFile(null);
+                            setVerificationPreview('');
+                            stopCamera();
+                          }}
+                          disabled={!verificationFile && !useCamera && !verificationPreview}
+                        >
+                          Clear
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Camera/Upload Toggle */}
+                  <div className="flex gap-2">
+                    <Button
+                      variant={useCamera ? "default" : "outline"}
+                      size="sm"
+                      onClick={startCamera}
+                      className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Camera
+                    </Button>
+                    <Button
+                      variant={!useCamera ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        setUseCamera(false);
+                        stopCamera();
+                        verificationInputRef.current?.click();
+                      }}
+                      className="flex items-center gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Upload
+                    </Button>
+                  </div>
+                  {/* Large Square Preview Box */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Signature Preview</Label>
+                      <div className="text-xs text-muted-foreground">{useCamera ? 'Camera' : 'Upload'}</div>
+                    </div>
+                    <div className="w-full h-64 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
+                      {useCamera ? (
+                        <div className="w-full h-full">
+                          <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover rounded-lg" />
+                        </div>
+                      ) : verificationPreview ? (
+                        <img src={verificationPreview} alt="Signature preview" className="w-full h-full object-contain rounded-lg cursor-pointer hover:opacity-80 transition-opacity" onClick={() => openImageModal([verificationPreview], 0)} />
+                      ) : (
+                        <div className="text-center text-gray-500">
+                          <Upload className="w-8 h-8 mx-auto mb-2" />
+                          <p>No signature selected</p>
+                        </div>
+                      )}
                     </div>
                   </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">No student selected.</div>
-                )}
-              </CardContent>
-            )}
+                  {/* Camera Controls */}
+                  {useCamera && (
+                    <div className="flex gap-2">
+                      <Button onClick={capturePhoto} size="sm" className="flex-1">Capture</Button>
+                      <Button onClick={stopCamera} variant="outline" size="sm" className="flex-1">Cancel</Button>
+                    </div>
+                  )}
+                  {/* Hidden File Input */}
+                  <Input ref={verificationInputRef} type="file" accept="image/*" onChange={handleVerificationFileChange} className="hidden" />
+                  {/* Verify Button */}
+                  <Button onClick={handleVerifySignature} disabled={!verificationFile || isVerifying} className="w-full">
+                    {isVerifying ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>) : (<><Scan className="w-4 h-4 mr-2" />Verify Signature</>)}
+                  </Button>
+                  {/* Verification Result */}
+                  {verificationResult && (
+                    <Alert className={
+                      verificationResult.is_unknown 
+                        ? "border-orange-200 bg-orange-50" 
+                        : verificationResult.match 
+                          ? "border-green-200 bg-green-50" 
+                          : "border-red-200 bg-red-50"
+                    }>
+                      <div className="flex items-center gap-2">
+                        {verificationResult.is_unknown ? (
+                          <AlertTriangle className="w-4 h-4 text-orange-600" />
+                        ) : verificationResult.match ? (
+                          <CheckCircle className="w-4 h-4 text-green-600" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-600" />
+                        )}
+                        <AlertDescription>
+                          <div className="space-y-2">
+                            <p>
+                              <strong>Result:</strong> {
+                                verificationResult.is_unknown 
+                                  ? 'Signature Not Recognized' 
+                                  : verificationResult.match 
+                                    ? 'Match Found' 
+                                    : 'No Match'
+                              }
+                            </p>
+                            <p>
+                              <strong>Confidence:</strong> {
+                                verificationResult.is_unknown 
+                                  ? 'Low (Unknown Signature)' 
+                                  : `${(verificationResult.score * 100).toFixed(1)}%`
+                              }
+                            </p>
+                            {verificationResult.predicted_student && !verificationResult.is_unknown && (
+                              <p>
+                                <strong>Predicted Student:</strong> {verificationResult.predicted_student.firstname} {verificationResult.predicted_student.surname}
+                              </p>
+                            )}
+                            {verificationResult.is_unknown && (
+                              <p className="text-orange-700 font-medium">
+                                <strong>Status:</strong> Owner not trained or signature too different from trained samples
+                              </p>
+                            )}
+                            <p className="text-sm text-muted-foreground">
+                              {verificationResult.message}
+                            </p>
+                          </div>
+                        </AlertDescription>
+                      </div>
+                    </Alert>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </div>
-          </Card>
         </div>
-
-        {/* Main Content - Two Cards Side by Side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          
-          {/* Model Training Section */}
-          <Card className="h-fit">
+            {/* Legacy block below should have been removed; keeping layout clean */}
+            {/* Removed duplicate training & verification sections */}
+            {/* START REMOVE LEGACY */}
+            {/* END REMOVE LEGACY */}
             <CardHeader>
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -1660,7 +1890,7 @@ const SignatureAI = () => {
         </Dialog>
 
         {/* Student Selection Dialog */}
-        <Dialog open={isStudentDialogOpen} onOpenChange={setIsStudentDialogOpen}>
+        <Dialog open={isStudentDialogOpen} onOpenChange={(v) => { setIsStudentDialogOpen(v); if (!v) setStudentDialogForCardId(null);} }>
           <DialogContent className="max-w-xl">
             <DialogHeader>
               <DialogTitle>Select Student</DialogTitle>
