@@ -7,7 +7,7 @@ import logging
 from models.database import db_manager
 from models.signature_model import SignatureVerificationModel
 from utils.image_processing import validate_image
-from utils.storage import load_model_from_supabase
+from utils.storage import load_model_from_supabase, load_model_from_s3
 from config import settings
 
 router = APIRouter()
@@ -42,8 +42,16 @@ async def identify_signature_owner(
         authenticity_model_path = latest_model.get("embedding_model_path")
 
         try:
-            signature_ai_manager.student_model = await load_model_from_supabase(student_model_path)
-            signature_ai_manager.authenticity_model = await load_model_from_supabase(authenticity_model_path)
+            # Check if model paths are S3 URLs or Supabase paths
+            if student_model_path.startswith('https://') and 'amazonaws.com' in student_model_path:
+                signature_ai_manager.student_model = await load_model_from_s3(student_model_path)
+            else:
+                signature_ai_manager.student_model = await load_model_from_supabase(student_model_path)
+                
+            if authenticity_model_path.startswith('https://') and 'amazonaws.com' in authenticity_model_path:
+                signature_ai_manager.authenticity_model = await load_model_from_s3(authenticity_model_path)
+            else:
+                signature_ai_manager.authenticity_model = await load_model_from_supabase(authenticity_model_path)
         except Exception as e:
             logger.error(f"Failed to load models: {e}")
             raise HTTPException(status_code=500, detail="Failed to load models")
@@ -89,8 +97,16 @@ async def verify_signature(
         authenticity_model_path = latest_model.get("embedding_model_path")
 
         try:
-            signature_ai_manager.student_model = await load_model_from_supabase(student_model_path)
-            signature_ai_manager.authenticity_model = await load_model_from_supabase(authenticity_model_path)
+            # Check if model paths are S3 URLs or Supabase paths
+            if student_model_path.startswith('https://') and 'amazonaws.com' in student_model_path:
+                signature_ai_manager.student_model = await load_model_from_s3(student_model_path)
+            else:
+                signature_ai_manager.student_model = await load_model_from_supabase(student_model_path)
+                
+            if authenticity_model_path.startswith('https://') and 'amazonaws.com' in authenticity_model_path:
+                signature_ai_manager.authenticity_model = await load_model_from_s3(authenticity_model_path)
+            else:
+                signature_ai_manager.authenticity_model = await load_model_from_supabase(authenticity_model_path)
         except Exception as e:
             logger.error(f"Failed to load models: {e}")
             raise HTTPException(status_code=500, detail="Failed to load models")
