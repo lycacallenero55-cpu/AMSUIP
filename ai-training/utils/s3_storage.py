@@ -103,8 +103,9 @@ def upload_model_file(
     Returns:
         Tuple of (s3_key, s3_url)
     """
-    # Folder structure: models/{type}/{uuid}.{ext}
-    # This keeps individual and global models organized but in same bucket
+    # Updated folder structure: models/{type}/{uuid}.{ext}
+    # models/individual/{uuid}.keras for individual student models
+    # models/global/{uuid}.keras for global multi-student models
     key = f"models/{model_type}/{model_uuid}.{file_extension}"
     
     content_type = "application/octet-stream"
