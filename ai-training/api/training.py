@@ -45,6 +45,9 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
     for sid in student_ids:
         rows = await db_manager.list_student_signatures(int(sid))
         bucket = {"genuine_images": [], "forged_images": []}
+        accepted_g = 0
+        accepted_f = 0
+        skipped = 0
         for r in rows or []:
             url = r.get("s3_url")
             label = (r.get("label") or "").lower()
@@ -52,9 +55,9 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
                 continue
             try:
                 resp = requests.get(url, timeout=30)
-                # Basic content-type gate and HTTP status
-                ctype = resp.headers.get("Content-Type", "")
-                if resp.status_code != 200 or ("image" not in ctype and not url.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp"))):
+                # Only require successful status. Content-Type can be unreliable; PIL will validate.
+                if resp.status_code != 200:
+                    skipped += 1
                     continue
                 # Validate as image
                 bio = io.BytesIO(resp.content)
@@ -67,10 +70,14 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
                 arr = preprocessor.preprocess_signature(img2)
                 if label == "genuine":
                     bucket["genuine_images"].append(arr)
+                    accepted_g += 1
                 else:
                     bucket["forged_images"].append(arr)
+                    accepted_f += 1
             except Exception:
+                skipped += 1
                 continue
+        logger.info(f"Student {sid}: accepted {accepted_g} genuine, {accepted_f} forged, skipped {skipped}")
         results[int(sid)] = bucket
     return results
 
