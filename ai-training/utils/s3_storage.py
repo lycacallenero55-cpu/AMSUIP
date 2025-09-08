@@ -85,3 +85,68 @@ def delete_key(key: str) -> None:
     _s3.delete_object(Bucket=settings.S3_BUCKET, Key=key)
 
 
+def upload_model_file(
+    model_data: bytes,
+    model_type: str,  # 'individual' or 'global'
+    model_uuid: str,
+    file_extension: str = "keras"
+) -> Tuple[str, str]:
+    """
+    Upload a trained model file to S3 with organized folder structure.
+    
+    Args:
+        model_data: The model file bytes
+        model_type: 'individual' or 'global' 
+        model_uuid: Unique identifier for the model
+        file_extension: File extension (default: keras)
+    
+    Returns:
+        Tuple of (s3_key, s3_url)
+    """
+    # Folder structure: models/{type}/{uuid}.{ext}
+    # This keeps individual and global models organized but in same bucket
+    key = f"models/{model_type}/{model_uuid}.{file_extension}"
+    
+    content_type = "application/octet-stream"
+    if file_extension == "keras":
+        content_type = "application/keras"
+    elif file_extension == "h5":
+        content_type = "application/hdf5"
+    
+    _s3.put_object(
+        Bucket=settings.S3_BUCKET,
+        Key=key,
+        Body=model_data,
+        ContentType=content_type,
+        ACL="private",  # Models should be private
+        CacheControl="max-age=31536000",  # Cache for 1 year
+    )
+    
+    url = f"{_resolve_public_base_url()}/{key}"
+    return key, url
+
+
+def download_model_file(s3_key: str) -> bytes:
+    """
+    Download a model file from S3.
+    
+    Args:
+        s3_key: The S3 key of the model file
+    
+    Returns:
+        The model file bytes
+    """
+    response = _s3.get_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+    return response['Body'].read()
+
+
+def delete_model_file(s3_key: str) -> None:
+    """
+    Delete a model file from S3.
+    
+    Args:
+        s3_key: The S3 key of the model file
+    """
+    _s3.delete_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+
+
