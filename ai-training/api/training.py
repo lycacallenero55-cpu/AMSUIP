@@ -11,11 +11,10 @@ import logging
 import asyncio
 
 from models.database import db_manager
-from models.signature_model import SignatureVerificationModel
-from utils.image_processing import preprocess_image
+from models.signature_embedding_model import SignatureEmbeddingModel
+from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 from utils.storage import save_to_supabase, cleanup_local_file
 from utils.s3_storage import upload_model_file
-from utils.augmentation import SignatureAugmentation
 from utils.job_queue import job_queue
 from utils.training_callback import RealTimeMetricsCallback
 from services.model_versioning import model_versioning_service
@@ -26,31 +25,52 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Global model instance - can handle up to 150 students
-signature_ai_manager = SignatureVerificationModel(max_students=150)
+signature_ai_manager = SignatureEmbeddingModel(max_students=150)
+preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
+augmenter = SignatureAugmentation()
 
 async def train_signature_model(student, genuine_data, forged_data, job=None):
+    """
+    Train signature verification model with real AI deep learning
+    """
     try:
-        # Process and validate images
+        if job:
+            job_queue.update_job_progress(job.job_id, 5.0, "Initializing AI training system...")
+        
+        # Process and preprocess images with advanced signature preprocessing
         genuine_images = []
         forged_images = []
 
+        if job:
+            job_queue.update_job_progress(job.job_id, 10.0, "Processing genuine signatures...")
+
         for i, data in enumerate(genuine_data):
             image = Image.open(io.BytesIO(data))
-            genuine_images.append(image)
+            # Apply advanced signature preprocessing
+            processed_image = preprocessor.preprocess_signature(image)
+            genuine_images.append(processed_image)
+            
             if job:
-                progress = 5.0 + (i + 1) / len(genuine_data) * 15.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+                progress = 10.0 + (i + 1) / len(genuine_data) * 20.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 30.0, "Processing forged signatures...")
 
         for i, data in enumerate(forged_data):
             image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
+            # Apply advanced signature preprocessing
+            processed_image = preprocessor.preprocess_signature(image)
+            forged_images.append(processed_image)
+            
             if job:
-                progress = 20.0 + (i + 1) / len(forged_data) * 15.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+                progress = 30.0 + (i + 1) / len(forged_data) * 20.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing forged signatures... {i+1}/{len(forged_data)}")
 
         if job:
-            job_queue.update_job_progress(job.job_id, 35.0, "Preparing training data...")
+            job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
 
+        # Prepare training data with augmentation
         training_data = {
             f"student_{student['id']}": {
                 'genuine': genuine_images,
@@ -59,52 +79,72 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         }
 
         if job:
-            job_queue.update_job_progress(job.job_id, 50.0, "Training student and authenticity models...")
+            job_queue.update_job_progress(job.job_id, 60.0, "Training AI models with deep learning...")
 
         t0 = time.time()
-        result_models = signature_ai_manager.train_system(training_data)
+        
+        # Train with the new AI system
+        result_models = signature_ai_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
-            job_queue.update_job_progress(job.job_id, 80.0, "Saving models...")
+            job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
 
         model_uuid = str(uuid.uuid4())
         base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
         os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
 
+        # Save all models
         signature_ai_manager.save_models(base_path)
 
-        # Upload models to S3 instead of Supabase
-        with open(f"{base_path}_student_model.keras", 'rb') as f:
-            student_model_data = f.read()
-        with open(f"{base_path}_authenticity_model.keras", 'rb') as f:
-            auth_model_data = f.read()
+        # Upload models to S3
+        model_files = [
+            (f"{base_path}_embedding.keras", "embedding"),
+            (f"{base_path}_classification.keras", "classification"),
+            (f"{base_path}_authenticity.keras", "authenticity"),
+            (f"{base_path}_siamese.keras", "siamese")
+        ]
         
-        # Upload to S3 with organized folder structure
-        student_s3_key, student_s3_url = upload_model_file(
-            student_model_data, "individual", f"student_{model_uuid}", "keras"
-        )
-        auth_s3_key, auth_s3_url = upload_model_file(
-            auth_model_data, "individual", f"auth_{model_uuid}", "keras"
-        )
+        s3_urls = {}
+        for file_path, model_type in model_files:
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    model_data = f.read()
+                
+                s3_key, s3_url = upload_model_file(
+                    model_data, "individual", f"{model_type}_{model_uuid}", "keras"
+                )
+                s3_urls[model_type] = s3_url
+                
+                # Clean up local file
+                cleanup_local_file(file_path)
 
-        cleanup_local_file(f"{base_path}_student_model.keras")
-        cleanup_local_file(f"{base_path}_authenticity_model.keras")
-        cleanup_local_file(f"{base_path}_student_mappings.json")
+        # Clean up mappings file
+        cleanup_local_file(f"{base_path}_mappings.json")
 
+        # Create model record with comprehensive metrics
         model_record = await db_manager.create_trained_model({
             "student_id": int(student["id"]),
-            "model_path": student_s3_url,
-            "embedding_model_path": auth_s3_url,
+            "model_path": s3_urls.get("classification", ""),
+            "embedding_model_path": s3_urls.get("embedding", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
             "forged_count": len(forged_images),
             "training_date": datetime.utcnow().isoformat(),
             "training_metrics": {
-                'model_type': 'individual_recognition',
-                'student_recognition_accuracy': float(result_models['student_history'].get('accuracy', [0])[-1]) if 'student_history' in result_models else None,
+                'model_type': 'ai_signature_verification',
+                'architecture': 'signature_embedding_network',
+                'student_recognition_accuracy': float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None,
                 'authenticity_accuracy': float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None,
-                'epochs_trained': len(result_models['student_history'].get('accuracy', [])) if 'student_history' in result_models else None
+                'siamese_accuracy': float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None,
+                'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
+                'embedding_dimension': signature_ai_manager.embedding_dim,
+                'model_parameters': sum([
+                    signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
+                    signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
+                    signature_ai_manager.authenticity_head.count_params() if signature_ai_manager.authenticity_head else 0,
+                    signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
+                ])
             }
         })
 
@@ -116,14 +156,17 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             "train_time_s": float(train_time),
             "training_samples": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
-            "forged_count": len(forged_images)
+            "forged_count": len(forged_images),
+            "ai_architecture": "signature_embedding_network",
+            "model_urls": s3_urls
         }
 
         if job:
             job_queue.complete_job(job.job_id, result)
         return result
+        
     except Exception as e:
-        logger.error(f"Training failed: {e}")
+        logger.error(f"AI training failed: {e}")
         if job:
             job_queue.fail_job(job.job_id, str(e))
         raise
