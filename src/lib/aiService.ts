@@ -353,7 +353,8 @@ export class AIService {
   async startAsyncTraining(
     studentId: string,
     genuineFiles: File[],
-    forgedFiles: File[]
+    forgedFiles: File[],
+    trainingMode?: 'individual' | 'global' | 'hybrid'
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
@@ -363,6 +364,9 @@ export class AIService {
       }
       for (const file of forgedFiles) {
         formData.append('forged_files', file);
+      }
+      if (trainingMode) {
+        formData.append('training_mode', trainingMode);
       }
 
       const response = await fetch(`${this.baseUrl}/api/training/start-async`, {

@@ -761,7 +761,8 @@ const SignatureAI = () => {
       const asyncResponse = await aiService.startAsyncTraining(
         studentIds.join(','),
         allGenuineFiles,
-        allForgedFiles
+        allForgedFiles,
+        trainingMode
       );
       
       setJobId(asyncResponse.job_id);
@@ -818,12 +819,12 @@ const SignatureAI = () => {
               });
               
               setCurrentEpochProgress({
-                epoch: metrics.current_epoch,
-                totalEpochs: metrics.total_epochs,
+                epoch: metrics.current_epoch || 0,
+                totalEpochs: metrics.total_epochs || 0,
                 batch: 0,
                 totalBatches: 0,
-                accuracy: metrics.accuracy,
-                loss: metrics.loss,
+                accuracy: metrics.accuracy || 0,
+                loss: metrics.loss || 0,
                 valAccuracy: metrics.val_accuracy || 0,
                 valLoss: metrics.val_loss || 0
               });
@@ -1172,8 +1173,18 @@ const SignatureAI = () => {
                             // Use hybrid mock data for UI preview
                             setDateGroupedModels(generateMockHybridModels());
                           } else {
-                            // TODO: Group real models by date when backend supports hybrid training
-                            setTrainedModels(models as TrainedModel[]);
+                            // Group models by date and separate global vs individual
+                            const grouped: Record<string, { global?: TrainedModel; individual: TrainedModel[] }> = {};
+                            for (const m of models as TrainedModel[]) {
+                              const dateKey = (m.training_date || m.created_at || '').split('T')[0] || 'Unknown';
+                              const bucket = grouped[dateKey] || { individual: [] };
+                              const type = (m as any).training_metrics?.model_type || '';
+                              const isGlobal = String(type).includes('global');
+                              if (isGlobal && !bucket.global) bucket.global = m;
+                              else bucket.individual.push(m);
+                              grouped[dateKey] = bucket;
+                            }
+                            setDateGroupedModels(grouped);
                           }
                         } catch (error) {
                           // Fallback to mock data
