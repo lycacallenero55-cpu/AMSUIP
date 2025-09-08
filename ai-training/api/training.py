@@ -260,22 +260,25 @@ async def train_global_model():
         # Clean up local file
         cleanup_local_file(f"{base_path}.keras")
         
-        # Store global model record in DB (student_id = 0 for global models)
-        model_record = await db_manager.create_trained_model({
-            "student_id": 0,  # 0 indicates global model
+        # Store global model record in dedicated global table
+        model_record = await db_manager.create_global_model({
             "model_path": s3_url,
-            "embedding_model_path": s3_url,  # Same model for global
+            "s3_key": s3_key,
+            "model_uuid": model_uuid,
             "status": "completed",
             "sample_count": sum(len(data['genuine_images']) + len(data['forged_images']) for data in data_by_student.values()),
             "genuine_count": sum(len(data['genuine_images']) for data in data_by_student.values()),
             "forged_count": sum(len(data['forged_images']) for data in data_by_student.values()),
+            "student_count": len(data_by_student),
             "training_date": datetime.utcnow().isoformat(),
+            "accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
             "training_metrics": {
                 'model_type': 'global_multi_student',
-                'student_count': len(data_by_student),
                 'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
                 'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
-                'epochs_trained': len(history.history.get('accuracy', []))
+                'epochs_trained': len(history.history.get('accuracy', [])),
+                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
             }
         })
         
@@ -390,22 +393,25 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         
         cleanup_local_file(f"{base_path}.keras")
         
-        # Store global model record in DB
-        model_record = await db_manager.create_trained_model({
-            "student_id": 0,  # 0 indicates global model
+        # Store global model record in dedicated global table
+        model_record = await db_manager.create_global_model({
             "model_path": s3_url,
-            "embedding_model_path": s3_url,
+            "s3_key": s3_key,
+            "model_uuid": model_uuid,
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
             "forged_count": len(forged_images),
+            "student_count": len(students),
             "training_date": datetime.utcnow().isoformat(),
+            "accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
             "training_metrics": {
                 'model_type': 'global_multi_student',
-                'student_count': len(students),
                 'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
                 'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
-                'epochs_trained': len(history.history.get('accuracy', []))
+                'epochs_trained': len(history.history.get('accuracy', [])),
+                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
             }
         })
         
@@ -433,4 +439,28 @@ async def get_trained_models(student_id: Optional[int] = None):
         return {"models": models}
     except Exception as e:
         logger.error(f"Error getting trained models: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/global-models")
+async def get_global_models(limit: Optional[int] = None):
+    try:
+        models = await db_manager.get_global_models(limit)
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"Error getting global models: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/global-models/latest")
+async def get_latest_global_model():
+    try:
+        model = await db_manager.get_latest_global_model()
+        if not model:
+            raise HTTPException(status_code=404, detail="No global models found")
+        return {"model": model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting latest global model: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
