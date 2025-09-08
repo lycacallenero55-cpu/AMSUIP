@@ -30,6 +30,50 @@ signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 augmenter = SignatureAugmentation()
 
+async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int, dict[str, list]]:
+    """Fetch signature images from DB/S3 for the given students and return preprocessed arrays.
+
+    Returns mapping: { student_id: { 'genuine_images': [np.ndarray], 'forged_images': [np.ndarray] } }
+    Invalid or non-image URLs are skipped.
+    """
+    import requests
+    from PIL import Image
+    import io
+
+    results: dict[int, dict[str, list]] = {}
+
+    for sid in student_ids:
+        rows = await db_manager.list_student_signatures(int(sid))
+        bucket = {"genuine_images": [], "forged_images": []}
+        for r in rows or []:
+            url = r.get("s3_url")
+            label = (r.get("label") or "").lower()
+            if not url:
+                continue
+            try:
+                resp = requests.get(url, timeout=30)
+                # Basic content-type gate and HTTP status
+                ctype = resp.headers.get("Content-Type", "")
+                if resp.status_code != 200 or ("image" not in ctype and not url.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp"))):
+                    continue
+                # Validate as image
+                bio = io.BytesIO(resp.content)
+                img = Image.open(bio)
+                img.verify()  # verify first
+                # reopen to load
+                bio2 = io.BytesIO(resp.content)
+                img2 = Image.open(bio2)
+                # preprocess to model input array
+                arr = preprocessor.preprocess_signature(img2)
+                if label == "genuine":
+                    bucket["genuine_images"].append(arr)
+                else:
+                    bucket["forged_images"].append(arr)
+            except Exception:
+                continue
+        results[int(sid)] = bucket
+    return results
+
 async def train_signature_model(student, genuine_data, forged_data, job=None):
     """
     Train signature verification model with real AI deep learning
@@ -559,27 +603,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
     """
     try:
         job_queue.start_job(job.job_id)
-        job_queue.update_job_progress(job.job_id, 5.0, "Launching GPU instance for global training...")
-        
-        # Process images
-        genuine_images = []
-        forged_images = []
-        
-        for i, data in enumerate(genuine_data):
-            image = Image.open(io.BytesIO(data))
-            genuine_images.append(image)
-            if job:
-                progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+        job_queue.update_job_progress(job.job_id, 5.0, "Preparing student list for global GPU training...")
 
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
-            if job:
-                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
-
-        # Get students
+        # Resolve student objects from provided IDs (frontend cards)
         students = []
         for student_id in student_ids:
             student = await db_manager.get_student_by_school_id(student_id)
@@ -595,21 +621,25 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         if not students:
             raise Exception("No valid students found")
 
-        # Prepare training data for global model
-        images_per_student = len(genuine_images) // len(students)
-        forged_per_student = len(forged_images) // len(students)
-        
+        # Fetch and validate images from storage for only the selected students
+        job_queue.update_job_progress(job.job_id, 12.0, "Fetching stored signatures for selected students...")
+        sid_ints = [int(s.get("id")) for s in students]
+        per_student = await _fetch_and_validate_student_images(sid_ints)
+
+        # Validate minimum totals across all selected students
+        total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
+        total_forged = sum(len(v["forged_images"]) for v in per_student.values())
+        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+            raise Exception("Insufficient stored signatures across selected students to train global model")
+
+        # Build training data structure for GPU service (expects simple dict of lists of arrays)
         training_data = {}
-        for i, student in enumerate(students):
-            start_idx = i * images_per_student
-            end_idx = start_idx + images_per_student if i < len(students) - 1 else len(genuine_images)
-            
-            forged_start = i * forged_per_student
-            forged_end = forged_start + forged_per_student if i < len(students) - 1 else len(forged_images)
-            
-            training_data[f"student_{student['id']}"] = {
-                'genuine_images': genuine_images[start_idx:end_idx],
-                'forged_images': forged_images[forged_start:forged_end]
+        for s in students:
+            sid = int(s["id"])  # type: ignore[index]
+            bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+            training_data[f"student_{sid}"] = {
+                "genuine_images": bucket["genuine_images"],
+                "forged_images": bucket["forged_images"],
             }
 
         if job:
@@ -630,9 +660,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 "s3_key": f"global_models/{job.job_id}",
                 "model_uuid": job.job_id,
                 "status": "completed",
-                "sample_count": len(genuine_images) + len(forged_images),
-                "genuine_count": len(genuine_images),
-                "forged_count": len(forged_images),
+                "sample_count": int(total_genuine + total_forged),
+                "genuine_count": int(total_genuine),
+                "forged_count": int(total_forged),
                 "student_count": len(students),
                 "training_date": datetime.utcnow().isoformat(),
                 "accuracy": 0.95,  # Placeholder - would come from training results
@@ -651,7 +681,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 "model_uuid": job.job_id,
                 "s3_url": gpu_result['model_urls'].get('classification', ''),
                 "student_count": len(students),
-                "training_samples": len(genuine_images) + len(forged_images),
+                "training_samples": int(total_genuine + total_forged),
                 "training_method": "aws_gpu_global",
                 "model_urls": gpu_result['model_urls']
             }
@@ -673,12 +703,9 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
     """Run global training for multiple students using uploaded files"""
     try:
         job_queue.start_job(job.job_id)
-        job_queue.update_job_progress(job.job_id, 10.0, "Processing uploaded files...")
-        
-        # Group files by student (this is a simplified approach)
-        # In a real implementation, you'd need to know which files belong to which student
-        # For now, we'll distribute files evenly among students
-        
+        job_queue.update_job_progress(job.job_id, 10.0, "Preparing student list...")
+
+        # Resolve students from provided IDs (from UI selected cards)
         students = []
         for student_id in student_ids:
             student = await db_manager.get_student_by_school_id(student_id)
@@ -693,46 +720,24 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         
         if not students:
             raise Exception("No valid students found")
-        
-        job_queue.update_job_progress(job.job_id, 20.0, f"Found {len(students)} students, processing images...")
-        
-        # Process images
-        genuine_images = []
-        forged_images = []
-        
-        for i, data in enumerate(genuine_data):
-            image = Image.open(io.BytesIO(data))
-            genuine_images.append(image)
-            if job:
-                progress = 20.0 + (i + 1) / len(genuine_data) * 30.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
 
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
-            if job:
-                progress = 50.0 + (i + 1) / len(forged_data) * 20.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+        job_queue.update_job_progress(job.job_id, 20.0, f"Fetching stored signatures for {len(students)} students...")
 
-        if job:
-            job_queue.update_job_progress(job.job_id, 70.0, "Preparing training data...")
+        sid_ints = [int(s.get("id")) for s in students]
+        per_student = await _fetch_and_validate_student_images(sid_ints)
 
-        # Create training data structure for global model
-        # Distribute images evenly among students (simplified approach)
-        images_per_student = len(genuine_images) // len(students)
-        forged_per_student = len(forged_images) // len(students)
-        
+        total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
+        total_forged = sum(len(v["forged_images"]) for v in per_student.values())
+        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+            raise Exception("Insufficient stored signatures across selected students to train global model")
+
         training_data = {}
-        for i, student in enumerate(students):
-            start_idx = i * images_per_student
-            end_idx = start_idx + images_per_student if i < len(students) - 1 else len(genuine_images)
-            
-            forged_start = i * forged_per_student
-            forged_end = forged_start + forged_per_student if i < len(students) - 1 else len(forged_images)
-            
-            training_data[f"student_{student['id']}"] = {
-                'genuine_images': genuine_images[start_idx:end_idx],
-                'forged_images': forged_images[forged_start:forged_end]
+        for s in students:
+            sid = int(s["id"])  # type: ignore[index]
+            bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+            training_data[f"student_{sid}"] = {
+                'genuine_images': bucket['genuine_images'],
+                'forged_images': bucket['forged_images']
             }
 
         if job:
@@ -764,9 +769,9 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
             "s3_key": s3_key,
             "model_uuid": model_uuid,
             "status": "completed",
-            "sample_count": len(genuine_images) + len(forged_images),
-            "genuine_count": len(genuine_images),
-            "forged_count": len(forged_images),
+            "sample_count": int(total_genuine + total_forged),
+            "genuine_count": int(total_genuine),
+            "forged_count": int(total_forged),
             "student_count": len(students),
             "training_date": datetime.utcnow().isoformat(),
             "accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
