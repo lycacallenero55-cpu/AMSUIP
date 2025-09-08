@@ -155,8 +155,66 @@ const SignatureAI = () => {
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
   const [confirmDeleteModelId, setConfirmDeleteModelId] = useState<string | number | null>(null);
+  
+  // Date-based model view state
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [dateGroupedModels, setDateGroupedModels] = useState<Record<string, { global?: TrainedModel; individual: TrainedModel[] }>>({});
+  
+  // Training mode state
+  const [trainingMode, setTrainingMode] = useState<'individual' | 'global' | 'hybrid'>('hybrid');
 
-  // Temporary: generate mock models for UI design previews
+  // Generate mock models with hybrid training data
+  const generateMockHybridModels = React.useCallback((): Record<string, { global?: TrainedModel; individual: TrainedModel[] }> => {
+    const now = new Date();
+    const grouped: Record<string, { global?: TrainedModel; individual: TrainedModel[] }> = {};
+    
+    // Generate models for the last 5 days
+    for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+      const d = new Date(now.getTime() - dayOffset * 86400000);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const dateKey = `${yyyy}-${mm}-${dd}`;
+      const dateIso = `${dateKey}T12:00:00Z`;
+      
+      // Add global model for this date (every other day)
+      if (dayOffset % 2 === 0) {
+        grouped[dateKey] = {
+          global: {
+            id: `global-${dateKey}`,
+            student_name: 'Global Model',
+            student_full_name: 'Global Model',
+            model_path: `/models/global_model_${dateKey}.keras`,
+            training_date: dateIso,
+            created_at: dateIso,
+            accuracy: Math.round((85 + Math.random() * 15) * 10) / 1000,
+          } as TrainedModel,
+          individual: []
+        };
+      } else {
+        grouped[dateKey] = { individual: [] };
+      }
+      
+      // Add 3-6 individual models per date
+      const individualCount = 3 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < individualCount; i++) {
+        const acc = Math.round((80 + Math.random() * 20) * 10) / 1000;
+        grouped[dateKey].individual.push({
+          id: `individual-${dateKey}-${i + 1}`,
+          student_name: `Student ${dayOffset * 10 + i + 1}`,
+          student_full_name: `Student ${dayOffset * 10 + i + 1}`,
+          model_path: `/models/individual_model_${dateKey}_${i + 1}.keras`,
+          training_date: dateIso,
+          created_at: dateIso,
+          accuracy: acc,
+        } as TrainedModel);
+      }
+    }
+    
+    return grouped;
+  }, []);
+
+  // Legacy mock models for backward compatibility
   const generateMockModels = React.useCallback((count: number = 20): TrainedModel[] => {
     const now = new Date();
     return Array.from({ length: count }).map((_, i) => {
@@ -1107,11 +1165,19 @@ const SignatureAI = () => {
                       <DropdownMenuItem onClick={async () => {
                         setIsViewingModels(true);
                         setIsLoadingModels(true);
-                        const models = await aiService.getTrainedModels();
-                        if (!models || models.length === 0) {
-                          setTrainedModels(generateMockModels(20));
-                        } else {
-                          setTrainedModels(models as TrainedModel[]);
+                        setSelectedDate(null); // Reset to date overview
+                        try {
+                          const models = await aiService.getTrainedModels();
+                          if (!models || models.length === 0) {
+                            // Use hybrid mock data for UI preview
+                            setDateGroupedModels(generateMockHybridModels());
+                          } else {
+                            // TODO: Group real models by date when backend supports hybrid training
+                            setTrainedModels(models as TrainedModel[]);
+                          }
+                        } catch (error) {
+                          // Fallback to mock data
+                          setDateGroupedModels(generateMockHybridModels());
                         }
                         setIsLoadingModels(false);
                       }}>View Models</DropdownMenuItem>
@@ -1157,28 +1223,97 @@ const SignatureAI = () => {
                 <>
                   {isLoadingModels ? (
                     <div className="col-span-2 flex items-center justify-center text-sm text-muted-foreground">Loading models...</div>
-                  ) : trainedModels.length === 0 ? (
+                  ) : selectedDate ? (
+                    // Detailed view for selected date
+                    <div className="col-span-2 space-y-4">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedDate(null)}
+                          className="flex items-center gap-1"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                          Back to dates
+                        </Button>
+                        <h3 className="text-sm font-semibold">Models trained on {selectedDate}</h3>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        {/* Global Model */}
+                        {dateGroupedModels[selectedDate]?.global && (
+                          <div className="group">
+                            <Card className="h-10 border-blue-200 bg-blue-50">
+                              <CardContent className="py-0 px-2 pr-1 h-full flex items-center">
+                                <div className="flex-1 min-w-0 text-xs">
+                                  <div className="font-medium truncate text-blue-800">🌐 Global Model</div>
+                                  <div className="text-[10px] text-blue-600 truncate">{dateGroupedModels[selectedDate].global?.model_path || 'n/a'}</div>
+                                </div>
+                                <div className="text-[10px] text-blue-600 mr-2 whitespace-nowrap">{selectedDate}</div>
+                                <div className="text-[10px] font-medium mr-2 whitespace-nowrap text-blue-800">
+                                  {dateGroupedModels[selectedDate].global?.accuracy ? `${Math.round(dateGroupedModels[selectedDate].global!.accuracy * 100)}%` : ''}
+                                </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-transparent"
+                                  onClick={() => setConfirmDeleteModelId(dateGroupedModels[selectedDate].global?.id)}
+                                  aria-label="Delete global model"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </CardContent>
+                            </Card>
+                          </div>
+                        )}
+                        
+                        {/* Individual Models */}
+                        {dateGroupedModels[selectedDate]?.individual.map((m: TrainedModel) => (
+                          <div key={m.id} className="group">
+                            <Card className="h-10">
+                              <CardContent className="py-0 px-2 pr-1 h-full flex items-center">
+                                <div className="flex-1 min-w-0 text-xs">
+                                  <div className="font-medium truncate">{m.student_name || m.student?.full_name || m.student_full_name || 'Unknown Student'}</div>
+                                  <div className="text-[10px] text-muted-foreground truncate">{m.model_path || m.model?.path || m.artifact_path || 'n/a'}</div>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground mr-2 whitespace-nowrap">{selectedDate}</div>
+                                <div className="text-[10px] font-medium mr-2 whitespace-nowrap">{m.accuracy ? `${Math.round(m.accuracy * 100)}%` : ''}</div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-transparent"
+                                  onClick={() => setConfirmDeleteModelId(m.id)}
+                                  aria-label="Delete model"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </CardContent>
+                            </Card>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : Object.keys(dateGroupedModels).length === 0 ? (
                     <div className="col-span-2 flex items-center justify-center text-sm text-muted-foreground">No trained models yet.</div>
                   ) : (
-                    trainedModels.map((m: TrainedModel) => (
-                      <div key={m.id} className="group">
-                        <Card className="h-10">
+                    // Date overview cards
+                    Object.entries(dateGroupedModels).map(([date, models]) => (
+                      <div key={date} className="group">
+                        <Card 
+                          className="h-10 cursor-pointer hover:shadow-md transition-shadow"
+                          onClick={() => setSelectedDate(date)}
+                        >
                           <CardContent className="py-0 px-2 pr-1 h-full flex items-center">
                             <div className="flex-1 min-w-0 text-xs">
-                              <div className="font-medium truncate">{m.student_name || m.student?.full_name || m.student_full_name || 'Unknown Student'}</div>
-                              <div className="text-[10px] text-muted-foreground truncate">{m.model_path || m.model?.path || m.artifact_path || 'n/a'}</div>
+                              <div className="font-medium truncate">{date}</div>
+                              <div className="text-[10px] text-muted-foreground truncate">
+                                {models.global ? 'Global + ' : ''}{models.individual.length} individual model{models.individual.length !== 1 ? 's' : ''}
+                              </div>
                             </div>
-                            <div className="text-[10px] text-muted-foreground mr-2 whitespace-nowrap">{m.training_date?.split('T')[0] || m.created_at?.split('T')[0] || ''}</div>
-                            <div className="text-[10px] font-medium mr-2 whitespace-nowrap">{m.accuracy ? `${Math.round(m.accuracy * 100)}%` : ''}</div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-transparent"
-                              onClick={() => setConfirmDeleteModelId(m.id)}
-                              aria-label="Delete model"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
+                            <div className="text-[10px] text-muted-foreground mr-2 whitespace-nowrap">
+                              {models.global ? '🌐' : ''} {models.individual.length} 📊
+                            </div>
+                            <ChevronRight className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                           </CardContent>
                         </Card>
                       </div>
@@ -1204,7 +1339,29 @@ const SignatureAI = () => {
                     size="sm"
                     onClick={() => {
                       if (confirmDeleteModelId === null) return;
-                      setTrainedModels(prev => prev.filter(x => x.id !== confirmDeleteModelId));
+                      
+                      // Handle deletion for both legacy and new hybrid view
+                      if (selectedDate && dateGroupedModels[selectedDate]) {
+                        // Delete from hybrid view
+                        setDateGroupedModels(prev => {
+                          const updated = { ...prev };
+                          if (updated[selectedDate]) {
+                            if (updated[selectedDate].global?.id === confirmDeleteModelId) {
+                              updated[selectedDate] = { ...updated[selectedDate], global: undefined };
+                            } else {
+                              updated[selectedDate] = {
+                                ...updated[selectedDate],
+                                individual: updated[selectedDate].individual.filter(m => m.id !== confirmDeleteModelId)
+                              };
+                            }
+                          }
+                          return updated;
+                        });
+                      } else {
+                        // Delete from legacy view
+                        setTrainedModels(prev => prev.filter(x => x.id !== confirmDeleteModelId));
+                      }
+                      
                       setConfirmDeleteModelId(null);
                     }}
                   >
@@ -1240,6 +1397,39 @@ const SignatureAI = () => {
             {/* Train Model Button at Bottom */}
             <div className="pt-4 border-t">
               <div className="flex flex-col items-center space-y-4">
+                {/* Training Mode Selector */}
+                {!isViewingModels && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Label className="text-muted-foreground">Training Mode:</Label>
+                    <div className="flex gap-1">
+                      <Button
+                        variant={trainingMode === 'individual' ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setTrainingMode('individual')}
+                        className="text-xs"
+                      >
+                        Individual
+                      </Button>
+                      <Button
+                        variant={trainingMode === 'global' ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setTrainingMode('global')}
+                        className="text-xs"
+                      >
+                        Global
+                      </Button>
+                      <Button
+                        variant={trainingMode === 'hybrid' ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setTrainingMode('hybrid')}
+                        className="text-xs"
+                      >
+                        Hybrid
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                
                 <Button
                   onClick={handleTrainModel}
                   disabled={isViewingModels || !canTrainModel() || isTraining}
@@ -1254,13 +1444,18 @@ const SignatureAI = () => {
                   ) : (
                     <>
                       <Brain className="w-4 h-4 mr-2" />
-                      Train Model
+                      Train {trainingMode === 'individual' ? 'Individual' : trainingMode === 'global' ? 'Global' : 'Hybrid'} Model
                     </>
                   )}
                 </Button>
                 
                 <div className="text-center text-sm text-muted-foreground">
                   {studentCards.filter(c => c.student).length} students • {getTotalTrainingData().genuine + getTotalTrainingData().forged} samples ready
+                  {trainingMode === 'hybrid' && (
+                    <div className="text-xs text-blue-600 mt-1">
+                      🌐 Global + Individual models will be trained
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
