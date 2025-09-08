@@ -21,6 +21,7 @@ from utils.aws_gpu_training import gpu_training_manager
 from services.model_versioning import model_versioning_service
 from config import settings
 from models.global_signature_model import GlobalSignatureVerificationModel
+from utils.s3_storage import create_presigned_get
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,7 +55,15 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
             if not url:
                 continue
             try:
-                resp = requests.get(url, timeout=30)
+                # Presign if bucket is private or URL is not directly readable
+                if settings.S3_USE_PRESIGNED_GET:
+                    key = r.get("s3_key")
+                    if key:
+                        try:
+                            url = create_presigned_get(key)
+                        except Exception:
+                            pass
+                resp = requests.get(url, timeout=8)
                 # Only require successful status. Content-Type can be unreliable; PIL will validate.
                 if resp.status_code != 200:
                     skipped += 1
@@ -62,12 +71,10 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
                 # Validate as image
                 bio = io.BytesIO(resp.content)
                 img = Image.open(bio)
-                img.verify()  # verify first
-                # reopen to load
-                bio2 = io.BytesIO(resp.content)
-                img2 = Image.open(bio2)
+                # Load to ensure bytes are valid
+                img = img.convert('RGB')
                 # preprocess to model input array
-                arr = preprocessor.preprocess_signature(img2)
+                arr = preprocessor.preprocess_signature(img)
                 if label == "genuine":
                     bucket["genuine_images"].append(arr)
                     accepted_g += 1
