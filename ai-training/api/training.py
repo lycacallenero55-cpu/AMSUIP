@@ -175,8 +175,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
 @router.post("/start")
 async def start_training(
     student_id: str = Form(...),
-    genuine_files: List[UploadFile] = File(...),
-    forged_files: List[UploadFile] = File(...)
+    genuine_files: List[UploadFile] | None = File(None),
+    forged_files: List[UploadFile] | None = File(None)
 ):
     try:
         student = await db_manager.get_student_by_school_id(student_id)
@@ -189,13 +189,36 @@ async def start_training(
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-        if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
-        genuine_data = [await f.read() for f in genuine_files]
-        forged_data = [await f.read() for f in forged_files]
+        genuine_data: List[bytes] = []
+        forged_data: List[bytes] = []
+        if genuine_files and forged_files:
+            # Use uploaded files
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+        else:
+            # Auto-fetch stored signatures from DB/S3
+            rows = await db_manager.list_student_signatures(int(student["id"]))
+            if not rows:
+                raise HTTPException(status_code=400, detail="No stored signatures available for this student")
+            import requests
+            for r in rows:
+                url = r.get("s3_url")
+                label = (r.get("label") or "").lower()
+                try:
+                    resp = requests.get(url, timeout=30)
+                    resp.raise_for_status()
+                    if label == "genuine":
+                        genuine_data.append(resp.content)
+                    else:
+                        forged_data.append(resp.content)
+                except Exception:
+                    continue
+            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
 
         result = await train_signature_model(student, genuine_data, forged_data)
         return result

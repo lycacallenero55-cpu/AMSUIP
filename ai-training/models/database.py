@@ -284,6 +284,22 @@ class DatabaseManager:
             logger.error(f"Error getting latest global model: {e}")
             return None
 
+    async def get_latest_ai_model(self):
+        """Return the most recent AI (embedding-based) individual model, if any."""
+        try:
+            # Fetch the latest N trained models and filter on the client side by training_metrics.model_type
+            response = self.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
+            rows = response.data or []
+            for r in rows:
+                metrics = r.get("training_metrics", {}) or {}
+                model_type = str(metrics.get("model_type", ""))
+                if model_type in ("ai_signature_verification", "ai_signature_verification_gpu"):
+                    return r
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest AI model: {e}")
+            return None
+
     async def update_global_model_status(self, model_id: int, status: str, accuracy: float = None):
         """Update global model training status."""
         try:
