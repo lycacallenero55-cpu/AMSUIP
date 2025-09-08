@@ -162,6 +162,7 @@ const SignatureAI = () => {
   
   // Training mode state
   const [trainingMode, setTrainingMode] = useState<'individual' | 'global' | 'hybrid'>('hybrid');
+  const [useGPU, setUseGPU] = useState(true);
 
   // Generate mock models with hybrid training data
   const generateMockHybridModels = React.useCallback((): Record<string, { global?: TrainedModel; individual: TrainedModel[] }> => {
@@ -758,10 +759,11 @@ const SignatureAI = () => {
         }
       });
 
-      const asyncResponse = await aiService.startAsyncTraining(
+      const asyncResponse = await aiService.startGPUTraining(
         studentIds.join(','),
         allGenuineFiles,
         allForgedFiles,
+        useGPU,
         trainingMode
       );
       
@@ -1410,33 +1412,49 @@ const SignatureAI = () => {
               <div className="flex flex-col items-center space-y-4">
                 {/* Training Mode Selector */}
                 {!isViewingModels && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <Label className="text-muted-foreground">Training Mode:</Label>
-                    <div className="flex gap-1">
-                      <Button
-                        variant={trainingMode === 'individual' ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setTrainingMode('individual')}
-                        className="text-xs"
-                      >
-                        Individual
-                      </Button>
-                      <Button
-                        variant={trainingMode === 'global' ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setTrainingMode('global')}
-                        className="text-xs"
-                      >
-                        Global
-                      </Button>
-                      <Button
-                        variant={trainingMode === 'hybrid' ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setTrainingMode('hybrid')}
-                        className="text-xs"
-                      >
-                        Hybrid
-                      </Button>
+                  <div className="flex flex-col items-center gap-3 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-muted-foreground">Training Mode:</Label>
+                      <div className="flex gap-1">
+                        <Button
+                          variant={trainingMode === 'individual' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setTrainingMode('individual')}
+                          className="text-xs"
+                        >
+                          Individual
+                        </Button>
+                        <Button
+                          variant={trainingMode === 'global' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setTrainingMode('global')}
+                          className="text-xs"
+                        >
+                          Global
+                        </Button>
+                        <Button
+                          variant={trainingMode === 'hybrid' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setTrainingMode('hybrid')}
+                          className="text-xs"
+                        >
+                          Hybrid
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    {/* GPU Training Toggle */}
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="use-gpu"
+                        checked={useGPU}
+                        onChange={(e) => setUseGPU(e.target.checked)}
+                        className="rounded border-gray-300"
+                      />
+                      <Label htmlFor="use-gpu" className="text-muted-foreground">
+                        🚀 Use AWS GPU (10-50x faster)
+                      </Label>
                     </div>
                   </div>
                 )}

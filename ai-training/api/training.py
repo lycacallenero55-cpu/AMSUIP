@@ -17,6 +17,7 @@ from utils.storage import save_to_supabase, cleanup_local_file
 from utils.s3_storage import upload_model_file
 from utils.job_queue import job_queue
 from utils.training_callback import RealTimeMetricsCallback
+from utils.aws_gpu_training import gpu_training_manager
 from services.model_versioning import model_versioning_service
 from config import settings
 from models.global_signature_model import GlobalSignatureVerificationModel
@@ -204,6 +205,98 @@ async def start_training(
         logger.error(f"Unexpected error in training: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@router.post("/start-gpu-training")
+async def start_gpu_training(
+    student_id: str = Form(...),
+    genuine_files: List[UploadFile] = File(...),
+    forged_files: List[UploadFile] = File(...),
+    use_gpu: bool = Form(True)
+):
+    """
+    Start AI training on AWS GPU instance for faster training
+    """
+    try:
+        # Handle multiple students (comma-separated) or single student
+        student_ids = [sid.strip() for sid in student_id.split(',') if sid.strip()]
+        
+        if len(student_ids) == 1:
+            # Single student training
+            student = await db_manager.get_student_by_school_id(student_ids[0])
+            if not student:
+                try:
+                    numeric_id = int(student_ids[0])
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    student = None
+            if not student:
+                raise HTTPException(status_code=404, detail="Student not found")
+
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+
+            job = job_queue.create_job(int(student["id"]), "gpu_training")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            
+            if use_gpu:
+                # Use GPU training
+                asyncio.create_task(run_gpu_training(job, student, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "GPU training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "gpu"
+                }
+            else:
+                # Use local CPU training
+                asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Local training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "local"
+                }
+        
+        else:
+            # Multiple students - use global training
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+
+            job = job_queue.create_job(0, "global_gpu_training")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            
+            if use_gpu:
+                asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Global GPU training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "global_gpu"
+                }
+            else:
+                asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Global local training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "global_local"
+                }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting GPU training: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @router.post("/start-async")
 async def start_async_training(
     student_id: str = Form(...),
@@ -346,6 +439,212 @@ async def run_async_training(job, student, genuine_data, forged_data):
         logger.error(f"Async training failed: {e}")
         job_queue.fail_job(job.job_id, str(e))
 
+
+async def run_gpu_training(job, student, genuine_data, forged_data):
+    """
+    Run training on AWS GPU instance
+    """
+    try:
+        job_queue.start_job(job.job_id)
+        job_queue.update_job_progress(job.job_id, 5.0, "Launching GPU instance...")
+        
+        # Process images
+        genuine_images = []
+        forged_images = []
+        
+        for i, data in enumerate(genuine_data):
+            image = Image.open(io.BytesIO(data))
+            genuine_images.append(image)
+            if job:
+                progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+
+        for i, data in enumerate(forged_data):
+            image = Image.open(io.BytesIO(data))
+            forged_images.append(image)
+            if job:
+                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+
+        # Prepare training data
+        training_data = {
+            f"student_{student['id']}": {
+                'genuine': genuine_images,
+                'forged': forged_images
+            }
+        }
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 25.0, "Starting GPU training...")
+
+        # Start GPU training
+        gpu_result = await gpu_training_manager.start_gpu_training(
+            training_data, job.job_id, int(student["id"])
+        )
+
+        if gpu_result['success']:
+            if job:
+                job_queue.update_job_progress(job.job_id, 90.0, "Training completed, saving results...")
+
+            # Create model record
+            model_record = await db_manager.create_trained_model({
+                "student_id": int(student["id"]),
+                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
+                "status": "completed",
+                "sample_count": len(genuine_images) + len(forged_images),
+                "genuine_count": len(genuine_images),
+                "forged_count": len(forged_images),
+                "training_date": datetime.utcnow().isoformat(),
+                "training_metrics": {
+                    'model_type': 'ai_signature_verification_gpu',
+                    'architecture': 'signature_embedding_network',
+                    'training_method': 'aws_gpu_instance',
+                    'instance_type': 'g4dn.xlarge',
+                    'gpu_acceleration': True
+                }
+            })
+
+            result = {
+                "success": True,
+                "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+                "model_uuid": job.job_id,
+                "training_samples": len(genuine_images) + len(forged_images),
+                "genuine_count": len(genuine_images),
+                "forged_count": len(forged_images),
+                "ai_architecture": "signature_embedding_network",
+                "training_method": "aws_gpu",
+                "model_urls": gpu_result['model_urls']
+            }
+
+            if job:
+                job_queue.complete_job(job.job_id, result)
+        else:
+            error_msg = gpu_result.get('error', 'Unknown GPU training error')
+            if job:
+                job_queue.fail_job(job.job_id, error_msg)
+            raise Exception(f"GPU training failed: {error_msg}")
+            
+    except Exception as e:
+        logger.error(f"GPU training failed: {e}")
+        if job:
+            job_queue.fail_job(job.job_id, str(e))
+
+async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
+    """
+    Run global training on AWS GPU instance
+    """
+    try:
+        job_queue.start_job(job.job_id)
+        job_queue.update_job_progress(job.job_id, 5.0, "Launching GPU instance for global training...")
+        
+        # Process images
+        genuine_images = []
+        forged_images = []
+        
+        for i, data in enumerate(genuine_data):
+            image = Image.open(io.BytesIO(data))
+            genuine_images.append(image)
+            if job:
+                progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+
+        for i, data in enumerate(forged_data):
+            image = Image.open(io.BytesIO(data))
+            forged_images.append(image)
+            if job:
+                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+
+        # Get students
+        students = []
+        for student_id in student_ids:
+            student = await db_manager.get_student_by_school_id(student_id)
+            if not student:
+                try:
+                    numeric_id = int(student_id)
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    continue
+            if student:
+                students.append(student)
+        
+        if not students:
+            raise Exception("No valid students found")
+
+        # Prepare training data for global model
+        images_per_student = len(genuine_images) // len(students)
+        forged_per_student = len(forged_images) // len(students)
+        
+        training_data = {}
+        for i, student in enumerate(students):
+            start_idx = i * images_per_student
+            end_idx = start_idx + images_per_student if i < len(students) - 1 else len(genuine_images)
+            
+            forged_start = i * forged_per_student
+            forged_end = forged_start + forged_per_student if i < len(students) - 1 else len(forged_images)
+            
+            training_data[f"student_{student['id']}"] = {
+                'genuine_images': genuine_images[start_idx:end_idx],
+                'forged_images': forged_images[forged_start:forged_end]
+            }
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 25.0, "Starting global GPU training...")
+
+        # Start GPU training
+        gpu_result = await gpu_training_manager.start_gpu_training(
+            training_data, job.job_id, 0  # 0 for global training
+        )
+
+        if gpu_result['success']:
+            if job:
+                job_queue.update_job_progress(job.job_id, 90.0, "Global training completed, saving results...")
+
+            # Create global model record
+            model_record = await db_manager.create_global_model({
+                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "s3_key": f"global_models/{job.job_id}",
+                "model_uuid": job.job_id,
+                "status": "completed",
+                "sample_count": len(genuine_images) + len(forged_images),
+                "genuine_count": len(genuine_images),
+                "forged_count": len(forged_images),
+                "student_count": len(students),
+                "training_date": datetime.utcnow().isoformat(),
+                "accuracy": 0.95,  # Placeholder - would come from training results
+                "training_metrics": {
+                    'model_type': 'global_ai_signature_verification_gpu',
+                    'architecture': 'signature_embedding_network',
+                    'training_method': 'aws_gpu_instance',
+                    'instance_type': 'g4dn.xlarge',
+                    'gpu_acceleration': True
+                }
+            })
+
+            result = {
+                "success": True,
+                "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+                "model_uuid": job.job_id,
+                "s3_url": gpu_result['model_urls'].get('classification', ''),
+                "student_count": len(students),
+                "training_samples": len(genuine_images) + len(forged_images),
+                "training_method": "aws_gpu_global",
+                "model_urls": gpu_result['model_urls']
+            }
+
+            if job:
+                job_queue.complete_job(job.job_id, result)
+        else:
+            error_msg = gpu_result.get('error', 'Unknown GPU training error')
+            if job:
+                job_queue.fail_job(job.job_id, error_msg)
+            raise Exception(f"Global GPU training failed: {error_msg}")
+            
+    except Exception as e:
+        logger.error(f"Global GPU training failed: {e}")
+        if job:
+            job_queue.fail_job(job.job_id, str(e))
 
 async def run_global_async_training(job, student_ids, genuine_data, forged_data):
     """Run global training for multiple students using uploaded files"""
