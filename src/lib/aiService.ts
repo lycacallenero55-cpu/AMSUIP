@@ -446,8 +446,7 @@ export class AIService {
     studentId: string,
     genuineFiles: File[],
     forgedFiles: File[],
-    useGPU: boolean = true,
-    trainingMode?: 'individual' | 'global' | 'hybrid'
+    useGPU: boolean = true
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
@@ -460,9 +459,8 @@ export class AIService {
       for (const file of forgedFiles) {
         formData.append('forged_files', file);
       }
-      if (trainingMode) {
-        formData.append('training_mode', trainingMode);
-      }
+      // Force hybrid mode
+      formData.append('training_mode', 'hybrid');
 
       const response = await fetch(`${this.baseUrl}/api/training/start-gpu-training`, {
         method: 'POST',

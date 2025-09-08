@@ -763,8 +763,7 @@ const SignatureAI = () => {
         studentIds.join(','),
         allGenuineFiles,
         allForgedFiles,
-        useGPU,
-        trainingMode
+        useGPU
       );
       
       setJobId(asyncResponse.job_id);
