@@ -3,6 +3,7 @@ import mimetypes
 from typing import Optional, Tuple
 
 import boto3
+from botocore.config import Config as BotoConfig
 
 from config import settings
 
@@ -12,7 +13,15 @@ _session = boto3.session.Session(
     aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
     region_name=settings.AWS_REGION,
 )
-_s3 = _session.client("s3")
+_s3 = _session.client(
+    "s3",
+    config=BotoConfig(
+        retries={"max_attempts": 5, "mode": "standard"},
+        max_pool_connections=20,
+        read_timeout=15,
+        connect_timeout=5,
+    ),
+)
 
 
 def _resolve_public_base_url() -> str:
@@ -83,5 +92,79 @@ def create_presigned_get(key: str, expires_seconds: int = 900) -> str:
 
 def delete_key(key: str) -> None:
     _s3.delete_object(Bucket=settings.S3_BUCKET, Key=key)
+
+
+def upload_model_file(
+    model_data: bytes,
+    model_type: str,  # 'individual' or 'global'
+    model_uuid: str,
+    file_extension: str = "keras"
+) -> Tuple[str, str]:
+    """
+    Upload a trained model file to S3 with organized folder structure.
+    
+    Args:
+        model_data: The model file bytes
+        model_type: 'individual' or 'global' 
+        model_uuid: Unique identifier for the model
+        file_extension: File extension (default: keras)
+    
+    Returns:
+        Tuple of (s3_key, s3_url)
+    """
+    # Updated folder structure: models/{type}/{uuid}.{ext}
+    # models/individual/{uuid}.keras for individual student models
+    # models/global/{uuid}.keras for global multi-student models
+    key = f"models/{model_type}/{model_uuid}.{file_extension}"
+    
+    content_type = "application/octet-stream"
+    if file_extension == "keras":
+        content_type = "application/keras"
+    elif file_extension == "h5":
+        content_type = "application/hdf5"
+    elif file_extension == "json":
+        content_type = "application/json"
+    
+    _s3.put_object(
+        Bucket=settings.S3_BUCKET,
+        Key=key,
+        Body=model_data,
+        ContentType=content_type,
+        ACL="private",  # Models should be private
+        CacheControl="max-age=31536000",  # Cache for 1 year
+    )
+    
+    url = f"{_resolve_public_base_url()}/{key}"
+    return key, url
+
+
+def download_model_file(s3_key: str) -> bytes:
+    """
+    Download a model file from S3.
+    
+    Args:
+        s3_key: The S3 key of the model file
+    
+    Returns:
+        The model file bytes
+    """
+    response = _s3.get_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+    return response['Body'].read()
+
+
+def delete_model_file(s3_key: str) -> None:
+    """
+    Delete a model file from S3.
+    
+    Args:
+        s3_key: The S3 key of the model file
+    """
+    _s3.delete_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+
+
+def download_bytes(s3_key: str) -> bytes:
+    """Download arbitrary bytes from S3 for a given key."""
+    response = _s3.get_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+    return response['Body'].read()
 
 

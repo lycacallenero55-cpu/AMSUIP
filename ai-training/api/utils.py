@@ -1,8 +1,9 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import Response
 from PIL import Image
 import io
 import logging
+from utils.s3_storage import download_bytes, create_presigned_get
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,3 +32,25 @@ async def generate_image_preview(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Preview generation failed: {e}")
         raise HTTPException(status_code=400, detail="Failed to generate preview for image")
+
+
+@router.get("/debug/s3-download")
+async def debug_s3_download(key: str = Query(..., description="Exact s3_key to fetch")):
+    try:
+        data = download_bytes(key)
+        # Try open as image to match training path validation
+        img = Image.open(io.BytesIO(data))
+        img.verify()
+        return {"ok": True, "bytes": len(data)}
+    except Exception as e:
+        logger.error(f"S3 download failed for {key}: {e}")
+        raise HTTPException(status_code=500, detail=f"S3 download failed: {e}")
+
+
+@router.get("/debug/presign")
+async def debug_presign(key: str = Query(...)):
+    try:
+        url = create_presigned_get(key)
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Presign failed: {e}")

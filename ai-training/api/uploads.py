@@ -9,6 +9,19 @@ from config import settings
 
 router = APIRouter()
 
+def _derive_s3_key_from_url(url: str) -> str | None:
+    if not url:
+        return None
+    base = url.split('?', 1)[0]
+    if "amazonaws.com" not in base:
+        return None
+    try:
+        parts = base.split(".amazonaws.com/")
+        if len(parts) == 2:
+            return parts[1] or None
+        return base.split("/", 3)[-1] or None
+    except Exception:
+        return None
 
 @router.post("/signature")
 async def upload_signature(
@@ -43,7 +56,9 @@ async def list_signatures(student_id: int):
         rows = await db_manager.list_student_signatures(student_id)
         if settings.S3_USE_PRESIGNED_GET:
             for r in rows:
-                r["s3_url"] = create_presigned_get(r["s3_key"])  # type: ignore[index]
+                key = r.get("s3_key") or _derive_s3_key_from_url(r.get("s3_url", ""))  # type: ignore[attr-defined]
+                if key:
+                    r["s3_url"] = create_presigned_get(key)  # type: ignore[index]
         return {"signatures": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List failed: {str(e)}")
@@ -112,7 +127,9 @@ async def students_with_images():
         if settings.S3_USE_PRESIGNED_GET:
             for it in items:
                 for s in it.get("signatures", []):
-                    s["s3_url"] = create_presigned_get(s["s3_url"].split("/", 3)[-1]) if "amazonaws.com" in s["s3_url"] else s["s3_url"]
+                    key = _derive_s3_key_from_url(s.get("s3_url", ""))
+                    if key:
+                        s["s3_url"] = create_presigned_get(key)
         return {"items": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List students failed: {str(e)}")

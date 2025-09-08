@@ -102,6 +102,50 @@ async def load_model_from_supabase(supabase_path: str):
         logger.error(f"Error loading model from Supabase: {e}")
         raise
 
+
+async def load_model_from_s3(s3_url: str):
+    """Load a model directly from S3 into memory without saving to disk"""
+    try:
+        from utils.s3_storage import download_model_file
+        from tensorflow import keras
+        import tempfile
+        import os
+        
+        # Extract S3 key from URL
+        # URL format: https://bucket.s3.region.amazonaws.com/models/type/uuid.keras
+        s3_key = s3_url.split('/')[-2] + '/' + s3_url.split('/')[-1]  # models/type/uuid.keras
+        
+        # Download model data from S3
+        model_data = download_model_file(s3_key)
+        
+        # Create temporary file with the correct extension
+        suffix = '.keras' if s3_url.endswith('.keras') else '.h5'
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_path = temp_file.name
+        
+        try:
+            # Write data to temporary file
+            temp_file.write(model_data)
+            temp_file.flush()
+            temp_file.close()  # Close file handle but keep file
+            
+            # Load model from temporary file
+            model = keras.models.load_model(temp_path)
+            
+            logger.info(f"Model loaded directly from S3: {s3_url}")
+            return model
+            
+        finally:
+            # Clean up temporary file after loading
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass  # File might already be deleted
+    
+    except Exception as e:
+        logger.error(f"Error loading model from S3: {e}")
+        raise
+
 def cleanup_local_file(file_path: str):
     """Clean up a local file"""
     try:

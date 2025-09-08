@@ -11,45 +11,259 @@ import logging
 import asyncio
 
 from models.database import db_manager
-from models.signature_model import SignatureVerificationModel
-from utils.image_processing import preprocess_image
+from models.signature_embedding_model import SignatureEmbeddingModel
+from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 from utils.storage import save_to_supabase, cleanup_local_file
-from utils.augmentation import SignatureAugmentation
+from utils.s3_storage import upload_model_file
 from utils.job_queue import job_queue
 from utils.training_callback import RealTimeMetricsCallback
+from utils.aws_gpu_training import gpu_training_manager
 from services.model_versioning import model_versioning_service
 from config import settings
 from models.global_signature_model import GlobalSignatureVerificationModel
+from utils.s3_storage import create_presigned_get, download_bytes
+from utils.s3_storage import upload_model_file as upload_file_generic
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Global model instance - can handle up to 150 students
-signature_ai_manager = SignatureVerificationModel(max_students=150)
+signature_ai_manager = SignatureEmbeddingModel(max_students=150)
+preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
+augmenter = SignatureAugmentation()
+
+@router.get("/gpu-available")
+async def gpu_available():
+    try:
+        available = gpu_training_manager.is_available()
+        return {"available": bool(available)}
+    except Exception:
+        return {"available": False}
+
+def _derive_s3_key_from_url(url: str) -> str | None:
+    """Best-effort derive S3 key from a public-style URL.
+
+    Examples:
+      https://bucket.s3.us-east-1.amazonaws.com/path/to/object -> path/to/object
+      https://s3.us-east-1.amazonaws.com/bucket/path/to/object -> bucket/path/to/object (less common)
+    """
+    if not url:
+        return None
+    # Strip query string if present
+    base = url.split('?', 1)[0]
+    if "amazonaws.com" not in base:
+        return None
+    try:
+        # Most common style: https://{bucket}.s3.{region}.amazonaws.com/{key}
+        parts = base.split(".amazonaws.com/")
+        if len(parts) == 2:
+            return parts[1] or None
+        # Fallback: split first occurrence of domain path
+        return base.split("/", 3)[-1] or None
+    except Exception:
+        return None
+
+async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int, dict[str, list]]:
+    """Fetch signature images from DB/S3 for the given students and return preprocessed arrays.
+
+    Returns mapping: { student_id: { 'genuine_images': [np.ndarray], 'forged_images': [np.ndarray] } }
+    Invalid or non-image URLs are skipped.
+    """
+    import requests
+    from PIL import Image
+    import io
+
+    results: dict[int, dict[str, list]] = {}
+
+    import asyncio as _asyncio
+    import functools as _functools
+
+    async def _process_student(sid: int):
+        rows = await db_manager.list_student_signatures(int(sid))
+        bucket = {"genuine_images": [], "forged_images": []}
+        accepted_g = 0
+        accepted_f = 0
+        skipped = 0
+
+        async def _fetch_one(r):
+            nonlocal accepted_g, accepted_f, skipped
+            url = r.get("s3_url")
+            label = (r.get("label") or "").lower()
+            if not url:
+                return
+            try:
+                content: bytes | None = None
+                key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                if key:
+                    try:
+                        content = download_bytes(key)
+                    except Exception as e:
+                        logger.debug(f"S3 download failed for key={key}: {e}")
+                        content = None
+                if content is None:
+                    if settings.S3_USE_PRESIGNED_GET and key:
+                        try:
+                            url = create_presigned_get(key)
+                        except Exception:
+                            pass
+                    resp = requests.get(url, timeout=6)
+                    if resp.status_code != 200:
+                        skipped += 1
+                        return
+                    content = resp.content
+                bio = io.BytesIO(content)
+                img = Image.open(bio).convert('RGB')
+                arr = preprocessor.preprocess_signature(img)
+                if label == "genuine":
+                    bucket["genuine_images"].append(arr)
+                    accepted_g += 1
+                else:
+                    bucket["forged_images"].append(arr)
+                    accepted_f += 1
+            except Exception:
+                skipped += 1
+                return
+
+        # bounded parallelism per student
+        sem = _asyncio.Semaphore(6)
+        async def _sem_task(r):
+            async with sem:
+                await _fetch_one(r)
+
+        await _asyncio.gather(*[_sem_task(r) for r in (rows or [])])
+        logger.info(f"Student {sid}: accepted {accepted_g} genuine, {accepted_f} forged, skipped {skipped}")
+        results[int(sid)] = bucket
+
+    # Run students sequentially to limit total concurrency; per-student work is parallelized
+    for sid in student_ids:
+        await _process_student(int(sid))
+    return results
+
+
+async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None) -> dict:
+    """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
+    # Build training_data in the format expected by SignatureEmbeddingModel
+    training_data = {
+        f"student_{student['id']}": {
+            'genuine': genuine_arrays,
+            'forged': forged_arrays
+        }
+    }
+    if job:
+        job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
+    # Normalize arrays to float32 [H,W,3]
+    def _normalize(img):
+        import numpy as np
+        arr = img
+        if getattr(arr, 'dtype', None) != np.float32:
+            arr = arr.astype(np.float32)
+        if arr.ndim == 4:
+            # If erroneously batched, squeeze first dim when size 1
+            if arr.shape[0] == 1:
+                arr = arr[0]
+        return arr
+    genuine_norm = [_normalize(a) for a in genuine_arrays]
+    forged_norm = [_normalize(a) for a in forged_arrays]
+    training_data = {
+        f"student_{student['id']}": {
+            'genuine': genuine_norm,
+            'forged': forged_norm
+        }
+    }
+
+    # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
+    local_manager = SignatureEmbeddingModel(max_students=1)
+    result_models = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
+
+    # Persist models
+    model_uuid = str(uuid.uuid4())
+    base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
+    os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+    local_manager.save_models(base_path)
+
+    # Upload
+    model_files = [
+        (f"{base_path}_embedding.keras", "embedding"),
+        (f"{base_path}_classification.keras", "classification"),
+        (f"{base_path}_authenticity.keras", "authenticity"),
+        (f"{base_path}_siamese.keras", "siamese"),
+    ]
+    s3_urls = {}
+    s3_keys = {}
+    for file_path, model_type in model_files:
+        if os.path.exists(file_path):
+            with open(file_path, 'rb') as f:
+                model_data = f.read()
+            s3_key, s3_url = upload_model_file(model_data, "individual", f"{model_type}_{model_uuid}", "keras")
+            s3_urls[model_type] = s3_url
+            s3_keys[model_type] = s3_key
+            cleanup_local_file(file_path)
+    cleanup_local_file(f"{base_path}_mappings.json")
+
+    # Record in DB
+    model_record = await db_manager.create_trained_model({
+        "student_id": int(student["id"]),
+        "model_path": s3_urls.get("classification", ""),
+        "embedding_model_path": s3_urls.get("embedding", ""),
+        "s3_key": s3_keys.get("classification", ""),
+        "model_uuid": model_uuid,
+        "status": "completed",
+        "sample_count": len(genuine_arrays) + len(forged_arrays),
+        "genuine_count": len(genuine_arrays),
+        "forged_count": len(forged_arrays),
+        "training_date": datetime.utcnow().isoformat(),
+        "training_metrics": {
+            'model_type': 'ai_signature_verification',
+            'architecture': 'signature_embedding_network',
+            'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
+            'embedding_dimension': local_manager.embedding_dim,
+        }
+    })
+
+    return {"record": model_record, "urls": s3_urls}
 
 async def train_signature_model(student, genuine_data, forged_data, job=None):
+    """
+    Train signature verification model with real AI deep learning
+    """
     try:
-        # Process and validate images
+        if job:
+            job_queue.update_job_progress(job.job_id, 5.0, "Initializing AI training system...")
+        
+        # Process and preprocess images with advanced signature preprocessing
         genuine_images = []
         forged_images = []
 
+        if job:
+            job_queue.update_job_progress(job.job_id, 10.0, "Processing genuine signatures...")
+
         for i, data in enumerate(genuine_data):
             image = Image.open(io.BytesIO(data))
-            genuine_images.append(image)
+            # Apply advanced signature preprocessing
+            processed_image = preprocessor.preprocess_signature(image)
+            genuine_images.append(processed_image)
+            
             if job:
-                progress = 5.0 + (i + 1) / len(genuine_data) * 15.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+                progress = 10.0 + (i + 1) / len(genuine_data) * 20.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 30.0, "Processing forged signatures...")
 
         for i, data in enumerate(forged_data):
             image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
+            # Apply advanced signature preprocessing
+            processed_image = preprocessor.preprocess_signature(image)
+            forged_images.append(processed_image)
+            
             if job:
-                progress = 20.0 + (i + 1) / len(forged_data) * 15.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+                progress = 30.0 + (i + 1) / len(forged_data) * 20.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing forged signatures... {i+1}/{len(forged_data)}")
 
         if job:
-            job_queue.update_job_progress(job.job_id, 35.0, "Preparing training data...")
+            job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
 
+        # Prepare training data with augmentation
         training_data = {
             f"student_{student['id']}": {
                 'genuine': genuine_images,
@@ -58,41 +272,72 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         }
 
         if job:
-            job_queue.update_job_progress(job.job_id, 50.0, "Training student and authenticity models...")
+            job_queue.update_job_progress(job.job_id, 60.0, "Training AI models with deep learning...")
 
         t0 = time.time()
-        result_models = signature_ai_manager.train_system(training_data)
+        
+        # Train with the new AI system
+        result_models = signature_ai_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
-            job_queue.update_job_progress(job.job_id, 80.0, "Saving models...")
+            job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
 
         model_uuid = str(uuid.uuid4())
         base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
         os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
 
+        # Save all models
         signature_ai_manager.save_models(base_path)
 
-        remote_student_path = await save_to_supabase(f"{base_path}_student_model.keras", f"models/signature_student_model_{model_uuid}.keras")
-        remote_auth_path = await save_to_supabase(f"{base_path}_authenticity_model.keras", f"models/signature_authenticity_model_{model_uuid}.keras")
+        # Upload models to S3
+        model_files = [
+            (f"{base_path}_embedding.keras", "embedding"),
+            (f"{base_path}_classification.keras", "classification"),
+            (f"{base_path}_authenticity.keras", "authenticity"),
+            (f"{base_path}_siamese.keras", "siamese")
+        ]
+        
+        s3_urls = {}
+        for file_path, model_type in model_files:
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    model_data = f.read()
+                
+                s3_key, s3_url = upload_model_file(
+                    model_data, "individual", f"{model_type}_{model_uuid}", "keras"
+                )
+                s3_urls[model_type] = s3_url
+                
+                # Clean up local file
+                cleanup_local_file(file_path)
 
-        cleanup_local_file(f"{base_path}_student_model.keras")
-        cleanup_local_file(f"{base_path}_authenticity_model.keras")
-        cleanup_local_file(f"{base_path}_student_mappings.json")
+        # Clean up mappings file
+        cleanup_local_file(f"{base_path}_mappings.json")
 
+        # Create model record with comprehensive metrics
         model_record = await db_manager.create_trained_model({
             "student_id": int(student["id"]),
-            "model_path": remote_student_path,
-            "embedding_model_path": remote_auth_path,
+            "model_path": s3_urls.get("classification", ""),
+            "embedding_model_path": s3_urls.get("embedding", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
             "forged_count": len(forged_images),
             "training_date": datetime.utcnow().isoformat(),
             "training_metrics": {
-                'model_type': 'individual_recognition',
-                'student_recognition_accuracy': float(result_models['student_history'].get('accuracy', [0])[-1]) if 'student_history' in result_models else None,
+                'model_type': 'ai_signature_verification',
+                'architecture': 'signature_embedding_network',
+                'student_recognition_accuracy': float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None,
                 'authenticity_accuracy': float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None,
-                'epochs_trained': len(result_models['student_history'].get('accuracy', [])) if 'student_history' in result_models else None
+                'siamese_accuracy': float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None,
+                'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
+                'embedding_dimension': signature_ai_manager.embedding_dim,
+                'model_parameters': sum([
+                    signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
+                    signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
+                    signature_ai_manager.authenticity_head.count_params() if signature_ai_manager.authenticity_head else 0,
+                    signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
+                ])
             }
         })
 
@@ -104,14 +349,17 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             "train_time_s": float(train_time),
             "training_samples": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
-            "forged_count": len(forged_images)
+            "forged_count": len(forged_images),
+            "ai_architecture": "signature_embedding_network",
+            "model_urls": s3_urls
         }
 
         if job:
             job_queue.complete_job(job.job_id, result)
         return result
+        
     except Exception as e:
-        logger.error(f"Training failed: {e}")
+        logger.error(f"AI training failed: {e}")
         if job:
             job_queue.fail_job(job.job_id, str(e))
         raise
@@ -119,8 +367,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
 @router.post("/start")
 async def start_training(
     student_id: str = Form(...),
-    genuine_files: List[UploadFile] = File(...),
-    forged_files: List[UploadFile] = File(...)
+    genuine_files: List[UploadFile] | None = File(None),
+    forged_files: List[UploadFile] | None = File(None)
 ):
     try:
         student = await db_manager.get_student_by_school_id(student_id)
@@ -133,13 +381,52 @@ async def start_training(
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-        if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
-        genuine_data = [await f.read() for f in genuine_files]
-        forged_data = [await f.read() for f in forged_files]
+        genuine_data: List[bytes] = []
+        forged_data: List[bytes] = []
+        if genuine_files and forged_files:
+            # Use uploaded files
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+        else:
+            # Auto-fetch stored signatures from DB/S3
+            rows = await db_manager.list_student_signatures(int(student["id"]))
+            if not rows:
+                raise HTTPException(status_code=400, detail="No stored signatures available for this student")
+            import requests
+            for r in rows:
+                url = r.get("s3_url")
+                label = (r.get("label") or "").lower()
+                key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                # Prefer S3 download by key
+                data: bytes | None = None
+                if key:
+                    try:
+                        data = download_bytes(key)
+                    except Exception:
+                        data = None
+                if data is None:
+                    if settings.S3_USE_PRESIGNED_GET and key:
+                        try:
+                            url = create_presigned_get(key)
+                        except Exception:
+                            pass
+                    try:
+                        resp = requests.get(url, timeout=8)
+                        resp.raise_for_status()
+                        data = resp.content
+                    except Exception as e:
+                        logger.warning(f"HTTP fetch failed for student {student['id']} key={key}: {e}")
+                        continue
+                if label == "genuine":
+                    genuine_data.append(data)
+                else:
+                    forged_data.append(data)
+            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
 
         result = await train_signature_model(student, genuine_data, forged_data)
         return result
@@ -149,6 +436,98 @@ async def start_training(
         logger.error(f"Unexpected error in training: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@router.post("/start-gpu-training")
+async def start_gpu_training(
+    student_id: str = Form(...),
+    genuine_files: List[UploadFile] = File(...),
+    forged_files: List[UploadFile] = File(...),
+    use_gpu: bool = Form(True)
+):
+    """
+    Start AI training on AWS GPU instance for faster training
+    """
+    try:
+        # Handle multiple students (comma-separated) or single student
+        student_ids = [sid.strip() for sid in student_id.split(',') if sid.strip()]
+        
+        if len(student_ids) == 1:
+            # Single student training
+            student = await db_manager.get_student_by_school_id(student_ids[0])
+            if not student:
+                try:
+                    numeric_id = int(student_ids[0])
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    student = None
+            if not student:
+                raise HTTPException(status_code=404, detail="Student not found")
+
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+
+            job = job_queue.create_job(int(student["id"]), "gpu_training")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            
+            if use_gpu and gpu_training_manager.is_available():
+                # Use GPU training
+                asyncio.create_task(run_gpu_training(job, student, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "GPU training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "gpu"
+                }
+            else:
+                # Use local CPU training
+                asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Local training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "local"
+                }
+        
+        else:
+            # Multiple students - use global training
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+
+            job = job_queue.create_job(0, "global_gpu_training")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            
+            if use_gpu and gpu_training_manager.is_available():
+                asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Global GPU training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "global_gpu"
+                }
+            else:
+                asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+                return {
+                    "success": True, 
+                    "job_id": job.job_id, 
+                    "message": "Global local training job started", 
+                    "stream_url": f"/api/progress/stream/{job.job_id}",
+                    "training_type": "global_local"
+                }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting GPU training: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @router.post("/start-async")
 async def start_async_training(
     student_id: str = Form(...),
@@ -156,26 +535,46 @@ async def start_async_training(
     forged_files: List[UploadFile] = File(...)
 ):
     try:
-        student = await db_manager.get_student_by_school_id(student_id)
-        if not student:
-            try:
-                numeric_id = int(student_id)
-                student = await db_manager.get_student(numeric_id)
-            except Exception:
-                student = None
-        if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
+        # Handle multiple students (comma-separated) or single student
+        student_ids = [sid.strip() for sid in student_id.split(',') if sid.strip()]
+        
+        if len(student_ids) == 1:
+            # Single student training (original logic)
+            student = await db_manager.get_student_by_school_id(student_ids[0])
+            if not student:
+                try:
+                    numeric_id = int(student_ids[0])
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    student = None
+            if not student:
+                raise HTTPException(status_code=404, detail="Student not found")
 
-        if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-        if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-            raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
 
-        job = job_queue.create_job(int(student["id"]), "training")
-        genuine_data = [await f.read() for f in genuine_files]
-        forged_data = [await f.read() for f in forged_files]
-        asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
-        return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
+            job = job_queue.create_job(int(student["id"]), "training")
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
+            return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
+        
+        else:
+            # Multiple students - use global training
+            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+
+            # Create a job for global training
+            job = job_queue.create_job(0, "global_training")  # 0 indicates global training
+            genuine_data = [await f.read() for f in genuine_files]
+            forged_data = [await f.read() for f in forged_files]
+            asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+            return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -208,7 +607,55 @@ async def train_global_model():
 
         gsm = GlobalSignatureVerificationModel()
         history = gsm.train_global_model(data_by_student)
-        return {"success": True, "history": {k: list(map(float, v)) for k, v in history.history.items()}}
+        
+        # Save global model to S3
+        model_uuid = str(uuid.uuid4())
+        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+        
+        # Save model locally first
+        gsm.save_model(f"{base_path}.keras")
+        
+        # Upload to S3
+        with open(f"{base_path}.keras", 'rb') as f:
+            model_data = f.read()
+        
+        s3_key, s3_url = upload_model_file(
+            model_data, "global", f"global_{model_uuid}", "keras"
+        )
+        
+        # Clean up local file
+        cleanup_local_file(f"{base_path}.keras")
+        
+        # Store global model record in dedicated global table
+        model_record = await db_manager.create_global_model({
+            "model_path": s3_url,
+            "s3_key": s3_key,
+            "model_uuid": model_uuid,
+            "status": "completed",
+            "sample_count": sum(len(data['genuine_images']) + len(data['forged_images']) for data in data_by_student.values()),
+            "genuine_count": sum(len(data['genuine_images']) for data in data_by_student.values()),
+            "forged_count": sum(len(data['forged_images']) for data in data_by_student.values()),
+            "student_count": len(data_by_student),
+            "training_date": datetime.utcnow().isoformat(),
+            "accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+            "training_metrics": {
+                'model_type': 'global_multi_student',
+                'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+                'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
+                'epochs_trained': len(history.history.get('accuracy', [])),
+                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
+            }
+        })
+        
+        return {
+            "success": True, 
+            "history": {k: list(map(float, v)) for k, v in history.history.items()},
+            "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+            "model_uuid": model_uuid,
+            "s3_url": s3_url
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -223,6 +670,350 @@ async def run_async_training(job, student, genuine_data, forged_data):
         logger.error(f"Async training failed: {e}")
         job_queue.fail_job(job.job_id, str(e))
 
+
+async def run_gpu_training(job, student, genuine_data, forged_data):
+    """
+    Run training on AWS GPU instance
+    """
+    try:
+        job_queue.start_job(job.job_id)
+        job_queue.update_job_progress(job.job_id, 5.0, "Launching GPU instance...")
+        
+        # Process images
+        genuine_images = []
+        forged_images = []
+        
+        for i, data in enumerate(genuine_data):
+            image = Image.open(io.BytesIO(data))
+            genuine_images.append(image)
+            if job:
+                progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
+
+        for i, data in enumerate(forged_data):
+            image = Image.open(io.BytesIO(data))
+            forged_images.append(image)
+            if job:
+                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
+                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+
+        # Prepare training data
+        training_data = {
+            f"student_{student['id']}": {
+                'genuine': genuine_images,
+                'forged': forged_images
+            }
+        }
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 25.0, "Starting GPU training...")
+
+        # Start GPU training
+        gpu_result = await gpu_training_manager.start_gpu_training(
+            training_data, job.job_id, int(student["id"])
+        )
+
+        if gpu_result['success']:
+            if job:
+                job_queue.update_job_progress(job.job_id, 90.0, "Training completed, saving results...")
+
+            # Create model record
+            model_record = await db_manager.create_trained_model({
+                "student_id": int(student["id"]),
+                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
+                "status": "completed",
+                "sample_count": len(genuine_images) + len(forged_images),
+                "genuine_count": len(genuine_images),
+                "forged_count": len(forged_images),
+                "training_date": datetime.utcnow().isoformat(),
+                "training_metrics": {
+                    'model_type': 'ai_signature_verification_gpu',
+                    'architecture': 'signature_embedding_network',
+                    'training_method': 'aws_gpu_instance',
+                    'instance_type': 'g4dn.xlarge',
+                    'gpu_acceleration': True
+                }
+            })
+
+            result = {
+                "success": True,
+                "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+                "model_uuid": job.job_id,
+                "training_samples": len(genuine_images) + len(forged_images),
+                "genuine_count": len(genuine_images),
+                "forged_count": len(forged_images),
+                "ai_architecture": "signature_embedding_network",
+                "training_method": "aws_gpu",
+                "model_urls": gpu_result['model_urls']
+            }
+
+            if job:
+                job_queue.complete_job(job.job_id, result)
+        else:
+            error_msg = gpu_result.get('error', 'Unknown GPU training error')
+            if job:
+                job_queue.fail_job(job.job_id, error_msg)
+            raise Exception(f"GPU training failed: {error_msg}")
+            
+    except Exception as e:
+        logger.error(f"GPU training failed: {e}")
+        if job:
+            job_queue.fail_job(job.job_id, str(e))
+
+async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
+    """
+    Run global training on AWS GPU instance
+    """
+    try:
+        job_queue.start_job(job.job_id)
+        job_queue.update_job_progress(job.job_id, 5.0, "Preparing student list for global GPU training...")
+
+        # Resolve student objects from provided IDs (frontend cards)
+        students = []
+        for student_id in student_ids:
+            student = await db_manager.get_student_by_school_id(student_id)
+            if not student:
+                try:
+                    numeric_id = int(student_id)
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    continue
+            if student:
+                students.append(student)
+        
+        if not students:
+            raise Exception("No valid students found")
+
+        # Fetch and validate images from storage for only the selected students
+        job_queue.update_job_progress(job.job_id, 12.0, "Fetching stored signatures for selected students...")
+        sid_ints = [int(s.get("id")) for s in students]
+        per_student = await _fetch_and_validate_student_images(sid_ints)
+
+        # Validate minimum totals across all selected students
+        total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
+        total_forged = sum(len(v["forged_images"]) for v in per_student.values())
+        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+            raise Exception("Insufficient stored signatures across selected students to train global model")
+
+        # Build training data structure for GPU service (expects simple dict of lists of arrays)
+        training_data = {}
+        for s in students:
+            sid = int(s["id"])  # type: ignore[index]
+            bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+            training_data[f"student_{sid}"] = {
+                "genuine_images": bucket["genuine_images"],
+                "forged_images": bucket["forged_images"],
+            }
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 25.0, "Starting global GPU training...")
+
+        # Start GPU training (global)
+        gpu_result = await gpu_training_manager.start_gpu_training(
+            training_data, job.job_id, 0  # 0 for global training
+        )
+
+        if gpu_result['success']:
+            if job:
+                job_queue.update_job_progress(job.job_id, 90.0, "Global training completed, saving results...")
+
+            # Create global model record
+            model_record = await db_manager.create_global_model({
+                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "s3_key": f"global_models/{job.job_id}",
+                "model_uuid": job.job_id,
+                "status": "completed",
+                "sample_count": int(total_genuine + total_forged),
+                "genuine_count": int(total_genuine),
+                "forged_count": int(total_forged),
+                "student_count": len(students),
+                "training_date": datetime.utcnow().isoformat(),
+                "accuracy": 0.95,  # Placeholder - would come from training results
+                "training_metrics": {
+                    'model_type': 'global_ai_signature_verification_gpu',
+                    'architecture': 'signature_embedding_network',
+                    'training_method': 'aws_gpu_instance',
+                    'instance_type': 'g4dn.xlarge',
+                    'gpu_acceleration': True
+                }
+            })
+
+            result = {
+                "success": True,
+                "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+                "model_uuid": job.job_id,
+                "s3_url": gpu_result['model_urls'].get('classification', ''),
+                "student_count": len(students),
+                "training_samples": int(total_genuine + total_forged),
+                "training_method": "aws_gpu_global",
+                "model_urls": gpu_result['model_urls']
+            }
+
+            # Hybrid: also train individual models locally from the same preprocessed arrays (before completing job)
+            individual_count = 0
+            try:
+                for s in students:
+                    sid = int(s["id"])  # type: ignore[index]
+                    bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+                    if bucket["genuine_images"] and bucket["forged_images"]:
+                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job)
+                        individual_count += 1
+            except Exception as e:
+                logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
+
+            if job:
+                result["individual_models_created"] = individual_count
+                job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+                job_queue.complete_job(job.job_id, result)
+        else:
+            error_msg = gpu_result.get('error', 'Unknown GPU training error')
+            if job:
+                job_queue.fail_job(job.job_id, error_msg)
+            raise Exception(f"Global GPU training failed: {error_msg}")
+            
+    except Exception as e:
+        logger.error(f"Global GPU training failed: {e}")
+        if job:
+            job_queue.fail_job(job.job_id, str(e))
+
+async def run_global_async_training(job, student_ids, genuine_data, forged_data):
+    """Run global training for multiple students using uploaded files"""
+    try:
+        job_queue.start_job(job.job_id)
+        job_queue.update_job_progress(job.job_id, 10.0, "Preparing student list...")
+
+        # Resolve students from provided IDs (from UI selected cards)
+        students = []
+        for student_id in student_ids:
+            student = await db_manager.get_student_by_school_id(student_id)
+            if not student:
+                try:
+                    numeric_id = int(student_id)
+                    student = await db_manager.get_student(numeric_id)
+                except Exception:
+                    continue
+            if student:
+                students.append(student)
+        
+        if not students:
+            raise Exception("No valid students found")
+
+        job_queue.update_job_progress(job.job_id, 20.0, f"Fetching stored signatures for {len(students)} students...")
+
+        sid_ints = [int(s.get("id")) for s in students]
+        per_student = await _fetch_and_validate_student_images(sid_ints)
+
+        total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
+        total_forged = sum(len(v["forged_images"]) for v in per_student.values())
+        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+            raise Exception("Insufficient stored signatures across selected students to train global model")
+
+        training_data = {}
+        for s in students:
+            sid = int(s["id"])  # type: ignore[index]
+            bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+            training_data[f"student_{sid}"] = {
+                'genuine_images': bucket['genuine_images'],
+                'forged_images': bucket['forged_images']
+            }
+
+        if job:
+            job_queue.update_job_progress(job.job_id, 80.0, "Training global model...")
+
+        # Train global model
+        gsm = GlobalSignatureVerificationModel()
+        history = gsm.train_global_model(training_data)
+        
+        # Save global model to S3
+        model_uuid = str(uuid.uuid4())
+        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+        
+        gsm.save_model(f"{base_path}.keras")
+        
+        with open(f"{base_path}.keras", 'rb') as f:
+            model_data = f.read()
+        
+        s3_key, s3_url = upload_model_file(
+            model_data, "global", f"global_{model_uuid}", "keras"
+        )
+        
+        cleanup_local_file(f"{base_path}.keras")
+        
+        # Compute and cache centroids for verification speed
+        try:
+            centroids = gsm.compute_student_centroids(training_data)
+            import json
+            centroids_bytes = json.dumps({str(k): v.tolist() for k, v in centroids.items()}).encode("utf-8")
+            ckey, curl = upload_file_generic(centroids_bytes, "global", f"global_{model_uuid}_centroids", "json")
+        except Exception:
+            ckey, curl = None, None
+
+        # Store global model record in dedicated global table
+        payload = {
+            "model_path": s3_url,
+            "s3_key": s3_key,
+            "model_uuid": model_uuid,
+            "status": "completed",
+            "sample_count": int(total_genuine + total_forged),
+            "genuine_count": int(total_genuine),
+            "forged_count": int(total_forged),
+            "student_count": len(students),
+            "training_date": datetime.utcnow().isoformat(),
+            "accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+            "training_metrics": {
+                'model_type': 'global_multi_student',
+                'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+                'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
+                'epochs_trained': len(history.history.get('accuracy', [])),
+                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
+            }
+        }
+        if curl:
+            payload["centroids_path"] = curl
+        try:
+            model_record = await db_manager.create_global_model(payload)
+        except Exception as e:
+            # Fallback: remove centroids_path if the column doesn't exist
+            if "centroids_path" in str(e):
+                payload.pop("centroids_path", None)
+                model_record = await db_manager.create_global_model(payload)
+            else:
+                raise
+        
+        result = {
+            "success": True,
+            "model_id": model_record.get("id") if isinstance(model_record, dict) else None,
+            "model_uuid": model_uuid,
+            "s3_url": s3_url,
+            "student_count": len(students),
+            "training_samples": int(total_genuine + total_forged)
+        }
+        
+        # Hybrid: also train and store individual models from the already preprocessed arrays (before completing job)
+        individual_count = 0
+        try:
+            for s in students:
+                sid = int(s["id"])  # type: ignore[index]
+                bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+                if bucket["genuine_images"] and bucket["forged_images"]:
+                    await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job)
+                    individual_count += 1
+        except Exception as e:
+            logger.warning(f"Hybrid individual training (post-global local) encountered an error: {e}")
+
+        if job:
+            result["individual_models_created"] = individual_count
+            job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+            job_queue.complete_job(job.job_id, result)
+            
+    except Exception as e:
+        logger.error(f"Global async training failed: {e}")
+        if job:
+            job_queue.fail_job(job.job_id, str(e))
+
 @router.get("/models")
 async def get_trained_models(student_id: Optional[int] = None):
     try:
@@ -230,4 +1021,28 @@ async def get_trained_models(student_id: Optional[int] = None):
         return {"models": models}
     except Exception as e:
         logger.error(f"Error getting trained models: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/global-models")
+async def get_global_models(limit: Optional[int] = None):
+    try:
+        models = await db_manager.get_global_models(limit)
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"Error getting global models: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/global-models/latest")
+async def get_latest_global_model():
+    try:
+        model = await db_manager.get_latest_global_model()
+        if not model:
+            raise HTTPException(status_code=404, detail="No global models found")
+        return {"model": model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting latest global model: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

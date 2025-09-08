@@ -114,4 +114,4 @@ ai-training/.hypothesis/
 ai-training/.mypy_cache/
 ai-training/.dmypy.json
 ai-training/dmypy.jsoncore
-*.core
+*.core\n# Ignore OS core dumps\n/core\ncore\n**/core

@@ -110,6 +110,26 @@ export class AIService {
     }
   }
 
+  /**
+   * Get global trained models (optionally limited)
+   */
+  async getGlobalModels(limit?: number): Promise<any[]> {
+    try {
+      const url = limit
+        ? `${this.baseUrl}/api/training/global-models?limit=${limit}`
+        : `${this.baseUrl}/api/training/global-models`;
+      const response = await fetch(url);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || 'Failed to fetch global models');
+      }
+      return data.models || [];
+    } catch (error) {
+      console.error('AI getGlobalModels error:', error);
+      return [];
+    }
+  }
+
   // S3-backed student signatures -------------------------------------
   async uploadSignature(studentId: number, label: 'genuine'|'forged', file: File) {
     const form = new FormData();
@@ -353,7 +373,8 @@ export class AIService {
   async startAsyncTraining(
     studentId: string,
     genuineFiles: File[],
-    forgedFiles: File[]
+    forgedFiles: File[],
+    trainingMode?: 'individual' | 'global' | 'hybrid'
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
@@ -363,6 +384,9 @@ export class AIService {
       }
       for (const file of forgedFiles) {
         formData.append('forged_files', file);
+      }
+      if (trainingMode) {
+        formData.append('training_mode', trainingMode);
       }
 
       const response = await fetch(`${this.baseUrl}/api/training/start-async`, {
@@ -433,6 +457,53 @@ export class AIService {
     };
     
     return eventSource;
+  }
+
+  /**
+   * Start GPU training on AWS
+   */
+  async startGPUTraining(
+    studentId: string,
+    genuineFiles: File[],
+    forgedFiles: File[],
+    useGPU: boolean = true
+  ): Promise<AsyncTrainingResponse> {
+    try {
+      const formData = new FormData();
+      formData.append('student_id', studentId);
+      formData.append('use_gpu', useGPU.toString());
+      
+      for (const file of genuineFiles) {
+        formData.append('genuine_files', file);
+      }
+      for (const file of forgedFiles) {
+        formData.append('forged_files', file);
+      }
+      // Force hybrid mode
+      formData.append('training_mode', 'hybrid');
+
+      const response = await fetch(`${this.baseUrl}/api/training/start-gpu-training`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'GPU training failed');
+      }
+
+      const data = await response.json();
+      return {
+        success: data.success,
+        job_id: data.job_id,
+        message: data.message,
+        stream_url: data.stream_url,
+        training_type: data.training_type || 'gpu'
+      };
+    } catch (error) {
+      console.error('GPU training error:', error);
+      throw error;
+    }
   }
 
   /**

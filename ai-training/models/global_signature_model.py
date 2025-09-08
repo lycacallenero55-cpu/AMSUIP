@@ -101,7 +101,12 @@ class GlobalSignatureVerificationModel:
         self.model.compile(
             optimizer=optimizer,
             loss='binary_crossentropy',
-            metrics=['accuracy', 'auc', 'precision', 'recall']
+            metrics=[
+                keras.metrics.BinaryAccuracy(name='accuracy'),
+                keras.metrics.AUC(name='auc'),
+                keras.metrics.Precision(name='precision'),
+                keras.metrics.Recall(name='recall'),
+            ]
         )
         
         logger.info(f"Created global Siamese model with {self.model.count_params()} parameters")

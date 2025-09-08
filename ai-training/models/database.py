@@ -244,6 +244,84 @@ class DatabaseManager:
                 logger.error(f"Error listing students with images: {e2}")
                 return []
 
+    # Global Models (separate table) -------------------------------------
+    async def create_global_model(self, model_data: dict):
+        """Create a new global trained model record."""
+        try:
+            response = self.client.table("global_trained_models").insert(model_data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating global model: {e}")
+            raise
+
+    async def get_global_models(self, limit: int = None):
+        """Get all global trained models, optionally limited."""
+        try:
+            query = self.client.table("global_trained_models").select("*").order("created_at", desc=True)
+            if limit:
+                query = query.limit(limit)
+            response = query.execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting global models: {e}")
+            return []
+
+    async def get_global_model(self, model_id: int):
+        """Get a specific global model by ID."""
+        try:
+            response = self.client.table("global_trained_models").select("*").eq("id", model_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error getting global model: {e}")
+            return None
+
+    async def get_latest_global_model(self):
+        """Get the most recent global model."""
+        try:
+            response = self.client.table("global_trained_models").select("*").order("created_at", desc=True).limit(1).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error getting latest global model: {e}")
+            return None
+
+    async def get_latest_ai_model(self):
+        """Return the most recent AI (embedding-based) individual model, if any."""
+        try:
+            # Fetch the latest N trained models and filter on the client side by training_metrics.model_type
+            response = self.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
+            rows = response.data or []
+            for r in rows:
+                metrics = r.get("training_metrics", {}) or {}
+                model_type = str(metrics.get("model_type", ""))
+                if model_type in ("ai_signature_verification", "ai_signature_verification_gpu"):
+                    return r
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest AI model: {e}")
+            return None
+
+    async def update_global_model_status(self, model_id: int, status: str, accuracy: float = None):
+        """Update global model training status."""
+        try:
+            update_data = {"status": status}
+            if accuracy is not None:
+                update_data["accuracy"] = accuracy
+            
+            response = self.client.table("global_trained_models").update(update_data).eq("id", model_id).execute()
+            return response.data[0] if getattr(response, 'data', None) else None
+        except Exception as e:
+            logger.error(f"Error updating global model status: {e}")
+            raise
+
+    async def delete_global_model(self, model_id: int):
+        """Delete a global model record."""
+        try:
+            response = self.client.table("global_trained_models").delete().eq("id", model_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting global model: {e}")
+            return False
+
     # A/B Testing Methods
     async def create_ab_test(self, ab_test_data: dict):
         """Create an A/B test."""
