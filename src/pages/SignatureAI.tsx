@@ -160,8 +160,8 @@ const SignatureAI = () => {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [dateGroupedModels, setDateGroupedModels] = useState<Record<string, { global?: TrainedModel; individual: TrainedModel[] }>>({});
   
-  // Training mode state
-  const [trainingMode, setTrainingMode] = useState<'individual' | 'global' | 'hybrid'>('hybrid');
+  // Training mode (force hybrid)
+  const [trainingMode] = useState<'hybrid'>('hybrid');
   const [useGPU, setUseGPU] = useState(true);
 
   // Generate mock models with hybrid training data
@@ -1410,39 +1410,13 @@ const SignatureAI = () => {
             {/* Train Model Button at Bottom */}
             <div className="pt-4 border-t">
               <div className="flex flex-col items-center space-y-4">
-                {/* Training Mode Selector */}
+                {/* Hybrid mode only + GPU toggle */}
                 {!isViewingModels && (
                   <div className="flex flex-col items-center gap-3 text-sm">
                     <div className="flex items-center gap-2">
                       <Label className="text-muted-foreground">Training Mode:</Label>
-                      <div className="flex gap-1">
-                        <Button
-                          variant={trainingMode === 'individual' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setTrainingMode('individual')}
-                          className="text-xs"
-                        >
-                          Individual
-                        </Button>
-                        <Button
-                          variant={trainingMode === 'global' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setTrainingMode('global')}
-                          className="text-xs"
-                        >
-                          Global
-                        </Button>
-                        <Button
-                          variant={trainingMode === 'hybrid' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setTrainingMode('hybrid')}
-                          className="text-xs"
-                        >
-                          Hybrid
-                        </Button>
-                      </div>
+                      <div className="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200">Hybrid</div>
                     </div>
-                    
                     {/* GPU Training Toggle */}
                     <div className="flex items-center gap-2">
                       <input
@@ -1473,7 +1447,7 @@ const SignatureAI = () => {
                   ) : (
                     <>
                       <Brain className="w-4 h-4 mr-2" />
-                      Train {trainingMode === 'individual' ? 'Individual' : trainingMode === 'global' ? 'Global' : 'Hybrid'} Model
+                      Train Hybrid Model
                     </>
                   )}
                 </Button>
