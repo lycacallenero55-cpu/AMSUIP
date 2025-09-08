@@ -27,19 +27,27 @@ async def identify_signature_owner(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
-        all_models = await db_manager.get_trained_models()
-        if not all_models:
-            raise HTTPException(status_code=404, detail="No trained models available")
+        # Try to get latest global model first, fallback to individual models
+        latest_global = await db_manager.get_latest_global_model()
+        
+        if latest_global and latest_global.get("status") == "completed":
+            # Use global model
+            student_model_path = latest_global.get("model_path")
+            authenticity_model_path = latest_global.get("model_path")  # Same model for global
+        else:
+            # Fallback to individual models
+            all_models = await db_manager.get_trained_models()
+            if not all_models:
+                raise HTTPException(status_code=404, detail="No trained models available")
 
-        # Use latest completed model tagged for individual recognition
-        model_type = (m.get("training_metrics", {}).get("model_type") if (m := None) is None else None)
-        eligible = [m for m in all_models if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
-        if not eligible:
-            raise HTTPException(status_code=404, detail="No compatible trained models available")
+            # Use latest completed model tagged for individual recognition
+            eligible = [m for m in all_models if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
+            if not eligible:
+                raise HTTPException(status_code=404, detail="No compatible trained models available")
 
-        latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
-        student_model_path = latest_model.get("model_path")
-        authenticity_model_path = latest_model.get("embedding_model_path")
+            latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
+            student_model_path = latest_model.get("model_path")
+            authenticity_model_path = latest_model.get("embedding_model_path")
 
         try:
             # Check if model paths are S3 URLs or Supabase paths
@@ -87,14 +95,23 @@ async def verify_signature(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
-        all_models = await db_manager.get_trained_models()
-        eligible = [m for m in (all_models or []) if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
-        if not eligible:
-            raise HTTPException(status_code=404, detail="No compatible trained models available")
+        # Try to get latest global model first, fallback to individual models
+        latest_global = await db_manager.get_latest_global_model()
+        
+        if latest_global and latest_global.get("status") == "completed":
+            # Use global model
+            student_model_path = latest_global.get("model_path")
+            authenticity_model_path = latest_global.get("model_path")  # Same model for global
+        else:
+            # Fallback to individual models
+            all_models = await db_manager.get_trained_models()
+            eligible = [m for m in (all_models or []) if m.get("status") == "completed" and str(m.get("training_metrics", {}).get("model_type", "")).endswith("individual_recognition")]
+            if not eligible:
+                raise HTTPException(status_code=404, detail="No compatible trained models available")
 
-        latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
-        student_model_path = latest_model.get("model_path")
-        authenticity_model_path = latest_model.get("embedding_model_path")
+            latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
+            student_model_path = latest_model.get("model_path")
+            authenticity_model_path = latest_model.get("embedding_model_path")
 
         try:
             # Check if model paths are S3 URLs or Supabase paths
