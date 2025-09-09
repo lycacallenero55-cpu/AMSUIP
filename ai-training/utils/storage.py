@@ -110,10 +110,33 @@ async def load_model_from_s3(s3_url: str):
         from tensorflow import keras
         import tempfile
         import os
+        from urllib.parse import urlparse
         
-        # Extract S3 key from URL
-        # URL format: https://bucket.s3.region.amazonaws.com/models/type/uuid.keras
-        s3_key = s3_url.split('/')[-2] + '/' + s3_url.split('/')[-1]  # models/type/uuid.keras
+        # Extract S3 key from URL (support multiple styles)
+        # Examples we support:
+        #  - https://bucket.s3.region.amazonaws.com/models/type/uuid.keras
+        #  - https://s3.region.amazonaws.com/bucket/models/type/uuid.keras
+        #  - https://bucket.s3.amazonaws.com/models/type/uuid.keras
+        #  - https://cdn.example.com/models/type/uuid.keras (custom domain, full path)
+        #  - models/type/uuid.keras (already a key)
+        parsed = urlparse(s3_url)
+        if parsed.scheme and parsed.netloc:
+            # URL with host
+            host = parsed.netloc
+            path = parsed.path or ""
+            # Strip leading '/'
+            path = path[1:] if path.startswith('/') else path
+            s3_key = path
+            # If host is path-style (s3.amazonaws.com or s3.<region>.amazonaws.com), first segment is bucket
+            if host == "s3.amazonaws.com" or host.startswith("s3."):
+                parts = path.split('/') if path else []
+                if parts and parts[0] == settings.S3_BUCKET:
+                    s3_key = '/'.join(parts[1:])
+            # If host is virtual-hosted (bucket.s3.<region>.amazonaws.com), path is already the key
+            # For custom CDN domains, assume full path is the key segment after the domain
+        else:
+            # Looks like a raw key
+            s3_key = s3_url
         
         # Download model data from S3
         model_data = download_model_file(s3_key)
