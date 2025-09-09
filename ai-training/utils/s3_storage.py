@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import boto3
 from botocore.config import Config as BotoConfig
+from boto3.s3.transfer import TransferConfig
 
 from config import settings
 
@@ -21,6 +22,15 @@ _s3 = _session.client(
         read_timeout=15,
         connect_timeout=5,
     ),
+)
+
+# Resource and transfer config for faster multipart uploads
+_s3_resource = _session.resource("s3")
+_transfer_config = TransferConfig(
+    multipart_threshold=8 * 1024 * 1024,  # start multipart at 8MB
+    multipart_chunksize=8 * 1024 * 1024,  # 8MB parts
+    max_concurrency=8,
+    use_threads=True,
 )
 
 
@@ -47,13 +57,17 @@ def upload_bytes(
     key = make_key(student_id, label, filename)
     ct = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     acl = "private" if settings.S3_USE_PRESIGNED_GET else "public-read"
-    _s3.put_object(
-        Bucket=settings.S3_BUCKET,
+    import io
+    buf = io.BytesIO(content)
+    _s3_resource.Bucket(settings.S3_BUCKET).upload_fileobj(
+        Fileobj=buf,
         Key=key,
-        Body=content,
-        ContentType=ct,
-        ACL=acl,
-        CacheControl="max-age=31536000,public",
+        ExtraArgs={
+            "ContentType": ct,
+            "ACL": acl,
+            "CacheControl": "max-age=31536000,public",
+        },
+        Config=_transfer_config,
     )
     url = f"{_resolve_public_base_url()}/{key}"
     return key, url
@@ -125,13 +139,17 @@ def upload_model_file(
     elif file_extension == "json":
         content_type = "application/json"
     
-    _s3.put_object(
-        Bucket=settings.S3_BUCKET,
+    import io
+    buf = io.BytesIO(model_data)
+    _s3_resource.Bucket(settings.S3_BUCKET).upload_fileobj(
+        Fileobj=buf,
         Key=key,
-        Body=model_data,
-        ContentType=content_type,
-        ACL="private",  # Models should be private
-        CacheControl="max-age=31536000",  # Cache for 1 year
+        ExtraArgs={
+            "ContentType": content_type,
+            "ACL": "private",
+            "CacheControl": "max-age=31536000",
+        },
+        Config=_transfer_config,
     )
     
     url = f"{_resolve_public_base_url()}/{key}"

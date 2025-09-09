@@ -290,6 +290,15 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         else:
             raise
 
+    # Reduce pauses by clearing TF session and triggering GC
+    try:
+        import gc
+        from tensorflow import keras
+        keras.backend.clear_session()
+        gc.collect()
+    except Exception:
+        pass
+
     return {"record": model_record, "urls": s3_urls}
 
 async def train_signature_model(student, genuine_data, forged_data, job=None):

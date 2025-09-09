@@ -204,9 +204,16 @@ async def identify_signature_owner(
                     "error": "No trained models available. Please train a model first."
                 }
 
-            # Use latest completed AI model
-            eligible = [m for m in all_models if m.get("status") == "completed" and 
-                       m.get("training_metrics", {}).get("model_type") == "ai_signature_verification"]
+            # Use latest completed AI model (accept individual and gpu variants)
+            eligible = [
+                m for m in all_models
+                if m.get("status") == "completed"
+                and (m.get("training_metrics", {}).get("model_type") in (
+                    "ai_signature_verification",
+                    "ai_signature_verification_individual",
+                    "ai_signature_verification_gpu"
+                ))
+            ]
             if not eligible:
                 return {
                     "predicted_student": {
@@ -229,10 +236,22 @@ async def identify_signature_owner(
             # Load legacy model
             try:
                 model_path = latest_model.get("model_path")
-                if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    signature_ai_manager.classification_head = await load_model_from_s3(model_path)
-                else:
-                    signature_ai_manager.classification_head = await load_model_from_supabase(model_path)
+                # Prefer authenticity/embedding paths if present (per-student training)
+                embed_path = latest_model.get("embedding_model_path")
+                auth_path = latest_model.get("authenticity_model_path")
+                if embed_path:
+                    signature_ai_manager.embedding_model = await (
+                        load_model_from_s3(embed_path) if (embed_path.startswith('https://') and 'amazonaws.com' in embed_path) else load_model_from_supabase(embed_path)
+                    )
+                if auth_path:
+                    signature_ai_manager.authenticity_head = await (
+                        load_model_from_s3(auth_path) if (auth_path.startswith('https://') and 'amazonaws.com' in auth_path) else load_model_from_supabase(auth_path)
+                    )
+                if model_path and not auth_path and not embed_path:
+                    # legacy single path (classification)
+                    signature_ai_manager.classification_head = await (
+                        load_model_from_s3(model_path) if (model_path.startswith('https://') and 'amazonaws.com' in model_path) else load_model_from_supabase(model_path)
+                    )
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("identify")

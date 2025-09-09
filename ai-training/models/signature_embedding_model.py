@@ -533,13 +533,13 @@ class SignatureEmbeddingModel:
         """
         logger.info("Performing comprehensive signature verification...")
         
-        # Check if required models are loaded
+        # Check available heads; allow partial inference if only authenticity is present
         if not self.embedding_model:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
-        if not self.classification_head:
-            raise ValueError("Classification model not loaded. Please load a trained model first.")
-        if not self.authenticity_head:
-            raise ValueError("Authenticity model not loaded. Please load a trained model first.")
+        has_classification = self.classification_head is not None
+        has_authenticity = self.authenticity_head is not None
+        if not (has_classification or has_authenticity):
+            raise ValueError("No verification heads loaded. Please load a trained model first.")
         
         # Preprocess test signature
         processed_signature = self._preprocess_signature(test_signature)
@@ -548,23 +548,33 @@ class SignatureEmbeddingModel:
         # Get embeddings
         embedding = self.embedding_model.predict(X_test, verbose=0)[0]
         
-        # Student classification
-        student_probs = self.classification_head.predict(X_test, verbose=0)[0]
-        predicted_student_id = int(np.argmax(student_probs))
-        student_confidence = float(np.max(student_probs))
+        predicted_student_id = 0
+        student_confidence = 0.0
+        if has_classification:
+            student_probs = self.classification_head.predict(X_test, verbose=0)[0]
+            predicted_student_id = int(np.argmax(student_probs))
+            student_confidence = float(np.max(student_probs))
         
         # Authenticity detection
-        authenticity_score = float(self.authenticity_head.predict(X_test, verbose=0)[0][0])
-        is_genuine = authenticity_score > 0.5
+        authenticity_score = 0.0
+        is_genuine = False
+        if has_authenticity:
+            authenticity_score = float(self.authenticity_head.predict(X_test, verbose=0)[0][0])
+            is_genuine = authenticity_score > 0.5
         
         # Get student name
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
         
         # Calculate overall confidence
-        overall_confidence = (student_confidence + authenticity_score) / 2.0
+        if has_classification and has_authenticity:
+            overall_confidence = (student_confidence + authenticity_score) / 2.0
+        elif has_authenticity:
+            overall_confidence = authenticity_score
+        else:
+            overall_confidence = student_confidence
         
         # Determine if signature is unknown
-        is_unknown = student_confidence < 0.3 or overall_confidence < 0.4
+        is_unknown = (has_classification and student_confidence < 0.3) or overall_confidence < 0.4
         
         result = {
             'predicted_student_id': predicted_student_id,

@@ -760,12 +760,19 @@ const SignatureAI = () => {
         }
       });
 
-      const asyncResponse = await aiService.startGPUTraining(
-        studentIds.join(','),
-        allGenuineFiles,
-        allForgedFiles,
-        useGPU
-      );
+      const asyncResponse = useGPU
+        ? await aiService.startGPUTraining(
+            studentIds.join(','),
+            allGenuineFiles,
+            allForgedFiles,
+            true
+          )
+        : await aiService.startAsyncTraining(
+            studentIds.join(','),
+            allGenuineFiles,
+            allForgedFiles,
+            'hybrid'
+          );
       
       setJobId(asyncResponse.job_id);
       setTrainingLogs(prev => [...prev, `Job created: ${asyncResponse.job_id}`]);
