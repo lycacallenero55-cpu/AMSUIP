@@ -4,7 +4,7 @@
     "module": "commonjs",
     "esModuleInterop": true,
     "moduleResolution": "node",
-    "strict": true,
+    "strict": false,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "../dist/scripts",

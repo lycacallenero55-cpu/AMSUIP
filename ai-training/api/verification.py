@@ -21,54 +21,88 @@ logger = logging.getLogger(__name__)
 signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
+def _get_fallback_response(endpoint_type="identify", student_id=None):
+    """Return a fallback response when database is unavailable"""
+    base_response = {
+        "is_match": False,
+        "confidence": 0.0,
+        "global_score": None,
+        "student_confidence": 0.0,
+        "authenticity_score": 0.0,
+        "predicted_student": {
+            "id": 0,
+            "name": "Database Unavailable"
+        },
+        "is_unknown": True,
+        "model_type": "database_unavailable",
+        "ai_architecture": "none",
+        "error": "Database connection failed. Please check your Supabase configuration."
+    }
+    
+    if endpoint_type == "verify":
+        base_response.update({
+            "target_student_id": student_id,
+            "is_correct_student": False,
+            "is_genuine": False
+        })
+    
+    return base_response
 
 async def _fetch_genuine_arrays_for_student(student_id: int, max_images: int = 5) -> list:
     """Fetch up to max_images genuine signatures for a student and return preprocessed arrays."""
-    rows = await db_manager.list_student_signatures(student_id)
-    arrays = []
-    for r in rows:
-        if (r.get("label") or "").lower() != "genuine":
-            continue
-        url = r.get("s3_url")
-        key = r.get("s3_key")
-        content = None
-        if key:
+    try:
+        rows = await db_manager.list_student_signatures(student_id)
+        arrays = []
+        for r in rows:
+            if (r.get("label") or "").lower() != "genuine":
+                continue
+            url = r.get("s3_url")
+            key = r.get("s3_key")
+            content = None
+            if key:
+                try:
+                    content = download_bytes(key)
+                except Exception:
+                    content = None
+            if content is None and url:
+                try:
+                    if settings.S3_USE_PRESIGNED_GET and key:
+                        url = create_presigned_get(key)
+                    resp = requests.get(url, timeout=6)
+                    if resp.status_code == 200:
+                        content = resp.content
+                except Exception:
+                    content = None
+            if not content:
+                continue
             try:
-                content = download_bytes(key)
+                img = Image.open(io.BytesIO(content)).convert('RGB')
+                arr = preprocessor.preprocess_signature(img)
+                arrays.append(arr)
             except Exception:
-                content = None
-        if content is None and url:
-            try:
-                if settings.S3_USE_PRESIGNED_GET and key:
-                    url = create_presigned_get(key)
-                resp = requests.get(url, timeout=6)
-                if resp.status_code == 200:
-                    content = resp.content
-            except Exception:
-                content = None
-        if not content:
-            continue
-        try:
-            img = Image.open(io.BytesIO(content)).convert('RGB')
-            arr = preprocessor.preprocess_signature(img)
-            arrays.append(arr)
-        except Exception:
-            continue
-        if len(arrays) >= max_images:
-            break
-    return arrays
+                continue
+            if len(arrays) >= max_images:
+                break
+        return arrays
+    except Exception as e:
+        logger.warning(f"Failed to fetch genuine arrays for student {student_id}: {e}")
+        return []
 
 async def _list_candidate_student_ids(limit: int = 50) -> list[int]:
     """List candidate students that have images (limited)."""
-    items = await db_manager.list_students_with_images()
-    ids: list[int] = []
-    for it in items:
-        sid = it.get("student_id") or it.get("id")
-        if isinstance(sid, int):
-            ids.append(sid)
-        if len(ids) >= limit:
-            break
-    return ids
+    try:
+        items = await db_manager.list_students_with_images()
+        ids: list[int] = []
+        for it in items:
+            sid = it.get("student_id") or it.get("id")
+            if isinstance(sid, int):
+                ids.append(sid)
+            if len(ids) >= limit:
+                break
+        return ids
+    except Exception as e:
+        logger.warning(f"Failed to list candidate students: {e}")
+        return []
 
 async def _load_cached_centroids(latest_global: dict) -> dict | None:
     try:
@@ -99,7 +133,11 @@ async def identify_signature_owner(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Try to get latest AI model first, fallback to legacy models
-        latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+        try:
+            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+        except Exception as e:
+            logger.warning(f"Database connection failed: {e}")
+            return _get_fallback_response("identify")
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Use new AI model
@@ -140,18 +178,51 @@ async def identify_signature_owner(
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
-                raise HTTPException(status_code=500, detail="Failed to load AI models")
+                return _get_fallback_response("identify")
         else:
             # Fallback to legacy models
-            all_models = await db_manager.get_trained_models()
+            try:
+                all_models = await db_manager.get_trained_models()
+            except Exception as e:
+                logger.warning(f"Database connection failed: {e}")
+                return _get_fallback_response("identify")
+            
             if not all_models:
-                raise HTTPException(status_code=404, detail="No trained models available")
+                return {
+                    "predicted_student": {
+                        "id": 0,
+                        "name": "No Model Available"
+                    },
+                    "is_match": False,
+                    "confidence": 0.0,
+                    "global_score": None,
+                    "student_confidence": 0.0,
+                    "authenticity_score": 0.0,
+                    "is_unknown": True,
+                    "model_type": "no_model_available",
+                    "ai_architecture": "none",
+                    "error": "No trained models available. Please train a model first."
+                }
 
             # Use latest completed AI model
             eligible = [m for m in all_models if m.get("status") == "completed" and 
                        m.get("training_metrics", {}).get("model_type") == "ai_signature_verification"]
             if not eligible:
-                raise HTTPException(status_code=404, detail="No AI models available. Please train a model first.")
+                return {
+                    "predicted_student": {
+                        "id": 0,
+                        "name": "No Model Available"
+                    },
+                    "is_match": False,
+                    "confidence": 0.0,
+                    "global_score": None,
+                    "student_confidence": 0.0,
+                    "authenticity_score": 0.0,
+                    "is_unknown": True,
+                    "model_type": "no_model_available",
+                    "ai_architecture": "none",
+                    "error": "No trained models available. Please train a model first."
+                }
 
             latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
             
@@ -164,7 +235,7 @@ async def identify_signature_owner(
                     signature_ai_manager.classification_head = await load_model_from_supabase(model_path)
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
-                raise HTTPException(status_code=500, detail="Failed to load model")
+                return _get_fallback_response("identify")
 
         # Preprocess test signature with advanced preprocessing
         processed_signature = preprocessor.preprocess_signature(test_image)
@@ -225,8 +296,16 @@ async def identify_signature_owner(
             logger.warning(f"Global-first selection failed: {e}")
 
         # Individual model inference to get overall confidence
-        result = signature_ai_manager.verify_signature(processed_signature)
-        combined_confidence = result["overall_confidence"]
+        try:
+            result = signature_ai_manager.verify_signature(processed_signature)
+            combined_confidence = result["overall_confidence"]
+        except ValueError as e:
+            logger.error(f"Model verification failed: {e}")
+            return _get_fallback_response("identify")
+        except Exception as e:
+            logger.error(f"Unexpected error during verification: {e}")
+            return _get_fallback_response("identify")
+        
         if predicted_owner_id is not None:
             if result.get("predicted_student_id") != predicted_owner_id:
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
@@ -253,7 +332,7 @@ async def identify_signature_owner(
         raise
     except Exception as e:
         logger.error(f"AI identification failed: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        return _get_fallback_response("identify")
 
 @router.post("/verify")
 async def verify_signature(
@@ -271,7 +350,11 @@ async def verify_signature(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Use the same AI model loading logic as identify
-        latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+        try:
+            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+        except Exception as e:
+            logger.warning(f"Database connection failed: {e}")
+            return _get_fallback_response("verify", student_id)
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Load AI models (same as identify function)
@@ -310,17 +393,22 @@ async def verify_signature(
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
-                raise HTTPException(status_code=500, detail="Failed to load AI models")
+                return _get_fallback_response("verify", student_id)
         else:
             # Fallback to legacy models
-            all_models = await db_manager.get_trained_models()
+            try:
+                all_models = await db_manager.get_trained_models()
+            except Exception as e:
+                logger.warning(f"Database connection failed: {e}")
+                return _get_fallback_response("verify", student_id)
+
             if not all_models:
-                raise HTTPException(status_code=404, detail="No trained models available")
+                return _get_fallback_response("verify", student_id)
 
             eligible = [m for m in all_models if m.get("status") == "completed" and 
                        m.get("training_metrics", {}).get("model_type") == "ai_signature_verification"]
             if not eligible:
-                raise HTTPException(status_code=404, detail="No AI models available. Please train a model first.")
+                return _get_fallback_response("verify", student_id)
 
             latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
             
@@ -332,7 +420,7 @@ async def verify_signature(
                     signature_ai_manager.classification_head = await load_model_from_supabase(model_path)
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
-                raise HTTPException(status_code=500, detail="Failed to load model")
+                return _get_fallback_response("verify", student_id)
 
         # Preprocess test signature with advanced preprocessing
         processed_signature = preprocessor.preprocess_signature(test_image)
@@ -390,8 +478,16 @@ async def verify_signature(
             logger.warning(f"Global-first selection failed: {e}")
 
         # Individual model inference
-        result = signature_ai_manager.verify_signature(processed_signature)
-        combined_confidence = result["overall_confidence"]
+        try:
+            result = signature_ai_manager.verify_signature(processed_signature)
+            combined_confidence = result["overall_confidence"]
+        except ValueError as e:
+            logger.error(f"Model verification failed: {e}")
+            return _get_fallback_response("verify", student_id)
+        except Exception as e:
+            logger.error(f"Unexpected error during verification: {e}")
+            return _get_fallback_response("verify", student_id)
+        
         if predicted_owner_id is not None:
             if result.get("predicted_student_id") != predicted_owner_id:
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
@@ -426,4 +522,4 @@ async def verify_signature(
         raise
     except Exception as e:
         logger.error(f"AI verification failed: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        return _get_fallback_response("verify", student_id)

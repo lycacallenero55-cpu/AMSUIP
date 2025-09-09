@@ -28,6 +28,7 @@ interface StudentTrainingCardProps {
   onOpenImageModal: (images: string[], startIndex: number, context: { kind: 'training', setType: 'genuine' | 'forged', cardId: string } | { kind: 'verification' } | null) => void;
   onRemoveAllSamples: (cardId: string) => void;
   onCardClick: () => void;
+  locked?: boolean;
 }
 
 const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
@@ -40,7 +41,8 @@ const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
   onRemoveTrainingFile,
   onOpenImageModal,
   onRemoveAllSamples,
-  onCardClick
+  onCardClick,
+  locked
 }) => {
   const hasUploadedImages = () => {
     return card.genuineFiles.length > 0 || card.forgedFiles.length > 0;
@@ -83,8 +85,10 @@ const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
             variant="ghost"
             size="sm"
             className="h-5 w-5 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground hover:bg-transparent transition-opacity shrink-0"
+            disabled={locked}
             onClick={(e) => {
               e.stopPropagation();
+              if (locked) return;
               setIsRemoveConfirmOpen(true);
             }}
             aria-label="Remove Student"

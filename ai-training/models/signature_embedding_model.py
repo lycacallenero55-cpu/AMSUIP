@@ -102,11 +102,12 @@ class SignatureEmbeddingModel:
         
         # Spatial attention for stroke patterns
         attention = layers.Conv2D(1, (1, 1), activation='sigmoid', name='spatial_attention')(x)
-        x = layers.Multiply(name='attention_application')([x, attention])
+        attended = layers.Multiply(name='attention_application')([x, attention])
         
-        # Global feature aggregation
-        x = layers.GlobalAveragePooling2D(name='global_avg_pool')(x)
-        x = layers.GlobalMaxPooling2D(name='global_max_pool')(x)
+        # Global feature aggregation (apply pooling to feature maps, not sequentially)
+        gap = layers.GlobalAveragePooling2D(name='global_avg_pool')(attended)
+        gmp = layers.GlobalMaxPooling2D(name='global_max_pool')(attended)
+        x = layers.Concatenate(name='global_pool_concat')([gap, gmp])
         
         # Create backbone model
         backbone = keras.Model(input_layer, x, name='signature_backbone')
@@ -438,7 +439,7 @@ class SignatureEmbeddingModel:
                 min_lr=1e-7,
                 verbose=1
             ),
-            keras.callbacks.CosineRestartScheduler(
+            CosineRestartScheduler(
                 T_0=20,
                 T_mult=2,
                 eta_min=1e-7
@@ -531,6 +532,14 @@ class SignatureEmbeddingModel:
         Comprehensive signature verification with multiple models
         """
         logger.info("Performing comprehensive signature verification...")
+        
+        # Check if required models are loaded
+        if not self.embedding_model:
+            raise ValueError("Embedding model not loaded. Please load a trained model first.")
+        if not self.classification_head:
+            raise ValueError("Classification model not loaded. Please load a trained model first.")
+        if not self.authenticity_head:
+            raise ValueError("Authenticity model not loaded. Please load a trained model first.")
         
         # Preprocess test signature
         processed_signature = self._preprocess_signature(test_signature)

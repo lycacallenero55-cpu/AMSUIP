@@ -63,6 +63,7 @@ const SignatureAI = () => {
     }
   ]);
   const [isTraining, setIsTraining] = useState(false);
+  const isLocked = isTraining;
   const [trainingResult, setTrainingResult] = useState<{
     success: boolean;
     message: string;
@@ -441,13 +442,14 @@ const SignatureAI = () => {
 
   // Student Card Management Functions
   const addStudentCard = React.useCallback(() => {
+    if (isLocked) return;
     // Deprecated: no longer create empty cards.
     // Open the student selector in bulk add mode instead
     setStudentSelectMode('bulkAdd');
     setSelectedStudentIds(new Set());
     setStudentPage(1);
     setIsStudentDialogOpen(true);
-  }, []);
+  }, [isLocked]);
 
   const removeStudentCard = React.useCallback((cardId: string) => {
     setStudentCards(prev => {
@@ -1124,8 +1126,9 @@ const SignatureAI = () => {
                 <DropdownMenuContent align="end">
                   {!isViewingModels ? (
                     <>
-                      <DropdownMenuItem onClick={() => addStudentCard()}>Add Student</DropdownMenuItem>
-                      <DropdownMenuItem onClick={async () => {
+                      <DropdownMenuItem disabled={isLocked} onClick={() => { if (!isLocked) addStudentCard(); }}>Add Student</DropdownMenuItem>
+                      <DropdownMenuItem disabled={isLocked} onClick={async () => {
+                        if (isLocked) return;
                         try {
                           const items = await aiService.listStudentsWithImages();
                           const byId = new Map(allStudents.map(s => [s.id, s]));
@@ -1140,7 +1143,10 @@ const SignatureAI = () => {
                               .filter(s => !existingIds.has(s.id))
                               .map(s => ({ id: `${Date.now()}-${s.id}`, student: s, genuineFiles: [], forgedFiles: [], isExpanded: true }));
                             addedIds = newCards.map(c => (c.student as any).id);
-                            return [...prev, ...newCards];
+                            const merged = [...prev, ...newCards];
+                            // Remove placeholder empty card if real students exist
+                            const hasReal = merged.some(c => !!c.student);
+                            return hasReal ? merged.filter(c => c.student) : merged;
                           });
                           // For each added student, load their images and populate previews
                           for (const sid of addedIds) {
@@ -1163,7 +1169,8 @@ const SignatureAI = () => {
                           toast({ title: 'Error', description: 'Failed to load students with images', variant: 'destructive' });
                         }
                       }}>Load students with images</DropdownMenuItem>
-                      <DropdownMenuItem onClick={async () => {
+                      <DropdownMenuItem disabled={isLocked} onClick={async () => {
+                        if (isLocked) return;
                         setIsViewingModels(true);
                         setIsLoadingModels(true);
                         setSelectedDate(null);
@@ -1219,11 +1226,12 @@ const SignatureAI = () => {
                         onOpenImageModal={openImageModal}
                         onRemoveAllSamples={removeAllSamples}
                         onCardClick={() => openStudentFormDialog(card.id)}
+                        locked={isLocked}
                       />
                     </div>
                   ))}
                   {/* Add Student Placeholder */}
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg hover:border-gray-400 transition-colors cursor-pointer h-10 flex items-center justify-center px-2" onClick={addStudentCard}>
+                  <div className={`border-2 border-dashed border-gray-300 rounded-lg ${isLocked ? 'opacity-50 cursor-not-allowed' : 'hover:border-gray-400 cursor-pointer'} transition-colors h-10 flex items-center justify-center px-2`} onClick={() => { if (!isLocked) addStudentCard(); }}>
                     <div className="text-sm text-gray-500 hover:text-gray-600">
                       Add Student
                     </div>
@@ -1419,7 +1427,8 @@ const SignatureAI = () => {
                         type="checkbox"
                         id="use-gpu"
                         checked={useGPU}
-                        onChange={(e) => setUseGPU(e.target.checked)}
+                        onChange={(e) => { if (!isLocked) setUseGPU(e.target.checked); }}
+                        disabled={isLocked}
                         className="rounded border-gray-300"
                       />
                       <Label htmlFor="use-gpu" className="text-muted-foreground">

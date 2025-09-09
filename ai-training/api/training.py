@@ -9,12 +9,15 @@ from datetime import datetime
 import time
 import logging
 import asyncio
+import keras
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 from utils.storage import save_to_supabase, cleanup_local_file
 from utils.s3_storage import upload_model_file
+from utils.direct_s3_saving import save_signature_models_directly, DirectS3ModelSaver
+from utils.optimized_s3_saving import save_signature_models_optimized
 from utils.job_queue import job_queue
 from utils.training_callback import RealTimeMetricsCallback
 from utils.aws_gpu_training import gpu_training_manager
@@ -140,7 +143,7 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
     return results
 
 
-async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None) -> dict:
+async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None) -> dict:
     """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
     # Build training_data in the format expected by SignatureEmbeddingModel
     training_data = {
@@ -173,52 +176,119 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=1)
-    result_models = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
-
-    # Persist models
-    model_uuid = str(uuid.uuid4())
-    base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
-    os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-    local_manager.save_models(base_path)
-
-    # Upload
-    model_files = [
-        (f"{base_path}_embedding.keras", "embedding"),
-        (f"{base_path}_classification.keras", "classification"),
-        (f"{base_path}_authenticity.keras", "authenticity"),
-        (f"{base_path}_siamese.keras", "siamese"),
+    # Prepare data once and train authenticity-only to avoid softmax(num_classes=1) issues
+    X, _y_student, y_auth = local_manager.prepare_training_data(training_data)
+    local_manager.create_embedding_network()
+    local_manager.create_authenticity_head()
+    # Minimal, robust callbacks for small per-student datasets
+    callbacks = [
+        keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
+        keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1),
     ]
-    s3_urls = {}
-    s3_keys = {}
-    for file_path, model_type in model_files:
-        if os.path.exists(file_path):
-            with open(file_path, 'rb') as f:
-                model_data = f.read()
-            s3_key, s3_url = upload_model_file(model_data, "individual", f"{model_type}_{model_uuid}", "keras")
-            s3_urls[model_type] = s3_url
-            s3_keys[model_type] = s3_key
-            cleanup_local_file(file_path)
-    cleanup_local_file(f"{base_path}_mappings.json")
+    authenticity_history = local_manager.authenticity_head.fit(
+        X, y_auth,
+        batch_size=min(16, len(X)) or 1,
+        epochs=max(10, min(25, settings.MODEL_EPOCHS)),
+        validation_split=0.2,
+        callbacks=callbacks,
+        verbose=1
+    )
 
-    # Record in DB
-    model_record = await db_manager.create_trained_model({
+    # Save models directly to S3 (no local files)
+    model_uuid = str(uuid.uuid4())
+    try:
+        # Use optimized S3 saving first (JSON serialization)
+        uploaded_files = save_signature_models_optimized(
+            local_manager, 
+            "individual", 
+            model_uuid
+        )
+        
+        # Extract URLs and keys from uploaded files
+        s3_urls = {}
+        s3_keys = {}
+        for model_type, file_info in uploaded_files.items():
+            s3_urls[model_type] = file_info['url']
+            s3_keys[model_type] = file_info['key']
+            
+        logger.info(f"✅ Individual model {model_uuid} saved with optimized S3 saving")
+        
+    except Exception as e:
+        logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
+        try:
+            # Fallback to direct S3 saving
+            uploaded_files = save_signature_models_directly(
+                local_manager, 
+                "individual", 
+                model_uuid
+            )
+            
+            # Extract URLs and keys from uploaded files
+            s3_urls = {}
+            s3_keys = {}
+            for model_type, file_info in uploaded_files.items():
+                s3_urls[model_type] = file_info['url']
+                s3_keys[model_type] = file_info['key']
+                
+            logger.info(f"✅ Individual model {model_uuid} saved with direct S3 saving")
+            
+        except Exception as e2:
+            logger.error(f"❌ Both optimized and direct S3 saving failed: {e2}")
+            # Final fallback to original method
+        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
+        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+        local_manager.save_models(base_path)
+
+        model_files = [
+            (f"{base_path}_embedding.keras", "embedding"),
+            (f"{base_path}_authenticity.keras", "authenticity"),
+        ]
+        s3_urls = {}
+        s3_keys = {}
+        for file_path, model_type in model_files:
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    model_data = f.read()
+                s3_key, s3_url = upload_model_file(model_data, "individual", f"{model_type}_{model_uuid}", "keras")
+                s3_urls[model_type] = s3_url
+                s3_keys[model_type] = s3_key
+                cleanup_local_file(file_path)
+        cleanup_local_file(f"{base_path}_mappings.json")
+
+    # Record in DB (with optional global_model_id linkage)
+    payload = {
         "student_id": int(student["id"]),
-        "model_path": s3_urls.get("classification", ""),
+        # For per-student models, store authenticity head as primary path
+        "model_path": s3_urls.get("authenticity", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "s3_key": s3_keys.get("classification", ""),
+        "s3_key": s3_keys.get("authenticity", ""),
         "model_uuid": model_uuid,
         "status": "completed",
         "sample_count": len(genuine_arrays) + len(forged_arrays),
         "genuine_count": len(genuine_arrays),
         "forged_count": len(forged_arrays),
         "training_date": datetime.utcnow().isoformat(),
+        "accuracy": float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
         "training_metrics": {
-            'model_type': 'ai_signature_verification',
+            'model_type': 'ai_signature_verification_individual',
             'architecture': 'signature_embedding_network',
-            'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
+            'epochs_trained': len(authenticity_history.history.get('accuracy', [])) if authenticity_history else None,
+            'final_accuracy': float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
+            'val_accuracy': float(authenticity_history.history.get('val_accuracy', [0])[-1]) if authenticity_history else None,
             'embedding_dimension': local_manager.embedding_dim,
         }
-    })
+    }
+    if global_model_id is not None:
+        payload["global_model_id"] = int(global_model_id)
+    try:
+        model_record = await db_manager.create_trained_model(payload)
+    except Exception as e:
+        # If the column global_model_id doesn't exist yet, retry without it
+        if "global_model_id" in payload:
+            payload.pop("global_model_id", None)
+            model_record = await db_manager.create_trained_model(payload)
+        else:
+            raise
 
     return {"record": model_record, "urls": s3_urls}
 
@@ -283,38 +353,80 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
 
         model_uuid = str(uuid.uuid4())
-        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
-        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-
-        # Save all models
-        signature_ai_manager.save_models(base_path)
-
-        # Upload models to S3
-        model_files = [
-            (f"{base_path}_embedding.keras", "embedding"),
-            (f"{base_path}_classification.keras", "classification"),
-            (f"{base_path}_authenticity.keras", "authenticity"),
-            (f"{base_path}_siamese.keras", "siamese")
-        ]
         
-        s3_urls = {}
-        for file_path, model_type in model_files:
-            if os.path.exists(file_path):
-                with open(file_path, 'rb') as f:
-                    model_data = f.read()
+        # Save models directly to S3 (no local files)
+        try:
+            # Use optimized S3 saving first (JSON serialization)
+            uploaded_files = save_signature_models_optimized(
+                signature_ai_manager, 
+                "individual", 
+                model_uuid
+            )
+            
+            # Extract URLs from uploaded files
+            s3_urls = {}
+            for model_type, file_info in uploaded_files.items():
+                s3_urls[model_type] = file_info['url']
                 
-                s3_key, s3_url = upload_model_file(
-                    model_data, "individual", f"{model_type}_{model_uuid}", "keras"
+            logger.info(f"✅ Main training model {model_uuid} saved with optimized S3 saving")
+            
+        except Exception as e:
+            logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
+            try:
+                # Fallback to direct S3 saving
+                uploaded_files = save_signature_models_directly(
+                    signature_ai_manager, 
+                    "individual", 
+                    model_uuid
                 )
-                s3_urls[model_type] = s3_url
                 
-                # Clean up local file
-                cleanup_local_file(file_path)
+                # Extract URLs from uploaded files
+                s3_urls = {}
+                for model_type, file_info in uploaded_files.items():
+                    s3_urls[model_type] = file_info['url']
+                    
+                logger.info(f"✅ Main training model {model_uuid} saved with direct S3 saving")
+                
+            except Exception as e2:
+                logger.error(f"❌ Both optimized and direct S3 saving failed: {e2}")
+                # Final fallback to original method
+            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
+            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
 
-        # Clean up mappings file
-        cleanup_local_file(f"{base_path}_mappings.json")
+            # Save all models
+            signature_ai_manager.save_models(base_path)
+
+            # Upload models to S3
+            model_files = [
+                (f"{base_path}_embedding.keras", "embedding"),
+                (f"{base_path}_classification.keras", "classification"),
+                (f"{base_path}_authenticity.keras", "authenticity"),
+                (f"{base_path}_siamese.keras", "siamese")
+            ]
+            
+            s3_urls = {}
+            for file_path, model_type in model_files:
+                if os.path.exists(file_path):
+                    with open(file_path, 'rb') as f:
+                        model_data = f.read()
+                    
+                    s3_key, s3_url = upload_model_file(
+                        model_data, "individual", f"{model_type}_{model_uuid}", "keras"
+                    )
+                    s3_urls[model_type] = s3_url
+                    
+                    # Clean up local file
+                    cleanup_local_file(file_path)
+
+            # Clean up mappings file
+            cleanup_local_file(f"{base_path}_mappings.json")
 
         # Create model record with comprehensive metrics
+        # Prefer classification accuracy; fallback to authenticity, then siamese
+        _cls_acc = float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None
+        _auth_acc = float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None
+        _sia_acc = float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None
+        top_level_accuracy = next((a for a in [_cls_acc, _auth_acc, _sia_acc] if a is not None), None)
         model_record = await db_manager.create_trained_model({
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
@@ -324,12 +436,13 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             "genuine_count": len(genuine_images),
             "forged_count": len(forged_images),
             "training_date": datetime.utcnow().isoformat(),
+            "accuracy": top_level_accuracy,
             "training_metrics": {
                 'model_type': 'ai_signature_verification',
                 'architecture': 'signature_embedding_network',
-                'student_recognition_accuracy': float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None,
-                'authenticity_accuracy': float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None,
-                'siamese_accuracy': float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None,
+                'student_recognition_accuracy': _cls_acc,
+                'authenticity_accuracy': _auth_acc,
+                'siamese_accuracy': _sia_acc,
                 'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
                 'embedding_dimension': signature_ai_manager.embedding_dim,
                 'model_parameters': sum([
@@ -608,24 +721,33 @@ async def train_global_model():
         gsm = GlobalSignatureVerificationModel()
         history = gsm.train_global_model(data_by_student)
         
-        # Save global model to S3
+        # Save global model directly to S3 (no local files)
         model_uuid = str(uuid.uuid4())
-        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
-        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-        
-        # Save model locally first
-        gsm.save_model(f"{base_path}.keras")
-        
-        # Upload to S3
-        with open(f"{base_path}.keras", 'rb') as f:
-            model_data = f.read()
-        
-        s3_key, s3_url = upload_model_file(
-            model_data, "global", f"global_{model_uuid}", "keras"
-        )
-        
-        # Clean up local file
-        cleanup_local_file(f"{base_path}.keras")
+        try:
+            # Use direct S3 saving to eliminate two-step process
+            from utils.direct_s3_saving import save_global_model_directly
+            s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
+            logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to save global model directly to S3: {e}")
+            # Fallback to original method if direct S3 saving fails
+            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+            
+            # Save model locally first
+            gsm.save_model(f"{base_path}.keras")
+            
+            # Upload to S3
+            with open(f"{base_path}.keras", 'rb') as f:
+                model_data = f.read()
+            
+            s3_key, s3_url = upload_model_file(
+                model_data, "global", f"global_{model_uuid}", "keras"
+            )
+            
+            # Clean up local file
+            cleanup_local_file(f"{base_path}.keras")
         
         # Store global model record in dedicated global table
         model_record = await db_manager.create_global_model({
@@ -727,6 +849,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 "genuine_count": len(genuine_images),
                 "forged_count": len(forged_images),
                 "training_date": datetime.utcnow().isoformat(),
+                # GPU flow may not return per-head accuracies; leave overall accuracy empty here
                 "training_metrics": {
                     'model_type': 'ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
@@ -857,7 +980,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                     sid = int(s["id"])  # type: ignore[index]
                     bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
                     if bucket["genuine_images"] and bucket["forged_images"]:
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job)
+                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                         individual_count += 1
             except Exception as e:
                 logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
@@ -999,7 +1122,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
                 sid = int(s["id"])  # type: ignore[index]
                 bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
                 if bucket["genuine_images"] and bucket["forged_images"]:
-                    await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job)
+                    await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                     individual_count += 1
         except Exception as e:
             logger.warning(f"Hybrid individual training (post-global local) encountered an error: {e}")
