@@ -293,7 +293,6 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     # Reduce pauses by clearing TF session and triggering GC
     try:
         import gc
-        from tensorflow import keras
         keras.backend.clear_session()
         gc.collect()
     except Exception:
@@ -372,10 +371,13 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 model_uuid
             )
             
-            # Extract URLs from uploaded files
+            # Extract URLs and KEYS from uploaded files
             s3_urls = {}
+            s3_keys = {}
             for model_type, file_info in uploaded_files.items():
-                s3_urls[model_type] = file_info['url']
+                s3_urls[model_type] = file_info.get('url')
+                if 'key' in file_info:
+                    s3_keys[model_type] = file_info['key']
                 
             logger.info(f"✅ Main training model {model_uuid} saved with optimized S3 saving")
             
@@ -389,10 +391,13 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                     model_uuid
                 )
                 
-                # Extract URLs from uploaded files
+                # Extract URLs and KEYS from uploaded files
                 s3_urls = {}
+                s3_keys = {}
                 for model_type, file_info in uploaded_files.items():
-                    s3_urls[model_type] = file_info['url']
+                    s3_urls[model_type] = file_info.get('url')
+                    if 'key' in file_info:
+                        s3_keys[model_type] = file_info['key']
                     
                 logger.info(f"✅ Main training model {model_uuid} saved with direct S3 saving")
                 
@@ -423,6 +428,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                         model_data, "individual", f"{model_type}_{model_uuid}", "keras"
                     )
                     s3_urls[model_type] = s3_url
+                    s3_keys[model_type] = s3_key
                     
                     # Clean up local file
                     cleanup_local_file(file_path)
@@ -440,6 +446,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
             "embedding_model_path": s3_urls.get("embedding", ""),
+            "s3_key": s3_keys.get("classification", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
             "genuine_count": len(genuine_images),
@@ -1057,21 +1064,22 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         gsm = GlobalSignatureVerificationModel()
         history = gsm.train_global_model(training_data)
         
-        # Save global model to S3
+        # Save global model directly to S3 (no local files)
         model_uuid = str(uuid.uuid4())
-        base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
-        os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-        
-        gsm.save_model(f"{base_path}.keras")
-        
-        with open(f"{base_path}.keras", 'rb') as f:
-            model_data = f.read()
-        
-        s3_key, s3_url = upload_model_file(
-            model_data, "global", f"global_{model_uuid}", "keras"
-        )
-        
-        cleanup_local_file(f"{base_path}.keras")
+        try:
+            from utils.direct_s3_saving import save_global_model_directly
+            s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
+            logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+        except Exception as e:
+            logger.error(f"❌ Failed to save global model directly to S3: {e}")
+            # Fallback to local save → upload → cleanup
+            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+            gsm.save_model(f"{base_path}.keras")
+            with open(f"{base_path}.keras", 'rb') as f:
+                model_data = f.read()
+            s3_key, s3_url = upload_model_file(model_data, "global", f"global_{model_uuid}", "keras")
+            cleanup_local_file(f"{base_path}.keras")
         
         # Compute and cache centroids for verification speed
         try:

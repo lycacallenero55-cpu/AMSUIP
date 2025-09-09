@@ -3,7 +3,7 @@ from typing import Optional, List
 import hashlib
 
 from models.database import db_manager
-from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key
+from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key, object_exists
 from config import settings
 
 
@@ -54,12 +54,14 @@ async def upload_signature(
 async def list_signatures(student_id: int):
     try:
         rows = await db_manager.list_student_signatures(student_id)
-        if settings.S3_USE_PRESIGNED_GET:
-            for r in rows:
-                key = r.get("s3_key") or _derive_s3_key_from_url(r.get("s3_url", ""))  # type: ignore[attr-defined]
-                if key:
+        filtered = []
+        for r in rows:
+            key = r.get("s3_key") or _derive_s3_key_from_url(r.get("s3_url", ""))  # type: ignore[attr-defined]
+            if key and object_exists(key):
+                if settings.S3_USE_PRESIGNED_GET:
                     r["s3_url"] = create_presigned_get(key)  # type: ignore[index]
-        return {"signatures": rows}
+                filtered.append(r)
+        return {"signatures": filtered}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List failed: {str(e)}")
 
@@ -123,13 +125,15 @@ async def delete_signature(record_id: int, s3_key: Optional[str] = None):
 async def students_with_images():
     try:
         items = await db_manager.list_students_with_images()
-        # Optionally presign GETs for each url
-        if settings.S3_USE_PRESIGNED_GET:
-            for it in items:
-                for s in it.get("signatures", []):
-                    key = _derive_s3_key_from_url(s.get("s3_url", ""))
-                    if key:
+        for it in items:
+            valid = []
+            for s in it.get("signatures", []):
+                key = _derive_s3_key_from_url(s.get("s3_url", "")) or s.get("s3_key")
+                if key and object_exists(key):
+                    if settings.S3_USE_PRESIGNED_GET:
                         s["s3_url"] = create_presigned_get(key)
+                    valid.append(s)
+            it["signatures"] = valid
         return {"items": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List students failed: {str(e)}")

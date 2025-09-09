@@ -233,12 +233,13 @@ async def identify_signature_owner(
 
             latest_model = max(eligible, key=lambda x: x.get("created_at", ""))
             
-            # Load legacy model
+            # Load legacy/individual model by key first, then URL
             try:
-                model_path = latest_model.get("model_path")
+                model_path = latest_model.get("model_path") or ""
+                model_key = latest_model.get("s3_key") or None
                 # Prefer authenticity/embedding paths if present (per-student training)
-                embed_path = latest_model.get("embedding_model_path")
-                auth_path = latest_model.get("authenticity_model_path")
+                embed_path = latest_model.get("embedding_model_path") or ""
+                auth_path = latest_model.get("authenticity_model_path") or ""
                 if embed_path:
                     signature_ai_manager.embedding_model = await (
                         load_model_from_s3(embed_path) if (embed_path.startswith('https://') and 'amazonaws.com' in embed_path) else load_model_from_supabase(embed_path)
@@ -248,10 +249,24 @@ async def identify_signature_owner(
                         load_model_from_s3(auth_path) if (auth_path.startswith('https://') and 'amazonaws.com' in auth_path) else load_model_from_supabase(auth_path)
                     )
                 if model_path and not auth_path and not embed_path:
-                    # legacy single path (classification)
-                    signature_ai_manager.classification_head = await (
-                        load_model_from_s3(model_path) if (model_path.startswith('https://') and 'amazonaws.com' in model_path) else load_model_from_supabase(model_path)
-                    )
+                    # legacy single path (classification). Try by S3 key first
+                    if model_key:
+                        from utils.s3_storage import download_model_file
+                        from tensorflow import keras
+                        import tempfile, os
+                        data = download_model_file(model_key)
+                        suffix = '.keras' if model_key.endswith('.keras') else '.h5'
+                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                        try:
+                            tmp.write(data); tmp.flush(); tmp.close()
+                            signature_ai_manager.classification_head = keras.models.load_model(tmp.name)
+                        finally:
+                            try: os.unlink(tmp.name)
+                            except OSError: pass
+                    else:
+                        signature_ai_manager.classification_head = await (
+                            load_model_from_s3(model_path) if (model_path.startswith('https://') and 'amazonaws.com' in model_path) else load_model_from_supabase(model_path)
+                        )
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("identify")

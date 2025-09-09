@@ -186,3 +186,11 @@ def download_bytes(s3_key: str) -> bytes:
     return response['Body'].read()
 
 
+def object_exists(s3_key: str) -> bool:
+    """Check if an S3 object exists via HEAD request."""
+    try:
+        _s3.head_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+        return True
+    except Exception:
+        return False
+
