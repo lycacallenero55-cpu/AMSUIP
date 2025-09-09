@@ -3,6 +3,7 @@ from typing import Optional
 from PIL import Image
 import io
 import logging
+from datetime import datetime
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
@@ -17,12 +18,47 @@ from config import settings
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+@router.get("/health")
+async def verification_health():
+    """Health check for verification system"""
+    try:
+        # Check if we can access the database
+        has_db = False
+        try:
+            await db_manager.get_trained_models()
+            has_db = True
+        except Exception as e:
+            logger.warning(f"Database check failed: {e}")
+        
+        # Check if we have any trained models
+        model_count = 0
+        try:
+            models = await db_manager.get_trained_models()
+            model_count = len(models) if models else 0
+        except Exception as e:
+            logger.warning(f"Model count check failed: {e}")
+        
+        return {
+            "status": "healthy" if has_db else "degraded",
+            "database_available": has_db,
+            "trained_models_count": model_count,
+            "preprocessor_available": preprocessor is not None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 # Global model instance
 signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
-def _get_fallback_response(endpoint_type="identify", student_id=None):
-    """Return a fallback response when database is unavailable"""
+def _get_fallback_response(endpoint_type="identify", student_id=None, error_message="System temporarily unavailable"):
+    """Return a fallback response when system is unavailable"""
     base_response = {
         "is_match": False,
         "confidence": 0.0,
@@ -32,12 +68,13 @@ def _get_fallback_response(endpoint_type="identify", student_id=None):
         "authenticity_score": 0.0,
         "predicted_student": {
             "id": 0,
-            "name": "Database Unavailable"
+            "name": "System Unavailable"
         },
         "is_unknown": True,
-        "model_type": "database_unavailable",
+        "model_type": "system_unavailable",
         "ai_architecture": "none",
-        "error": "Database connection failed. Please check your Supabase configuration."
+        "error": error_message,
+        "success": False
     }
     
     if endpoint_type == "verify":
@@ -149,33 +186,78 @@ async def identify_signature_owner(
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
             
-            # Load AI models
+            # Load AI models with proper error handling
             try:
+                # Create a fresh model manager for this request
+                from models.signature_embedding_model import SignatureEmbeddingModel
+                request_model_manager = SignatureEmbeddingModel(max_students=150)
+                
                 for model_type, model_path in model_paths.items():
-                    if model_path:
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                            model = await load_model_from_s3(model_path)
-                        else:
-                            model = await load_model_from_supabase(model_path)
+                    if not model_path:
+                        continue
                         
-                        # Set the appropriate model
-                        if model_type == 'embedding':
-                            signature_ai_manager.embedding_model = model
-                        elif model_type == 'classification':
-                            signature_ai_manager.classification_head = model
-                        elif model_type == 'authenticity':
-                            signature_ai_manager.authenticity_head = model
-                        elif model_type == 'siamese':
-                            signature_ai_manager.siamese_model = model
+                    try:
+                        # Load model from S3 or Supabase
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            # Download model from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(model_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            # Save to temporary file and load
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                model = keras.models.load_model(tmp_path)
+                                
+                                # Set the appropriate model
+                                if model_type == 'embedding':
+                                    request_model_manager.embedding_model = model
+                                elif model_type == 'classification':
+                                    request_model_manager.classification_head = model
+                                elif model_type == 'authenticity':
+                                    request_model_manager.authenticity_head = model
+                                elif model_type == 'siamese':
+                                    request_model_manager.siamese_model = model
+                                    
+                            finally:
+                                # Clean up temp file
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            # Load from Supabase (implement if needed)
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to load {model_type} model from {model_path}: {e}")
+                        continue
                 
                 # Load student mappings
                 mappings_path = latest_ai_model.get("mappings_path")
                 if mappings_path:
-                    import json
-                    import requests
-                    mappings_data = requests.get(mappings_path).json()
-                    signature_ai_manager.student_to_id = mappings_data['student_to_id']
-                    signature_ai_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    try:
+                        import json
+                        import requests
+                        mappings_response = requests.get(mappings_path, timeout=10)
+                        mappings_response.raise_for_status()
+                        mappings_data = mappings_response.json()
+                        request_model_manager.student_to_id = mappings_data['student_to_id']
+                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    except Exception as e:
+                        logger.error(f"Failed to load student mappings: {e}")
+                        # Continue without mappings - will use fallback
+                
+                # Use the request-specific model manager
+                signature_ai_manager = request_model_manager
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
@@ -332,6 +414,17 @@ async def identify_signature_owner(
 
         # Individual model inference to get overall confidence
         try:
+            # Check if we have any loaded models
+            has_any_model = (
+                signature_ai_manager.embedding_model is not None or
+                signature_ai_manager.classification_head is not None or
+                signature_ai_manager.authenticity_head is not None
+            )
+            
+            if not has_any_model:
+                logger.warning("No models loaded for verification")
+                return _get_fallback_response("identify")
+            
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
         except ValueError as e:
@@ -361,7 +454,8 @@ async def identify_signature_owner(
             "authenticity_score": result["authenticity_score"],
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
-            "ai_architecture": "signature_embedding_network"
+            "ai_architecture": "signature_embedding_network",
+            "success": True
         }
         
     except HTTPException:
@@ -402,30 +496,76 @@ async def verify_signature(
             }
             
             try:
+                # Create a fresh model manager for this request
+                from models.signature_embedding_model import SignatureEmbeddingModel
+                request_model_manager = SignatureEmbeddingModel(max_students=150)
+                
                 for model_type, model_path in model_paths.items():
-                    if model_path:
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                            model = await load_model_from_s3(model_path)
-                        else:
-                            model = await load_model_from_supabase(model_path)
+                    if not model_path:
+                        continue
                         
-                        if model_type == 'embedding':
-                            signature_ai_manager.embedding_model = model
-                        elif model_type == 'classification':
-                            signature_ai_manager.classification_head = model
-                        elif model_type == 'authenticity':
-                            signature_ai_manager.authenticity_head = model
-                        elif model_type == 'siamese':
-                            signature_ai_manager.siamese_model = model
+                    try:
+                        # Load model from S3 or Supabase
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            # Download model from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(model_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            # Save to temporary file and load
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                model = keras.models.load_model(tmp_path)
+                                
+                                # Set the appropriate model
+                                if model_type == 'embedding':
+                                    request_model_manager.embedding_model = model
+                                elif model_type == 'classification':
+                                    request_model_manager.classification_head = model
+                                elif model_type == 'authenticity':
+                                    request_model_manager.authenticity_head = model
+                                elif model_type == 'siamese':
+                                    request_model_manager.siamese_model = model
+                                    
+                            finally:
+                                # Clean up temp file
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            # Load from Supabase (implement if needed)
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to load {model_type} model from {model_path}: {e}")
+                        continue
                 
                 # Load student mappings
                 mappings_path = latest_ai_model.get("mappings_path")
                 if mappings_path:
-                    import json
-                    import requests
-                    mappings_data = requests.get(mappings_path).json()
-                    signature_ai_manager.student_to_id = mappings_data['student_to_id']
-                    signature_ai_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    try:
+                        import json
+                        import requests
+                        mappings_response = requests.get(mappings_path, timeout=10)
+                        mappings_response.raise_for_status()
+                        mappings_data = mappings_response.json()
+                        request_model_manager.student_to_id = mappings_data['student_to_id']
+                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    except Exception as e:
+                        logger.error(f"Failed to load student mappings: {e}")
+                        # Continue without mappings - will use fallback
+                
+                # Use the request-specific model manager
+                signature_ai_manager = request_model_manager
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
@@ -515,6 +655,17 @@ async def verify_signature(
 
         # Individual model inference
         try:
+            # Check if we have any loaded models
+            has_any_model = (
+                signature_ai_manager.embedding_model is not None or
+                signature_ai_manager.classification_head is not None or
+                signature_ai_manager.authenticity_head is not None
+            )
+            
+            if not has_any_model:
+                logger.warning("No models loaded for verification")
+                return _get_fallback_response("verify", student_id)
+            
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
         except ValueError as e:
@@ -552,7 +703,8 @@ async def verify_signature(
             "is_genuine": result["is_genuine"],
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
-            "ai_architecture": "signature_embedding_network"
+            "ai_architecture": "signature_embedding_network",
+            "success": True
         }
         
     except HTTPException:
