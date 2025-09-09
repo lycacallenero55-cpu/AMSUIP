@@ -26,6 +26,7 @@ def _get_fallback_response(endpoint_type="identify", student_id=None):
     base_response = {
         "is_match": False,
         "confidence": 0.0,
+        "score": 0.0,
         "global_score": None,
         "student_confidence": 0.0,
         "authenticity_score": 0.0,
@@ -354,6 +355,7 @@ async def identify_signature_owner(
             },
             "is_match": result["is_genuine"],
             "confidence": float(combined_confidence),
+            "score": float(combined_confidence),
             "global_score": hybrid.get("global_score"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
@@ -537,6 +539,7 @@ async def verify_signature(
         return {
             "is_match": is_match,
             "confidence": float(combined_confidence),
+            "score": float(combined_confidence),
             "global_score": hybrid.get("global_score"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
