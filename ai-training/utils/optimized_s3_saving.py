@@ -110,8 +110,8 @@ def _deserialize_model_from_bytes(data: bytes) -> keras.Model:
         config = model_data['config']
         weights = [np.array(w) for w in model_data['weights']]
         
-        # Recreate model from config and weights
-        model = keras.Model.from_config(config)
+        # Recreate model from config and weights with safe_mode=False for Lambda layers
+        model = keras.Model.from_config(config, safe_mode=False)
         model.set_weights(weights)
         return model
         
@@ -127,7 +127,7 @@ def _deserialize_model_from_bytes(data: bytes) -> keras.Model:
         try:
             with open(tmp_path, 'wb') as f:
                 f.write(data)
-            return keras.models.load_model(tmp_path)
+            return keras.models.load_model(tmp_path, safe_mode=False)
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

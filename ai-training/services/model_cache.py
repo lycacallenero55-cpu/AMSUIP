@@ -78,7 +78,7 @@ class ModelCache:
                                 logger.info(f"✅ Loaded embedding model using custom deserialization")
                             except Exception as custom_error:
                                 logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
-                                model = keras.models.load_model(tmp_path)
+                                model = keras.models.load_model(tmp_path, safe_mode=False)
                                 logger.info(f"✅ Loaded embedding model using standard Keras")
                             return model
                         finally:
@@ -120,7 +120,7 @@ class ModelCache:
                         logger.info(f"✅ Loaded full model using custom deserialization")
                     except Exception as custom_error:
                         logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
-                        model = keras.models.load_model(tmp_path)
+                        model = keras.models.load_model(tmp_path, safe_mode=False)
                         logger.info(f"✅ Loaded full model using standard Keras")
                     return model
                 finally:
