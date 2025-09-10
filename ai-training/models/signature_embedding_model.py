@@ -552,11 +552,11 @@ class SignatureEmbeddingModel:
             student_confidence = float(np.max(student_probs))
             
             # CRITICAL FIX: Ensure we only predict students that exist in our training data
-            if predicted_student_id not in self.id_to_student:
-                # If predicted ID doesn't exist in our mappings, mark as unknown
+            if not self.id_to_student or predicted_student_id not in self.id_to_student:
+                # If no mappings loaded or predicted ID doesn't exist, mark as unknown
                 predicted_student_id = 0
                 student_confidence = 0.0
-                logger.warning(f"Predicted student ID {predicted_student_id} not found in training data")
+                logger.warning(f"Predicted student ID {predicted_student_id} not found in training data (mappings: {len(self.id_to_student) if self.id_to_student else 0})")
         
         # Authenticity detection
         authenticity_score = 0.0
