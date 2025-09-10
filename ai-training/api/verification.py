@@ -669,6 +669,7 @@ async def identify_signature_owner(
                 import numpy as np
                 best_sid = None
                 best_score = -1.0
+                second_best = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
                         centroid = np.array(centroid)
@@ -678,8 +679,11 @@ async def identify_signature_owner(
                         # Tuned scaling to avoid near-1.0 inflation
                         score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
+                            second_best = best_score
                             best_score = score01
                             best_sid = sid
+                        elif score01 > second_best:
+                            second_best = score01
                 else:
                     # Fallback: compute quick centroids online
                     candidate_ids = await _list_candidate_student_ids(limit=50)
@@ -695,11 +699,16 @@ async def identify_signature_owner(
                         # Tuned scaling to avoid near-1.0 inflation
                         score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
+                            second_best = best_score
                             best_score = score01
                             best_sid = sid
+                        elif score01 > second_best:
+                            second_best = score01
                 if best_sid is not None:
                     predicted_owner_id = int(best_sid)
                     hybrid["global_score"] = float(best_score)
+                    if second_best >= 0:
+                        hybrid["global_margin"] = float(best_score - second_best)
         except Exception as e:
             logger.warning(f"Global-first selection failed: {e}")
 
@@ -742,9 +751,16 @@ async def identify_signature_owner(
         # Apply robust unknown/match logic
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         has_auth = signature_ai_manager.authenticity_head is not None
-        # Stricter unknown thresholding
-        is_unknown = (student_confidence < 0.60 and global_score < 0.65)
+        # Stricter unknown thresholding with margin requirement
+        is_unknown = True
+        if (global_score >= 0.70 and global_margin >= 0.05):
+            # Accept only if global is confident AND separated
+            if has_auth:
+                is_unknown = not bool(result.get("is_genuine", False))
+            else:
+                is_unknown = False
         result["is_unknown"] = is_unknown
 
         # Determine match logic for identify: do not gate on authenticity if head absent
@@ -762,12 +778,13 @@ async def identify_signature_owner(
             "name": "Unknown" if is_unknown else result["predicted_student_name"],
         }
 
-        return {
+        response_obj = {
             "predicted_student": predicted_block,
             "is_match": is_match,
             "confidence": float(combined_confidence),
             "score": float(combined_confidence),
             "global_score": hybrid.get("global_score"),
+            "global_margin": hybrid.get("global_margin"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
             "is_unknown": result["is_unknown"],
@@ -775,6 +792,11 @@ async def identify_signature_owner(
             "ai_architecture": "signature_embedding_network",
             "success": True
         }
+        # Back-compat fields for UI
+        response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
+        response_obj["predicted_student_name"] = "Unknown" if is_unknown else result["predicted_student_name"]
+        response_obj["is_genuine"] = is_match
+        return response_obj
         
     except HTTPException:
         raise
