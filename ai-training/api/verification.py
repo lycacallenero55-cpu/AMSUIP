@@ -393,11 +393,11 @@ async def identify_signature_owner(
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
-                            logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
-                        logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
-                        # Only log first few mappings to avoid spam
-                        sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
-                        logger.info(f"Sample student mappings: {sample_mappings}")
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            # Only log first few mappings to avoid spam
+                            sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                            logger.info(f"Sample student mappings: {sample_mappings}")
                         else:
                             logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
@@ -910,11 +910,11 @@ async def verify_signature(
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
-                            logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
-                        logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
-                        # Only log first few mappings to avoid spam
-                        sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
-                        logger.info(f"Sample student mappings: {sample_mappings}")
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            # Only log first few mappings to avoid spam
+                            sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                            logger.info(f"Sample student mappings: {sample_mappings}")
                         else:
                             logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
