@@ -554,6 +554,12 @@ class SignatureEmbeddingModel:
             student_probs = self.classification_head.predict(X_test, verbose=0)[0]
             predicted_student_id = int(np.argmax(student_probs))
             student_confidence = float(np.max(student_probs))
+            
+            # CRITICAL FIX: Ensure we only predict students that exist in our training data
+            if predicted_student_id not in self.id_to_student:
+                # If predicted ID doesn't exist in our mappings, mark as unknown
+                predicted_student_id = 0
+                student_confidence = 0.0
         
         # Authenticity detection
         authenticity_score = 0.0
@@ -573,8 +579,12 @@ class SignatureEmbeddingModel:
         else:
             overall_confidence = student_confidence
         
-        # Determine if signature is unknown
-        is_unknown = (has_classification and student_confidence < 0.3) or overall_confidence < 0.4
+        # Determine if signature is unknown - STRICTER thresholds to prevent false positives
+        is_unknown = (
+            (has_classification and student_confidence < 0.5) or  # Increased from 0.3 to 0.5
+            overall_confidence < 0.6 or  # Increased from 0.4 to 0.6
+            predicted_student_id == 0  # If no valid student ID found
+        )
         
         result = {
             'predicted_student_id': predicted_student_id,
