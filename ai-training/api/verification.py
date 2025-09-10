@@ -279,7 +279,17 @@ async def identify_signature_owner(
                                 tmp_path = tmp_file.name
                             
                             try:
-                                model = keras.models.load_model(tmp_path)
+                                # Try custom deserialization first (for optimized S3 models)
+                                try:
+                                    from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                    with open(tmp_path, 'rb') as f:
+                                        model_data = f.read()
+                                    model = _deserialize_model_from_bytes(model_data)
+                                    logger.info(f"Loaded model using custom deserialization")
+                                except Exception as custom_error:
+                                    logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                    model = keras.models.load_model(tmp_path)
+                                    logger.info(f"Loaded model using standard Keras")
                                 
                                 # Set the appropriate model
                                 if model_type == 'embedding':
@@ -459,15 +469,53 @@ async def identify_signature_owner(
                                 from utils.s3_storage import create_presigned_get
                                 presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
                                 
-                                response = requests.get(presigned_url, timeout=30)
+                                logger.info(f"Downloading {model_type} model from S3: {s3_key}")
+                                response = requests.get(presigned_url, timeout=60)
                                 response.raise_for_status()
+                                
+                                # Verify download size
+                                content_length = len(response.content)
+                                logger.info(f"Downloaded {model_type} model: {content_length} bytes")
+                                
+                                if content_length < 1000:  # Models should be much larger
+                                    raise ValueError(f"Downloaded file too small: {content_length} bytes")
                                 
                                 with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
                                     tmp_file.write(response.content)
                                     tmp_path = tmp_file.name
+                                    
+                                logger.info(f"Saved {model_type} model to: {tmp_path}")
                                 
                                 try:
-                                    signature_ai_manager.classification_head = keras.models.load_model(tmp_path)
+                                    logger.info(f"Loading {model_type} model from: {tmp_path}")
+                                    
+                                    # Try custom deserialization first (for optimized S3 models)
+                                    try:
+                                        from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                        with open(tmp_path, 'rb') as f:
+                                            model_data = f.read()
+                                        model = _deserialize_model_from_bytes(model_data)
+                                        logger.info(f"Loaded {model_type} model using custom deserialization")
+                                    except Exception as custom_error:
+                                        logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                        model = keras.models.load_model(tmp_path)
+                                        logger.info(f"Loaded {model_type} model using standard Keras")
+                                    
+                                    # Set the appropriate model
+                                    if model_type == 'embedding':
+                                        request_model_manager.embedding_model = model
+                                    elif model_type == 'classification':
+                                        request_model_manager.classification_head = model
+                                    elif model_type == 'authenticity':
+                                        request_model_manager.authenticity_head = model
+                                    elif model_type == 'siamese':
+                                        request_model_manager.siamese_model = model
+                                    
+                                    logger.info(f"Successfully loaded {model_type} model")
+                                    
+                                except Exception as load_error:
+                                    logger.error(f"Failed to load {model_type} model from {tmp_path}: {load_error}")
+                                    raise
                                 finally:
                                     try:
                                         os.unlink(tmp_path)
@@ -675,7 +723,17 @@ async def verify_signature(
                                 tmp_path = tmp_file.name
                             
                             try:
-                                model = keras.models.load_model(tmp_path)
+                                # Try custom deserialization first (for optimized S3 models)
+                                try:
+                                    from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                    with open(tmp_path, 'rb') as f:
+                                        model_data = f.read()
+                                    model = _deserialize_model_from_bytes(model_data)
+                                    logger.info(f"Loaded model using custom deserialization")
+                                except Exception as custom_error:
+                                    logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                    model = keras.models.load_model(tmp_path)
+                                    logger.info(f"Loaded model using standard Keras")
                                 
                                 # Set the appropriate model
                                 if model_type == 'embedding':

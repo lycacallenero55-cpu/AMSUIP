@@ -69,8 +69,17 @@ class ModelCache:
                             tmp_path = tmp_file.name
                         
                         try:
-                            model = keras.models.load_model(tmp_path)
-                            logger.info(f"✅ Loaded embedding model from S3")
+                            # Try custom deserialization first (for optimized S3 models)
+                            try:
+                                from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                with open(tmp_path, 'rb') as f:
+                                    model_data = f.read()
+                                model = _deserialize_model_from_bytes(model_data)
+                                logger.info(f"✅ Loaded embedding model using custom deserialization")
+                            except Exception as custom_error:
+                                logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                model = keras.models.load_model(tmp_path)
+                                logger.info(f"✅ Loaded embedding model using standard Keras")
                             return model
                         finally:
                             try:
@@ -102,8 +111,17 @@ class ModelCache:
                     tmp_path = tmp_file.name
                 
                 try:
-                    model = keras.models.load_model(tmp_path)
-                    logger.info(f"✅ Loaded full model from S3")
+                    # Try custom deserialization first (for optimized S3 models)
+                    try:
+                        from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                        with open(tmp_path, 'rb') as f:
+                            model_data = f.read()
+                        model = _deserialize_model_from_bytes(model_data)
+                        logger.info(f"✅ Loaded full model using custom deserialization")
+                    except Exception as custom_error:
+                        logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                        model = keras.models.load_model(tmp_path)
+                        logger.info(f"✅ Loaded full model using standard Keras")
                     return model
                 finally:
                     try:
