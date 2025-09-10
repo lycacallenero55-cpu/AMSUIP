@@ -9,7 +9,7 @@ from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor
 from utils.image_processing import validate_image
-from utils.storage import load_model_from_supabase, load_model_from_s3
+# Removed non-existent imports - using direct S3 download instead
 from utils.s3_storage import create_presigned_get, download_bytes
 from models.global_signature_model import GlobalSignatureVerificationModel
 import requests
@@ -372,13 +372,60 @@ async def identify_signature_owner(
                 embed_path = latest_model.get("embedding_model_path") or ""
                 auth_path = latest_model.get("authenticity_model_path") or ""
                 if embed_path:
-                    signature_ai_manager.embedding_model = await (
-                        load_model_from_s3(embed_path) if (embed_path.startswith('https://') and 'amazonaws.com' in embed_path) else load_model_from_supabase(embed_path)
-                    )
+                    try:
+                        if embed_path.startswith('https://') and 'amazonaws.com' in embed_path:
+                            # Download from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(embed_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.embedding_model = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {embed_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to load embedding model: {e}")
+                
                 if auth_path:
-                    signature_ai_manager.authenticity_head = await (
-                        load_model_from_s3(auth_path) if (auth_path.startswith('https://') and 'amazonaws.com' in auth_path) else load_model_from_supabase(auth_path)
-                    )
+                    try:
+                        if auth_path.startswith('https://') and 'amazonaws.com' in auth_path:
+                            # Download from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(auth_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.authenticity_head = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {auth_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to load authenticity model: {e}")
                 if model_path and not auth_path and not embed_path:
                     # legacy single path (classification). Try by S3 key first
                     if model_key:
@@ -395,9 +442,31 @@ async def identify_signature_owner(
                             try: os.unlink(tmp.name)
                             except OSError: pass
                     else:
-                        signature_ai_manager.classification_head = await (
-                            load_model_from_s3(model_path) if (model_path.startswith('https://') and 'amazonaws.com' in model_path) else load_model_from_supabase(model_path)
-                        )
+                        # Load model directly from S3
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            try:
+                                import tempfile
+                                import os
+                                from tensorflow import keras
+                                
+                                response = requests.get(model_path, timeout=30)
+                                response.raise_for_status()
+                                
+                                with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                    tmp_file.write(response.content)
+                                    tmp_path = tmp_file.name
+                                
+                                try:
+                                    signature_ai_manager.classification_head = keras.models.load_model(tmp_path)
+                                finally:
+                                    try:
+                                        os.unlink(tmp_path)
+                                    except:
+                                        pass
+                            except Exception as e:
+                                logger.error(f"Failed to load classification model: {e}")
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("identify")
@@ -644,9 +713,33 @@ async def verify_signature(
             try:
                 model_path = latest_model.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    signature_ai_manager.classification_head = await load_model_from_s3(model_path)
+                    # Load model directly from S3
+                    if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                        try:
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(model_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.classification_head = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        except Exception as e:
+                            logger.error(f"Failed to load classification model: {e}")
+                    else:
+                        logger.warning(f"Supabase model loading not implemented for {model_path}")
                 else:
-                    signature_ai_manager.classification_head = await load_model_from_supabase(model_path)
+                    logger.warning(f"Supabase model loading not implemented for {model_path}")
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("verify", student_id)
