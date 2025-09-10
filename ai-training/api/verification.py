@@ -358,15 +358,37 @@ async def identify_signature_owner(
                                         student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
                                         if student_response.data:
                                             student = student_response.data[0]
-                                            # Try to find a name field
+                                            logger.info(f"DEBUG: Student {student_id} fields: {list(student.keys())}")
+                                            
+                                            # Try to construct a proper name from available fields
                                             name = None
-                                            for name_col in ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']:
-                                                if student.get(name_col):
-                                                    name = student.get(name_col)
-                                                    break
-                                            if not name:
+                                            
+                                            # Try to combine first_name and last_name if available
+                                            if student.get('first_name') and student.get('last_name'):
+                                                name = f"{student['first_name']} {student['last_name']}"
+                                            elif student.get('first_name'):
+                                                name = student['first_name']
+                                            elif student.get('last_name'):
+                                                name = student['last_name']
+                                            # Try other name fields
+                                            elif student.get('full_name'):
+                                                name = student['full_name']
+                                            elif student.get('student_name'):
+                                                name = student['student_name']
+                                            elif student.get('name'):
+                                                name = student['name']
+                                            # If we have email, try to extract name from it
+                                            elif student.get('email'):
+                                                email = student['email']
+                                                # Extract name from email (before @)
+                                                email_name = email.split('@')[0]
+                                                # Convert dots and underscores to spaces and capitalize
+                                                name = email_name.replace('.', ' ').replace('_', ' ').title()
+                                            else:
                                                 name = f"Student_{student_id}"
+                                            
                                             student['name'] = name
+                                            logger.info(f"DEBUG: Student {student_id} name: {name}")
                                             students.append(student)
                                     except Exception as student_error:
                                         logger.warning(f"Failed to get student {student_id}: {student_error}")
@@ -875,15 +897,37 @@ async def verify_signature(
                                         student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
                                         if student_response.data:
                                             student = student_response.data[0]
-                                            # Try to find a name field
+                                            logger.info(f"DEBUG: Student {student_id} fields: {list(student.keys())}")
+                                            
+                                            # Try to construct a proper name from available fields
                                             name = None
-                                            for name_col in ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']:
-                                                if student.get(name_col):
-                                                    name = student.get(name_col)
-                                                    break
-                                            if not name:
+                                            
+                                            # Try to combine first_name and last_name if available
+                                            if student.get('first_name') and student.get('last_name'):
+                                                name = f"{student['first_name']} {student['last_name']}"
+                                            elif student.get('first_name'):
+                                                name = student['first_name']
+                                            elif student.get('last_name'):
+                                                name = student['last_name']
+                                            # Try other name fields
+                                            elif student.get('full_name'):
+                                                name = student['full_name']
+                                            elif student.get('student_name'):
+                                                name = student['student_name']
+                                            elif student.get('name'):
+                                                name = student['name']
+                                            # If we have email, try to extract name from it
+                                            elif student.get('email'):
+                                                email = student['email']
+                                                # Extract name from email (before @)
+                                                email_name = email.split('@')[0]
+                                                # Convert dots and underscores to spaces and capitalize
+                                                name = email_name.replace('.', ' ').replace('_', ' ').title()
+                                            else:
                                                 name = f"Student_{student_id}"
+                                            
                                             student['name'] = name
+                                            logger.info(f"DEBUG: Student {student_id} name: {name}")
                                             students.append(student)
                                     except Exception as student_error:
                                         logger.warning(f"Failed to get student {student_id}: {student_error}")
