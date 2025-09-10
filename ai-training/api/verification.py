@@ -737,6 +737,9 @@ async def identify_signature_owner(
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
+        # DEBUG: Log the final result before constructing response
+        logger.info(f"DEBUG: Final result before response: predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
+        
         return {
             "predicted_student": {
                 "id": result["predicted_student_id"],

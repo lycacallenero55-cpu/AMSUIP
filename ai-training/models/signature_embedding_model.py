@@ -596,6 +596,9 @@ class SignatureEmbeddingModel:
             if actual_ids and predicted_student_id < len(actual_ids):
                 actual_student_id = actual_ids[predicted_student_id]
                 logger.info(f"Mapped class {predicted_student_id} to actual student ID {actual_student_id}")
+                # Update the predicted student name to match the new ID
+                predicted_student_name = self.id_to_student.get(actual_student_id, f"Unknown_{actual_student_id}")
+                logger.info(f"Updated predicted student name to: {predicted_student_name}")
         
         # Calculate overall confidence
         if has_classification and has_authenticity:
