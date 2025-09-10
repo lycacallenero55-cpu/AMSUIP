@@ -14,7 +14,7 @@ import keras
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
-from utils.storage import save_to_supabase, cleanup_local_file
+# Removed unused Supabase imports - using S3 directly
 from utils.s3_storage import upload_model_file
 from utils.direct_s3_saving import save_signature_models_directly, DirectS3ModelSaver
 from utils.optimized_s3_saving import save_signature_models_optimized
