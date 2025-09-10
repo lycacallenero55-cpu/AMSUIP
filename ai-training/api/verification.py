@@ -53,6 +53,59 @@ async def verification_health():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@router.get("/debug/models")
+async def debug_models():
+    """Debug endpoint to check model availability"""
+    try:
+        # Check database connection
+        db_status = "connected"
+        try:
+            await db_manager.get_trained_models()
+        except Exception as e:
+            db_status = f"error: {str(e)}"
+        
+        # Check for AI models
+        ai_model_info = None
+        if hasattr(db_manager, 'get_latest_ai_model'):
+            try:
+                latest_ai = await db_manager.get_latest_ai_model()
+                if latest_ai:
+                    ai_model_info = {
+                        "id": latest_ai.get("id"),
+                        "status": latest_ai.get("status"),
+                        "embedding_path": latest_ai.get("embedding_model_path"),
+                        "classification_path": latest_ai.get("model_path"),
+                        "authenticity_path": latest_ai.get("authenticity_model_path"),
+                        "mappings_path": latest_ai.get("mappings_path")
+                    }
+                else:
+                    ai_model_info = "No AI models found"
+            except Exception as e:
+                ai_model_info = f"Error loading AI model: {str(e)}"
+        else:
+            ai_model_info = "get_latest_ai_model method not available"
+        
+        # Check legacy models
+        legacy_models = []
+        try:
+            models = await db_manager.get_trained_models()
+            if models:
+                legacy_models = [{"id": m.get("id"), "status": m.get("status"), "type": m.get("training_metrics", {}).get("model_type")} for m in models[:5]]
+        except Exception as e:
+            legacy_models = f"Error loading legacy models: {str(e)}"
+        
+        return {
+            "database_status": db_status,
+            "ai_model_info": ai_model_info,
+            "legacy_models": legacy_models,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 # Global model instance
 signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
@@ -171,20 +224,27 @@ async def identify_signature_owner(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Try to get latest AI model first, fallback to legacy models
+        latest_ai_model = None
         try:
-            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+            if hasattr(db_manager, 'get_latest_ai_model'):
+                latest_ai_model = await db_manager.get_latest_ai_model()
+                logger.info(f"Latest AI model found: {latest_ai_model is not None}")
+            else:
+                logger.warning("get_latest_ai_model method not available")
         except Exception as e:
-            logger.warning(f"Database connection failed: {e}")
-            return _get_fallback_response("identify")
+            logger.error(f"Database connection failed: {e}")
+            return _get_fallback_response("identify", error_message=f"Database error: {str(e)}")
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Use new AI model
+            logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
                 'classification': latest_ai_model.get("model_path"),
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
+            logger.info(f"Model paths: {model_paths}")
             
             # Load AI models with proper error handling
             try:
@@ -263,29 +323,17 @@ async def identify_signature_owner(
                 logger.error(f"Failed to load AI models: {e}")
                 return _get_fallback_response("identify")
         else:
-            # Fallback to legacy models
+            # Fallback to legacy models or return error
+            logger.warning("No AI model available, checking for legacy models...")
             try:
                 all_models = await db_manager.get_trained_models()
+                logger.info(f"Found {len(all_models) if all_models else 0} legacy models")
             except Exception as e:
-                logger.warning(f"Database connection failed: {e}")
-                return _get_fallback_response("identify")
+                logger.error(f"Database connection failed: {e}")
+                return _get_fallback_response("identify", error_message=f"Database error: {str(e)}")
             
             if not all_models:
-                return {
-                    "predicted_student": {
-                        "id": 0,
-                        "name": "No Model Available"
-                    },
-                    "is_match": False,
-                    "confidence": 0.0,
-                    "global_score": None,
-                    "student_confidence": 0.0,
-                    "authenticity_score": 0.0,
-                    "is_unknown": True,
-                    "model_type": "no_model_available",
-                    "ai_architecture": "none",
-                    "error": "No trained models available. Please train a model first."
-                }
+                return _get_fallback_response("identify", error_message="No trained models available. Please train a model first.")
 
             # Use latest completed AI model (accept individual and gpu variants)
             eligible = [
@@ -422,8 +470,8 @@ async def identify_signature_owner(
             )
             
             if not has_any_model:
-                logger.warning("No models loaded for verification")
-                return _get_fallback_response("identify")
+                logger.error("No models loaded for verification")
+                return _get_fallback_response("identify", error_message="No AI models were successfully loaded. Please check if models exist and are accessible.")
             
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
@@ -480,11 +528,16 @@ async def verify_signature(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Use the same AI model loading logic as identify
+        latest_ai_model = None
         try:
-            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+            if hasattr(db_manager, 'get_latest_ai_model'):
+                latest_ai_model = await db_manager.get_latest_ai_model()
+                logger.info(f"Latest AI model found for verify: {latest_ai_model is not None}")
+            else:
+                logger.warning("get_latest_ai_model method not available")
         except Exception as e:
-            logger.warning(f"Database connection failed: {e}")
-            return _get_fallback_response("verify", student_id)
+            logger.error(f"Database connection failed: {e}")
+            return _get_fallback_response("verify", student_id, error_message=f"Database error: {str(e)}")
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Load AI models (same as identify function)
