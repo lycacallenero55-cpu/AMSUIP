@@ -670,6 +670,8 @@ async def identify_signature_owner(
                 best_sid = None
                 best_score = -1.0
                 second_best = -1.0
+                best_cos = -1.0
+                second_cos = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
                         centroid = np.array(centroid)
@@ -680,10 +682,13 @@ async def identify_signature_owner(
                         score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             second_best = best_score
+                            second_cos = best_cos
                             best_score = score01
+                            best_cos = cosine
                             best_sid = sid
                         elif score01 > second_best:
                             second_best = score01
+                            second_cos = cosine
                 else:
                     # Fallback: compute quick centroids online
                     candidate_ids = await _list_candidate_student_ids(limit=50)
@@ -700,15 +705,21 @@ async def identify_signature_owner(
                         score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             second_best = best_score
+                            second_cos = best_cos
                             best_score = score01
+                            best_cos = cosine
                             best_sid = sid
                         elif score01 > second_best:
                             second_best = score01
+                            second_cos = cosine
                 if best_sid is not None:
                     predicted_owner_id = int(best_sid)
                     hybrid["global_score"] = float(best_score)
                     if second_best >= 0:
                         hybrid["global_margin"] = float(best_score - second_best)
+                        if second_cos >= -1.0:
+                            # Raw cosine margin (0..2 range typical around -1..1)
+                            hybrid["global_margin_raw"] = float(best_cos - second_cos)
         except Exception as e:
             logger.warning(f"Global-first selection failed: {e}")
 
@@ -752,10 +763,11 @@ async def identify_signature_owner(
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
+        global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
         has_auth = signature_ai_manager.authenticity_head is not None
         # Stricter unknown thresholding with margin requirement
         is_unknown = True
-        if (global_score >= 0.70 and global_margin >= 0.05):
+        if (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02)):
             # Accept only if global is confident AND separated
             if has_auth:
                 is_unknown = not bool(result.get("is_genuine", False))
@@ -768,6 +780,15 @@ async def identify_signature_owner(
             is_match = (not is_unknown) and bool(result.get("is_genuine", False))
         else:
             is_match = (not is_unknown) and (student_confidence >= 0.60 or global_score >= 0.65)
+
+        # Agreement boost: if individual and global agree on the same student, relax unknown
+        try:
+            agree = (predicted_owner_id is not None and result.get("predicted_student_id") == predicted_owner_id)
+        except Exception:
+            agree = False
+        if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+            result["is_unknown"] = False
+            is_unknown = False
 
         # DEBUG: Log the final result before constructing response
         logger.info(f"DEBUG: Final result before response: predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
