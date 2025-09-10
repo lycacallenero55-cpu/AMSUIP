@@ -484,11 +484,7 @@ async def identify_signature_owner(
                 model_path = latest_global.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
                     gsm.load_model(model_path)
-                else:
-                    logger.warning(f"Supabase model loading not implemented for global model: {model_path}")
-                    # Skip global model if not S3
-                    continue
-                # Compute test embedding
+                    # Compute test embedding
                 test_emb = gsm.embed_images([processed_signature])[0]
                 # Try cached centroids first
                 centroids = await _load_cached_centroids(latest_global) or {}
@@ -758,7 +754,8 @@ async def verify_signature(
                 else:
                     logger.warning(f"Supabase model loading not implemented for global model: {model_path}")
                     # Skip global model if not S3
-                    continue
+                    return _get_fallback_response("identify", error_message="Global model not available")
+                
                 test_emb = gsm.embed_images([processed_signature])[0]
                 centroids = await _load_cached_centroids(latest_global) or {}
                 import numpy as np
