@@ -265,7 +265,12 @@ async def identify_signature_owner(
                             import os
                             from tensorflow import keras
                             
-                            response = requests.get(model_path, timeout=30)
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
                             response.raise_for_status()
                             
                             # Save to temporary file and load
@@ -449,7 +454,12 @@ async def identify_signature_owner(
                                 import os
                                 from tensorflow import keras
                                 
-                                response = requests.get(model_path, timeout=30)
+                                # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
                                 response.raise_for_status()
                                 
                                 with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
@@ -483,8 +493,30 @@ async def identify_signature_owner(
                 gsm = GlobalSignatureVerificationModel()
                 model_path = latest_global.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    gsm.load_model(model_path)
-                    # Compute test embedding
+                    # Download global model from S3 using presigned URL
+                    s3_key = model_path.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    
+                    import requests
+                    import tempfile
+                    import os
+                    
+                    response = requests.get(presigned_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    
+                    try:
+                        gsm.load_model(tmp_path)
+                        # Compute test embedding
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
                 test_emb = gsm.embed_images([processed_signature])[0]
                 # Try cached centroids first
                 centroids = await _load_cached_centroids(latest_global) or {}
@@ -629,7 +661,12 @@ async def verify_signature(
                             import os
                             from tensorflow import keras
                             
-                            response = requests.get(model_path, timeout=30)
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
                             response.raise_for_status()
                             
                             # Save to temporary file and load
@@ -714,7 +751,12 @@ async def verify_signature(
                             import os
                             from tensorflow import keras
                             
-                            response = requests.get(model_path, timeout=30)
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
                             response.raise_for_status()
                             
                             with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
@@ -750,7 +792,29 @@ async def verify_signature(
                 gsm = GlobalSignatureVerificationModel()
                 model_path = latest_global.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    gsm.load_model(model_path)
+                    # Download global model from S3 using presigned URL
+                    s3_key = model_path.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    
+                    import requests
+                    import tempfile
+                    import os
+                    
+                    response = requests.get(presigned_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    
+                    try:
+                        gsm.load_model(tmp_path)
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
                 else:
                     logger.warning(f"Supabase model loading not implemented for global model: {model_path}")
                     # Skip global model if not S3

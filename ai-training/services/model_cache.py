@@ -56,7 +56,12 @@ class ModelCache:
                         import tempfile
                         import os
                         
-                        response = requests.get(embedding_path, timeout=30)
+                        # Extract S3 key and create presigned URL
+                        s3_key = embedding_path.split('amazonaws.com/')[-1]
+                        from utils.s3_storage import create_presigned_get
+                        presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                        
+                        response = requests.get(presigned_url, timeout=30)
                         response.raise_for_status()
                         
                         with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
@@ -84,7 +89,12 @@ class ModelCache:
                 import tempfile
                 import os
                 
-                response = requests.get(model_path, timeout=30)
+                # Extract S3 key and create presigned URL
+                s3_key = model_path.split('amazonaws.com/')[-1]
+                from utils.s3_storage import create_presigned_get
+                presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                
+                response = requests.get(presigned_url, timeout=30)
                 response.raise_for_status()
                 
                 with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
