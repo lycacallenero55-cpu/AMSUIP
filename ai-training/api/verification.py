@@ -341,7 +341,7 @@ async def identify_signature_owner(
                         # Try to get students with names from the students table
                         try:
                             # First, let's see what columns are available
-                            students_response = await db_manager.client.table("students").select("*").limit(1).execute()
+                            students_response = db_manager.client.table("students").select("*").limit(1).execute()
                             if students_response.data:
                                 logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
                             
@@ -351,7 +351,7 @@ async def identify_signature_owner(
                             
                             for name_col in possible_name_columns:
                                 try:
-                                    students_response = await db_manager.client.table("students").select(f"id,{name_col}").execute()
+                                    students_response = db_manager.client.table("students").select(f"id,{name_col}").execute()
                                     students = students_response.data or []
                                     if students and students[0].get(name_col):
                                         logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
@@ -367,7 +367,7 @@ async def identify_signature_owner(
                                 logger.warning("DEBUG: No valid name column found in students table")
                                 # Fallback: Get just the IDs and create generic names
                                 try:
-                                    students_response = await db_manager.client.table("students").select("id").execute()
+                                    students_response = db_manager.client.table("students").select("id").execute()
                                     students = students_response.data or []
                                     if students:
                                         for i, student in enumerate(students):
@@ -852,7 +852,7 @@ async def verify_signature(
                         # Try to get students with names from the students table
                         try:
                             # First, let's see what columns are available
-                            students_response = await db_manager.client.table("students").select("*").limit(1).execute()
+                            students_response = db_manager.client.table("students").select("*").limit(1).execute()
                             if students_response.data:
                                 logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
                             
@@ -862,7 +862,7 @@ async def verify_signature(
                             
                             for name_col in possible_name_columns:
                                 try:
-                                    students_response = await db_manager.client.table("students").select(f"id,{name_col}").execute()
+                                    students_response = db_manager.client.table("students").select(f"id,{name_col}").execute()
                                     students = students_response.data or []
                                     if students and students[0].get(name_col):
                                         logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
@@ -878,7 +878,7 @@ async def verify_signature(
                                 logger.warning("DEBUG: No valid name column found in students table")
                                 # Fallback: Get just the IDs and create generic names
                                 try:
-                                    students_response = await db_manager.client.table("students").select("id").execute()
+                                    students_response = db_manager.client.table("students").select("id").execute()
                                     students = students_response.data or []
                                     if students:
                                         for i, student in enumerate(students):
