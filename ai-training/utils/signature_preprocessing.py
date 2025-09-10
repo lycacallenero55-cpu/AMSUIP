@@ -333,6 +333,14 @@ class SignatureAugmentation:
         if np.random.random() < 0.3 * intensity:
             augmented = self._elastic_distortion(augmented)
         
+        # Perspective distortion (simulate camera angle)
+        if np.random.random() < 0.2 * intensity:
+            augmented = self._perspective_distortion(augmented)
+        
+        # Pen pressure simulation (vary line thickness)
+        if np.random.random() < 0.3 * intensity:
+            augmented = self._simulate_pen_pressure(augmented)
+        
         return augmented
     
     def _rotate_signature(self, image: np.ndarray, angle: float) -> np.ndarray:
@@ -472,3 +480,49 @@ class SignatureAugmentation:
                 augmented_labels.append(label)
         
         return augmented_images, augmented_labels
+    
+    def _perspective_distortion(self, image: np.ndarray) -> np.ndarray:
+        """Apply perspective distortion to simulate camera angle"""
+        h, w = image.shape[:2]
+        
+        # Define source points (corners of the image)
+        src_points = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        
+        # Define destination points with slight perspective distortion
+        max_offset = min(w, h) * 0.1
+        dst_points = np.float32([
+            [np.random.uniform(-max_offset, max_offset), np.random.uniform(-max_offset, max_offset)],
+            [w + np.random.uniform(-max_offset, max_offset), np.random.uniform(-max_offset, max_offset)],
+            [w + np.random.uniform(-max_offset, max_offset), h + np.random.uniform(-max_offset, max_offset)],
+            [np.random.uniform(-max_offset, max_offset), h + np.random.uniform(-max_offset, max_offset)]
+        ])
+        
+        # Get perspective transformation matrix
+        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+        
+        # Apply perspective transformation
+        distorted = cv2.warpPerspective(image, matrix, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+        
+        return distorted
+    
+    def _simulate_pen_pressure(self, image: np.ndarray) -> np.ndarray:
+        """Simulate varying pen pressure by adjusting line thickness"""
+        # Convert to grayscale for morphological operations
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        
+        # Create varying kernel sizes to simulate different pen pressures
+        kernel_sizes = [1, 2, 3]
+        weights = [0.3, 0.5, 0.2]  # Probability weights for each kernel size
+        
+        # Randomly select kernel size based on weights
+        kernel_size = np.random.choice(kernel_sizes, p=weights)
+        
+        if kernel_size > 1:
+            # Dilate to make lines thicker (simulate more pressure)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            gray = cv2.dilate(gray, kernel, iterations=1)
+        
+        # Convert back to RGB
+        result = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        
+        return result

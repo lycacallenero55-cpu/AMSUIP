@@ -560,6 +560,7 @@ class SignatureEmbeddingModel:
                 # If predicted ID doesn't exist in our mappings, mark as unknown
                 predicted_student_id = 0
                 student_confidence = 0.0
+                logger.warning(f"Predicted student ID {predicted_student_id} not found in training data")
         
         # Authenticity detection
         authenticity_score = 0.0

@@ -266,12 +266,15 @@ class GlobalSignatureVerificationModel:
         best_match = None
         
         for student_id, centroid in student_centroids.items():
-            distance = np.linalg.norm(test_embedding - centroid)
-            threshold = thresholds.get(student_id, 0.7)
+            # Use cosine similarity for better generalization to new signatures
+            cosine_sim = np.dot(test_embedding, centroid) / (np.linalg.norm(test_embedding) * np.linalg.norm(centroid))
+            # Convert to distance (lower is better, range 0-2)
+            distance = 1 - cosine_sim
+            threshold = thresholds.get(student_id, 0.3)  # Adjusted for cosine distance
             
-            # Use sigmoid scoring
+            # Use sigmoid scoring with better parameters for cosine distance
             import math
-            k = 5.0
+            k = 3.0  # Less aggressive than euclidean
             score = 1.0 / (1.0 + math.exp(k * (distance - threshold)))
             
             all_scores[student_id] = {
