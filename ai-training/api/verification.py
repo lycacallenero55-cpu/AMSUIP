@@ -340,9 +340,42 @@ async def identify_signature_owner(
                     try:
                         # Try to get students with names from the students table
                         try:
-                            students_response = await db_manager.client.table("students").select("id,name").execute()
-                            students = students_response.data or []
-                            logger.info(f"DEBUG: Retrieved {len(students)} students from students table")
+                            # First, let's see what columns are available
+                            students_response = await db_manager.client.table("students").select("*").limit(1).execute()
+                            if students_response.data:
+                                logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
+                            
+                            # Try different possible column names for student name
+                            possible_name_columns = ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']
+                            students = []
+                            
+                            for name_col in possible_name_columns:
+                                try:
+                                    students_response = await db_manager.client.table("students").select(f"id,{name_col}").execute()
+                                    students = students_response.data or []
+                                    if students and students[0].get(name_col):
+                                        logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
+                                        # Rename the column to 'name' for consistency
+                                        for student in students:
+                                            student['name'] = student.get(name_col)
+                                        break
+                                except Exception as col_error:
+                                    logger.debug(f"Column '{name_col}' not found: {col_error}")
+                                    continue
+                            
+                            if not students:
+                                logger.warning("DEBUG: No valid name column found in students table")
+                                # Fallback: Get just the IDs and create generic names
+                                try:
+                                    students_response = await db_manager.client.table("students").select("id").execute()
+                                    students = students_response.data or []
+                                    if students:
+                                        for i, student in enumerate(students):
+                                            student['name'] = f"Student_{student['id']}"
+                                        logger.info(f"DEBUG: Created generic names for {len(students)} students")
+                                except Exception as fallback_error:
+                                    logger.error(f"Failed to get student IDs: {fallback_error}")
+                                    students = []
                         except Exception as e:
                             logger.error(f"Failed to get students from students table: {e}")
                             students = []
@@ -818,9 +851,42 @@ async def verify_signature(
                     try:
                         # Try to get students with names from the students table
                         try:
-                            students_response = await db_manager.client.table("students").select("id,name").execute()
-                            students = students_response.data or []
-                            logger.info(f"DEBUG: Retrieved {len(students)} students from students table")
+                            # First, let's see what columns are available
+                            students_response = await db_manager.client.table("students").select("*").limit(1).execute()
+                            if students_response.data:
+                                logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
+                            
+                            # Try different possible column names for student name
+                            possible_name_columns = ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']
+                            students = []
+                            
+                            for name_col in possible_name_columns:
+                                try:
+                                    students_response = await db_manager.client.table("students").select(f"id,{name_col}").execute()
+                                    students = students_response.data or []
+                                    if students and students[0].get(name_col):
+                                        logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
+                                        # Rename the column to 'name' for consistency
+                                        for student in students:
+                                            student['name'] = student.get(name_col)
+                                        break
+                                except Exception as col_error:
+                                    logger.debug(f"Column '{name_col}' not found: {col_error}")
+                                    continue
+                            
+                            if not students:
+                                logger.warning("DEBUG: No valid name column found in students table")
+                                # Fallback: Get just the IDs and create generic names
+                                try:
+                                    students_response = await db_manager.client.table("students").select("id").execute()
+                                    students = students_response.data or []
+                                    if students:
+                                        for i, student in enumerate(students):
+                                            student['name'] = f"Student_{student['id']}"
+                                        logger.info(f"DEBUG: Created generic names for {len(students)} students")
+                                except Exception as fallback_error:
+                                    logger.error(f"Failed to get student IDs: {fallback_error}")
+                                    students = []
                         except Exception as e:
                             logger.error(f"Failed to get students from students table: {e}")
                             students = []
