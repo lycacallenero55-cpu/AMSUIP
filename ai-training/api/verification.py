@@ -338,19 +338,33 @@ async def identify_signature_owner(
                 if not signature_ai_manager.id_to_student:
                     logger.warning("No student mappings loaded, loading from database...")
                     try:
-                        students = await db_manager.list_students_with_images()
+                        # Try to get students with names from the students table
+                        try:
+                            students_response = await db_manager.client.table("students").select("id,name").execute()
+                            students = students_response.data or []
+                            logger.info(f"DEBUG: Retrieved {len(students)} students from students table")
+                        except Exception as e:
+                            logger.error(f"Failed to get students from students table: {e}")
+                            students = []
+                        
                         if students:
+                            logger.info(f"DEBUG: First student data structure: {students[0] if students else 'None'}")
                             for i, student in enumerate(students):
-                                student_id = student.get('student_id') or student.get('id')
+                                logger.info(f"DEBUG: Student {i}: {student}")
+                                student_id = student.get('id')
                                 student_name = student.get('name')
+                                logger.info(f"DEBUG: Extracted student_id={student_id}, name={student_name}")
                                 if student_id and student_name:
                                     # Map model class index (i) to actual student ID
                                     signature_ai_manager.student_to_id[student_name] = i
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
                             logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
                             logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
+                        else:
+                            logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
                         logger.error(f"Failed to load emergency mappings: {e}")
                 
@@ -802,19 +816,33 @@ async def verify_signature(
                 if not signature_ai_manager.id_to_student:
                     logger.warning("No student mappings loaded, loading from database...")
                     try:
-                        students = await db_manager.list_students_with_images()
+                        # Try to get students with names from the students table
+                        try:
+                            students_response = await db_manager.client.table("students").select("id,name").execute()
+                            students = students_response.data or []
+                            logger.info(f"DEBUG: Retrieved {len(students)} students from students table")
+                        except Exception as e:
+                            logger.error(f"Failed to get students from students table: {e}")
+                            students = []
+                        
                         if students:
+                            logger.info(f"DEBUG: First student data structure: {students[0] if students else 'None'}")
                             for i, student in enumerate(students):
-                                student_id = student.get('student_id') or student.get('id')
+                                logger.info(f"DEBUG: Student {i}: {student}")
+                                student_id = student.get('id')
                                 student_name = student.get('name')
+                                logger.info(f"DEBUG: Extracted student_id={student_id}, name={student_name}")
                                 if student_id and student_name:
                                     # Map model class index (i) to actual student ID
                                     signature_ai_manager.student_to_id[student_name] = i
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
                             logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
                             logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
+                        else:
+                            logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
                         logger.error(f"Failed to load emergency mappings: {e}")
                 
