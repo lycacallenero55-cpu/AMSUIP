@@ -551,12 +551,32 @@ class SignatureEmbeddingModel:
             predicted_student_id = int(np.argmax(student_probs))
             student_confidence = float(np.max(student_probs))
             
+            # DEBUG: Log prediction details
+            logger.info(f"Classification prediction: argmax={predicted_student_id}, confidence={student_confidence:.4f}")
+            logger.info(f"Available mappings: {self.id_to_student}")
+            logger.info(f"Student probabilities: {student_probs}")
+            
             # CRITICAL FIX: Ensure we only predict students that exist in our training data
             if not self.id_to_student or predicted_student_id not in self.id_to_student:
-                # If no mappings loaded or predicted ID doesn't exist, mark as unknown
-                predicted_student_id = 0
-                student_confidence = 0.0
-                logger.warning(f"Predicted student ID {predicted_student_id} not found in training data (mappings: {len(self.id_to_student) if self.id_to_student else 0})")
+                # Try to map the predicted class to actual student IDs
+                if self.id_to_student and len(self.id_to_student) > 0:
+                    # Get the list of available student IDs
+                    available_ids = list(self.id_to_student.keys())
+                    if predicted_student_id < len(available_ids):
+                        # Map the predicted class index to the actual student ID
+                        mapped_student_id = available_ids[predicted_student_id]
+                        predicted_student_id = mapped_student_id
+                        logger.info(f"Mapped predicted class {predicted_student_id} to student ID {mapped_student_id}")
+                    else:
+                        # If predicted class is out of range, mark as unknown
+                        predicted_student_id = 0
+                        student_confidence = 0.0
+                        logger.warning(f"Predicted class {predicted_student_id} out of range (available: {len(available_ids)})")
+                else:
+                    # If no mappings loaded, mark as unknown
+                    predicted_student_id = 0
+                    student_confidence = 0.0
+                    logger.warning(f"No student mappings available (mappings: {len(self.id_to_student) if self.id_to_student else 0})")
         
         # Authenticity detection
         authenticity_score = 0.0
@@ -565,8 +585,17 @@ class SignatureEmbeddingModel:
             authenticity_score = float(self.authenticity_head.predict(X_test, verbose=0)[0][0])
             is_genuine = authenticity_score > 0.5
         
-        # Get student name
+        # Get student name and actual student ID
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
+        
+        # If we predicted a class index (0, 1), try to find the corresponding actual student ID
+        actual_student_id = predicted_student_id
+        if predicted_student_id in [0, 1] and len(self.id_to_student) > 2:
+            # Look for actual student IDs in the mappings
+            actual_ids = [k for k in self.id_to_student.keys() if k not in [0, 1]]
+            if actual_ids and predicted_student_id < len(actual_ids):
+                actual_student_id = actual_ids[predicted_student_id]
+                logger.info(f"Mapped class {predicted_student_id} to actual student ID {actual_student_id}")
         
         # Calculate overall confidence
         if has_classification and has_authenticity:
@@ -584,7 +613,7 @@ class SignatureEmbeddingModel:
         )
         
         result = {
-            'predicted_student_id': predicted_student_id,
+            'predicted_student_id': actual_student_id,  # Use actual student ID
             'predicted_student_name': predicted_student_name,
             'student_confidence': student_confidence,
             'is_genuine': bool(is_genuine),

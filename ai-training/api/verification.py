@@ -341,11 +341,16 @@ async def identify_signature_owner(
                         students = await db_manager.list_students_with_images()
                         if students:
                             for i, student in enumerate(students):
-                                student_id = student['id']
-                                student_name = student['name']
-                                signature_ai_manager.student_to_id[student_name] = i
-                                signature_ai_manager.id_to_student[i] = student_name
+                                student_id = student.get('student_id') or student.get('id')
+                                student_name = student.get('name')
+                                if student_id and student_name:
+                                    # Map model class index (i) to actual student ID
+                                    signature_ai_manager.student_to_id[student_name] = i
+                                    signature_ai_manager.id_to_student[i] = student_name
+                                    # Also map the actual student ID for reference
+                                    signature_ai_manager.id_to_student[student_id] = student_name
                             logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
                     except Exception as e:
                         logger.error(f"Failed to load emergency mappings: {e}")
                 
@@ -800,11 +805,16 @@ async def verify_signature(
                         students = await db_manager.list_students_with_images()
                         if students:
                             for i, student in enumerate(students):
-                                student_id = student['id']
-                                student_name = student['name']
-                                signature_ai_manager.student_to_id[student_name] = i
-                                signature_ai_manager.id_to_student[i] = student_name
+                                student_id = student.get('student_id') or student.get('id')
+                                student_name = student.get('name')
+                                if student_id and student_name:
+                                    # Map model class index (i) to actual student ID
+                                    signature_ai_manager.student_to_id[student_name] = i
+                                    signature_ai_manager.id_to_student[i] = student_name
+                                    # Also map the actual student ID for reference
+                                    signature_ai_manager.id_to_student[student_id] = student_name
                             logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
                     except Exception as e:
                         logger.error(f"Failed to load emergency mappings: {e}")
                 
