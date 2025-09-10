@@ -675,7 +675,8 @@ async def identify_signature_owner(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -691,7 +692,8 @@ async def identify_signature_owner(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -737,15 +739,32 @@ async def identify_signature_owner(
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
+        # Apply robust unknown/match logic
+        student_confidence = float(result.get("student_confidence", 0.0))
+        global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        has_auth = signature_ai_manager.authenticity_head is not None
+        # Stricter unknown thresholding
+        is_unknown = (student_confidence < 0.60 and global_score < 0.65)
+        result["is_unknown"] = is_unknown
+
+        # Determine match logic for identify: do not gate on authenticity if head absent
+        if has_auth:
+            is_match = (not is_unknown) and bool(result.get("is_genuine", False))
+        else:
+            is_match = (not is_unknown) and (student_confidence >= 0.60 or global_score >= 0.65)
+
         # DEBUG: Log the final result before constructing response
         logger.info(f"DEBUG: Final result before response: predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
         
+        # Mask unknowns instead of returning a trained ID
+        predicted_block = {
+            "id": 0 if is_unknown else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+        }
+
         return {
-            "predicted_student": {
-                "id": result["predicted_student_id"],
-                "name": result["predicted_student_name"],
-            },
-            "is_match": result["is_genuine"],
+            "predicted_student": predicted_block,
+            "is_match": is_match,
             "confidence": float(combined_confidence),
             "score": float(combined_confidence),
             "global_score": hybrid.get("global_score"),
@@ -1095,7 +1114,8 @@ async def verify_signature(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -1110,7 +1130,8 @@ async def verify_signature(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -1156,10 +1177,26 @@ async def verify_signature(
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
+        # Apply robust unknown/match logic
+        student_confidence = float(result.get("student_confidence", 0.0))
+        global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        has_auth = signature_ai_manager.authenticity_head is not None
+        is_unknown = (student_confidence < 0.60 and global_score < 0.65)
+        result["is_unknown"] = is_unknown
+
         # Check if the predicted student matches the target student
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
-        is_match = is_correct_student and result["is_genuine"]
+        if has_auth:
+            is_match = is_correct_student and (not is_unknown) and bool(result.get("is_genuine", False))
+        else:
+            is_match = is_correct_student and (not is_unknown) and (student_confidence >= 0.60 or global_score >= 0.65)
+
+        # Mask unknowns in response
+        predicted_block = {
+            "id": 0 if is_unknown else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+        }
 
         return {
             "is_match": is_match,
@@ -1168,10 +1205,7 @@ async def verify_signature(
             "global_score": hybrid.get("global_score"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
-            "predicted_student": {
-                "id": result["predicted_student_id"],
-                "name": result["predicted_student_name"],
-            },
+            "predicted_student": predicted_block,
             "target_student_id": student_id,
             "is_correct_student": is_correct_student,
             "is_genuine": result["is_genuine"],
