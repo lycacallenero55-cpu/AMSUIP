@@ -455,11 +455,11 @@ async def identify_signature_owner(
                                 from tensorflow import keras
                                 
                                 # Extract S3 key from URL and create presigned URL
-                            s3_key = model_path.split('amazonaws.com/')[-1]
-                            from utils.s3_storage import create_presigned_get
-                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
-                            
-                            response = requests.get(presigned_url, timeout=30)
+                                s3_key = model_path.split('amazonaws.com/')[-1]
+                                from utils.s3_storage import create_presigned_get
+                                presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                                
+                                response = requests.get(presigned_url, timeout=30)
                                 response.raise_for_status()
                                 
                                 with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
