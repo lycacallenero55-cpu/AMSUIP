@@ -338,44 +338,44 @@ async def identify_signature_owner(
                 if not signature_ai_manager.id_to_student:
                     logger.warning("No student mappings loaded, loading from database...")
                     try:
-                        # Try to get students with names from the students table
+                        # Try to get only the students that were used in training
                         try:
-                            # First, let's see what columns are available
-                            students_response = db_manager.client.table("students").select("*").limit(1).execute()
-                            if students_response.data:
-                                logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
-                            
-                            # Try different possible column names for student name
-                            possible_name_columns = ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']
-                            students = []
-                            
-                            for name_col in possible_name_columns:
-                                try:
-                                    students_response = db_manager.client.table("students").select(f"id,{name_col}").execute()
-                                    students = students_response.data or []
-                                    if students and students[0].get(name_col):
-                                        logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
-                                        # Rename the column to 'name' for consistency
-                                        for student in students:
-                                            student['name'] = student.get(name_col)
-                                        break
-                                except Exception as col_error:
-                                    logger.debug(f"Column '{name_col}' not found: {col_error}")
-                                    continue
-                            
-                            if not students:
-                                logger.warning("DEBUG: No valid name column found in students table")
-                                # Fallback: Get just the IDs and create generic names
-                                try:
-                                    students_response = db_manager.client.table("students").select("id").execute()
-                                    students = students_response.data or []
-                                    if students:
-                                        for i, student in enumerate(students):
-                                            student['name'] = f"Student_{student['id']}"
-                                        logger.info(f"DEBUG: Created generic names for {len(students)} students")
-                                except Exception as fallback_error:
-                                    logger.error(f"Failed to get student IDs: {fallback_error}")
-                                    students = []
+                            # Get students that have signatures (these are the ones used in training)
+                            students_with_signatures = await db_manager.list_students_with_images()
+                            if students_with_signatures:
+                                # Extract unique student IDs from signatures
+                                trained_student_ids = set()
+                                for student_data in students_with_signatures:
+                                    if 'student_id' in student_data:
+                                        trained_student_ids.add(student_data['student_id'])
+                                
+                                logger.info(f"DEBUG: Found {len(trained_student_ids)} students with signatures: {list(trained_student_ids)}")
+                                
+                                # Get student details for only the trained students
+                                students = []
+                                for student_id in trained_student_ids:
+                                    try:
+                                        student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
+                                        if student_response.data:
+                                            student = student_response.data[0]
+                                            # Try to find a name field
+                                            name = None
+                                            for name_col in ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']:
+                                                if student.get(name_col):
+                                                    name = student.get(name_col)
+                                                    break
+                                            if not name:
+                                                name = f"Student_{student_id}"
+                                            student['name'] = name
+                                            students.append(student)
+                                    except Exception as student_error:
+                                        logger.warning(f"Failed to get student {student_id}: {student_error}")
+                                        continue
+                                
+                                logger.info(f"DEBUG: Loaded {len(students)} trained students")
+                            else:
+                                logger.warning("DEBUG: No students with signatures found")
+                                students = []
                         except Exception as e:
                             logger.error(f"Failed to get students from students table: {e}")
                             students = []
@@ -855,44 +855,44 @@ async def verify_signature(
                 if not signature_ai_manager.id_to_student:
                     logger.warning("No student mappings loaded, loading from database...")
                     try:
-                        # Try to get students with names from the students table
+                        # Try to get only the students that were used in training
                         try:
-                            # First, let's see what columns are available
-                            students_response = db_manager.client.table("students").select("*").limit(1).execute()
-                            if students_response.data:
-                                logger.info(f"DEBUG: Students table columns: {list(students_response.data[0].keys())}")
-                            
-                            # Try different possible column names for student name
-                            possible_name_columns = ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']
-                            students = []
-                            
-                            for name_col in possible_name_columns:
-                                try:
-                                    students_response = db_manager.client.table("students").select(f"id,{name_col}").execute()
-                                    students = students_response.data or []
-                                    if students and students[0].get(name_col):
-                                        logger.info(f"DEBUG: Found students using column '{name_col}': {len(students)} students")
-                                        # Rename the column to 'name' for consistency
-                                        for student in students:
-                                            student['name'] = student.get(name_col)
-                                        break
-                                except Exception as col_error:
-                                    logger.debug(f"Column '{name_col}' not found: {col_error}")
-                                    continue
-                            
-                            if not students:
-                                logger.warning("DEBUG: No valid name column found in students table")
-                                # Fallback: Get just the IDs and create generic names
-                                try:
-                                    students_response = db_manager.client.table("students").select("id").execute()
-                                    students = students_response.data or []
-                                    if students:
-                                        for i, student in enumerate(students):
-                                            student['name'] = f"Student_{student['id']}"
-                                        logger.info(f"DEBUG: Created generic names for {len(students)} students")
-                                except Exception as fallback_error:
-                                    logger.error(f"Failed to get student IDs: {fallback_error}")
-                                    students = []
+                            # Get students that have signatures (these are the ones used in training)
+                            students_with_signatures = await db_manager.list_students_with_images()
+                            if students_with_signatures:
+                                # Extract unique student IDs from signatures
+                                trained_student_ids = set()
+                                for student_data in students_with_signatures:
+                                    if 'student_id' in student_data:
+                                        trained_student_ids.add(student_data['student_id'])
+                                
+                                logger.info(f"DEBUG: Found {len(trained_student_ids)} students with signatures: {list(trained_student_ids)}")
+                                
+                                # Get student details for only the trained students
+                                students = []
+                                for student_id in trained_student_ids:
+                                    try:
+                                        student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
+                                        if student_response.data:
+                                            student = student_response.data[0]
+                                            # Try to find a name field
+                                            name = None
+                                            for name_col in ['name', 'student_name', 'full_name', 'first_name', 'username', 'email']:
+                                                if student.get(name_col):
+                                                    name = student.get(name_col)
+                                                    break
+                                            if not name:
+                                                name = f"Student_{student_id}"
+                                            student['name'] = name
+                                            students.append(student)
+                                    except Exception as student_error:
+                                        logger.warning(f"Failed to get student {student_id}: {student_error}")
+                                        continue
+                                
+                                logger.info(f"DEBUG: Loaded {len(students)} trained students")
+                            else:
+                                logger.warning("DEBUG: No students with signatures found")
+                                students = []
                         except Exception as e:
                             logger.error(f"Failed to get students from students table: {e}")
                             students = []

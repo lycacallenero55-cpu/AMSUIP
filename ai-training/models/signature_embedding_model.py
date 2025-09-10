@@ -560,8 +560,8 @@ class SignatureEmbeddingModel:
             if not self.id_to_student or predicted_student_id not in self.id_to_student:
                 # Try to map the predicted class to actual student IDs
                 if self.id_to_student and len(self.id_to_student) > 0:
-                    # Get the list of available student IDs
-                    available_ids = list(self.id_to_student.keys())
+                    # Get the list of available student IDs (only trained students)
+                    available_ids = [k for k in self.id_to_student.keys() if isinstance(k, int) and k > 0]
                     if predicted_student_id < len(available_ids):
                         # Map the predicted class index to the actual student ID
                         mapped_student_id = available_ids[predicted_student_id]
@@ -571,7 +571,7 @@ class SignatureEmbeddingModel:
                         # If predicted class is out of range, mark as unknown
                         predicted_student_id = 0
                         student_confidence = 0.0
-                        logger.warning(f"Predicted class {predicted_student_id} out of range (available: {len(available_ids)})")
+                        logger.warning(f"Predicted class {predicted_student_id} out of range (available trained students: {len(available_ids)})")
                 else:
                     # If no mappings loaded, mark as unknown
                     predicted_student_id = 0
