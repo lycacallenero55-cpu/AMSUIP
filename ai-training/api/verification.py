@@ -776,10 +776,10 @@ async def identify_signature_owner(
         result["is_unknown"] = is_unknown
 
         # Determine match logic for identify: do not gate on authenticity if head absent
-        if has_auth:
-            is_match = (not is_unknown) and bool(result.get("is_genuine", False))
-        else:
-            is_match = (not is_unknown) and (student_confidence >= 0.60 or global_score >= 0.65)
+        # Match if either ownership confidence passes thresholds OR authenticity passes (auth only helps)
+        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
+        is_match = (not is_unknown) and (ownership_ok or auth_ok)
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
@@ -1230,10 +1230,9 @@ async def verify_signature(
         # Check if the predicted student matches the target student
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
-        if has_auth:
-            is_match = is_correct_student and (not is_unknown) and bool(result.get("is_genuine", False))
-        else:
-            is_match = is_correct_student and (not is_unknown) and (student_confidence >= 0.60 or global_score >= 0.65)
+        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
+        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
+        is_match = is_correct_student and (not is_unknown) and (ownership_ok or auth_ok)
 
         # Mask unknowns in response
         predicted_block = {
