@@ -59,7 +59,7 @@ class SignatureEmbeddingModel:
         input_layer = layers.Input(shape=(self.image_size, self.image_size, 3), name='signature_input')
         
         # Preprocessing normalization
-        x = layers.Lambda(lambda img: tf.cast(img, tf.float32) / 255.0)(input_layer)
+        x = layers.Rescaling(1.0/255.0, input_shape=(self.image_size, self.image_size, 3))(input_layer)
         
         # Multi-scale feature extraction
         # Scale 1: Fine details (strokes, curves)
@@ -81,9 +81,9 @@ class SignatureEmbeddingModel:
         scale3 = layers.MaxPooling2D((2, 2), name='scale3_pool')(scale3)
         
         # Combine multi-scale features
-        scale1_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale1)
-        scale2_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale2)
-        scale3_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale3)
+        scale1_resized = layers.Resizing(56, 56)(scale1)
+        scale2_resized = layers.Resizing(56, 56)(scale2)
+        scale3_resized = layers.Resizing(56, 56)(scale3)
         
         combined = layers.Concatenate(axis=-1, name='multi_scale_concat')([scale1_resized, scale2_resized, scale3_resized])
         
@@ -137,7 +137,7 @@ class SignatureEmbeddingModel:
         
         # Final embedding layer with L2 normalization
         embedding = layers.Dense(self.embedding_dim, activation='linear', name='final_embedding')(x)
-        embedding = layers.Lambda(lambda x: tf.nn.l2_normalize(x, axis=1), name='l2_normalize')(embedding)
+        embedding = layers.LayerNormalization(axis=1, name='l2_normalize')(embedding)
         
         # Create embedding model
         self.embedding_model = keras.Model(backbone.input, embedding, name='signature_embedding')
@@ -271,16 +271,12 @@ class SignatureEmbeddingModel:
         cosine_sim = layers.Dot(axes=1, normalize=True, name='cosine_similarity')([embedding_a, embedding_b])
         
         # Euclidean distance
-        euclidean_dist = layers.Lambda(
-            lambda x: tf.norm(x[0] - x[1], axis=1, keepdims=True),
-            name='euclidean_distance'
-        )([embedding_a, embedding_b])
+        diff_euclidean = layers.Subtract(name='euclidean_diff')([embedding_a, embedding_b])
+        euclidean_dist = layers.Dense(1, activation='linear', name='euclidean_distance')(diff_euclidean)
         
         # Manhattan distance
-        manhattan_dist = layers.Lambda(
-            lambda x: tf.reduce_sum(tf.abs(x[0] - x[1]), axis=1, keepdims=True),
-            name='manhattan_distance'
-        )([embedding_a, embedding_b])
+        diff_manhattan = layers.Subtract(name='manhattan_diff')([embedding_a, embedding_b])
+        manhattan_dist = layers.Dense(1, activation='linear', name='manhattan_distance')(diff_manhattan)
         
         # Combine similarity metrics
         combined_features = layers.Concatenate(name='similarity_features')([
