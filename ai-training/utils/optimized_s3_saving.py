@@ -69,68 +69,53 @@ def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str = "applicati
 
 def _serialize_model_to_bytes(model: keras.Model) -> bytes:
     """Serialize a Keras model to bytes using TensorFlow's built-in serialization"""
+    # Skip JSON serialization for models with Lambda layers - go straight to file method
+    logger.info("Using file-based serialization for model (Lambda layers detected)")
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+        tmp_path = tmp_file.name
+    
     try:
-        # Method 1: Try using model.get_config() and model.get_weights()
-        # This is more efficient than saving to file
-        config = model.get_config()
-        weights = model.get_weights()
-        
-        # Create a serializable representation
-        model_data = {
-            'config': config,
-            'weights': [w.tolist() if hasattr(w, 'tolist') else w for w in weights]
-        }
-        
-        # Serialize to JSON bytes
-        json_data = json.dumps(model_data, indent=2)
-        return json_data.encode('utf-8')
-        
-    except Exception as e:
-        logger.warning(f"JSON serialization failed, falling back to file method: {e}")
-        # Fallback to temporary file method
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-        
-        try:
-            model.save(tmp_path)
-            with open(tmp_path, 'rb') as f:
-                return f.read()
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        model.save(tmp_path)
+        with open(tmp_path, 'rb') as f:
+            return f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 def _deserialize_model_from_bytes(data: bytes) -> keras.Model:
     """Deserialize a Keras model from bytes"""
+    # Try file method first (for models with Lambda layers)
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+        tmp_path = tmp_file.name
+    
     try:
-        # Try JSON deserialization first
-        model_data = json.loads(data.decode('utf-8'))
-        config = model_data['config']
-        weights = [np.array(w) for w in model_data['weights']]
-        
-        # Recreate model from config and weights with safe_mode=False for Lambda layers
-        model = keras.Model.from_config(config, safe_mode=False)
-        model.set_weights(weights)
-        return model
-        
+        with open(tmp_path, 'wb') as f:
+            f.write(data)
+        return keras.models.load_model(tmp_path)
     except Exception as e:
-        logger.warning(f"JSON deserialization failed, falling back to file method: {e}")
-        # Fallback to temporary file method
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-        
+        logger.warning(f"File deserialization failed, trying JSON method: {e}")
+        # Fallback to JSON deserialization
         try:
-            with open(tmp_path, 'wb') as f:
-                f.write(data)
-            return keras.models.load_model(tmp_path, safe_mode=False)
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            model_data = json.loads(data.decode('utf-8'))
+            config = model_data['config']
+            weights = [np.array(w) for w in model_data['weights']]
+            
+            # Recreate model from config and weights
+            model = keras.Model.from_config(config)
+            model.set_weights(weights)
+            return model
+        except Exception as json_error:
+            logger.error(f"Both file and JSON deserialization failed: {json_error}")
+            raise
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 class OptimizedS3ModelSaver:
     """Optimized S3 model saver using TensorFlow's built-in serialization"""

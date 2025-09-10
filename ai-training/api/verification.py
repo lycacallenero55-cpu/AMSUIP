@@ -288,7 +288,7 @@ async def identify_signature_owner(
                                     logger.info(f"Loaded model using custom deserialization")
                                 except Exception as custom_error:
                                     logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
-                                    model = keras.models.load_model(tmp_path, safe_mode=False)
+                                    model = keras.models.load_model(tmp_path)
                                     logger.info(f"Loaded model using standard Keras")
                                 
                                 # Set the appropriate model
@@ -498,7 +498,7 @@ async def identify_signature_owner(
                                         logger.info(f"Loaded {model_type} model using custom deserialization")
                                     except Exception as custom_error:
                                         logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
-                                        model = keras.models.load_model(tmp_path, safe_mode=False)
+                                        model = keras.models.load_model(tmp_path)
                                         logger.info(f"Loaded {model_type} model using standard Keras")
                                     
                                     # Set the appropriate model
@@ -732,7 +732,7 @@ async def verify_signature(
                                     logger.info(f"Loaded model using custom deserialization")
                                 except Exception as custom_error:
                                     logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
-                                    model = keras.models.load_model(tmp_path, safe_mode=False)
+                                    model = keras.models.load_model(tmp_path)
                                     logger.info(f"Loaded model using standard Keras")
                                 
                                 # Set the appropriate model
