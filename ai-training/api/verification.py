@@ -393,9 +393,11 @@ async def identify_signature_owner(
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
-                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
-                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
-                            logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
+                            logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                        logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                        # Only log first few mappings to avoid spam
+                        sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                        logger.info(f"Sample student mappings: {sample_mappings}")
                         else:
                             logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
@@ -693,9 +695,13 @@ async def identify_signature_owner(
             return _get_fallback_response("identify")
         
         if predicted_owner_id is not None:
-            if result.get("predicted_student_id") != predicted_owner_id:
+            individual_prediction = result.get("predicted_student_id")
+            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+            if individual_prediction != predicted_owner_id:
+                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
             else:
+                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
@@ -904,9 +910,11 @@ async def verify_signature(
                                     signature_ai_manager.id_to_student[i] = student_name
                                     # Also map the actual student ID for reference
                                     signature_ai_manager.id_to_student[student_id] = student_name
-                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
-                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
-                            logger.info(f"Student mappings: {signature_ai_manager.id_to_student}")
+                            logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                        logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                        # Only log first few mappings to avoid spam
+                        sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                        logger.info(f"Sample student mappings: {sample_mappings}")
                         else:
                             logger.warning("DEBUG: No students returned from database")
                     except Exception as e:
@@ -1071,9 +1079,13 @@ async def verify_signature(
             return _get_fallback_response("verify", student_id)
         
         if predicted_owner_id is not None:
-            if result.get("predicted_student_id") != predicted_owner_id:
+            individual_prediction = result.get("predicted_student_id")
+            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+            if individual_prediction != predicted_owner_id:
+                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
             else:
+                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
