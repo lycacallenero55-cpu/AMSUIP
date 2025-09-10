@@ -363,8 +363,15 @@ async def identify_signature_owner(
                                             # Try to construct a proper name from available fields
                                             name = None
                                             
-                                            # Try to combine first_name and last_name if available
-                                            if student.get('first_name') and student.get('last_name'):
+                                            # Try to combine firstname and surname (based on the actual field names)
+                                            if student.get('firstname') and student.get('surname'):
+                                                name = f"{student['firstname']} {student['surname']}"
+                                            elif student.get('firstname'):
+                                                name = student['firstname']
+                                            elif student.get('surname'):
+                                                name = student['surname']
+                                            # Try other name field combinations
+                                            elif student.get('first_name') and student.get('last_name'):
                                                 name = f"{student['first_name']} {student['last_name']}"
                                             elif student.get('first_name'):
                                                 name = student['first_name']
@@ -722,6 +729,9 @@ async def identify_signature_owner(
             if individual_prediction != predicted_owner_id:
                 logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                # Update the predicted student name to match the new ID
+                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
             else:
                 logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
@@ -902,8 +912,15 @@ async def verify_signature(
                                             # Try to construct a proper name from available fields
                                             name = None
                                             
-                                            # Try to combine first_name and last_name if available
-                                            if student.get('first_name') and student.get('last_name'):
+                                            # Try to combine firstname and surname (based on the actual field names)
+                                            if student.get('firstname') and student.get('surname'):
+                                                name = f"{student['firstname']} {student['surname']}"
+                                            elif student.get('firstname'):
+                                                name = student['firstname']
+                                            elif student.get('surname'):
+                                                name = student['surname']
+                                            # Try other name field combinations
+                                            elif student.get('first_name') and student.get('last_name'):
                                                 name = f"{student['first_name']} {student['last_name']}"
                                             elif student.get('first_name'):
                                                 name = student['first_name']
@@ -1128,6 +1145,9 @@ async def verify_signature(
             if individual_prediction != predicted_owner_id:
                 logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                # Update the predicted student name to match the new ID
+                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
             else:
                 logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
