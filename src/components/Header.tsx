@@ -228,11 +228,11 @@ const Header = ({ isMobile = false }: HeaderProps) => {
 
   return (
     <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border h-14">
-      <div className="flex items-center justify-between px-6 h-14">
+      <div className="flex items-center justify-between pr-6 pl-2 h-14">
         {/* Left side - Logo and toggle */}
         <div className="flex items-center gap-4">
           <div 
-            className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 -ml-1.5"
+            className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 -ml-2"
             onClick={toggleSidebar}
           >
             <GraduationCap className="w-5 h-5 text-primary-foreground" />
