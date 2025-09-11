@@ -517,6 +517,9 @@ const Students = () => {
         
         {/* Search and Students Section */}
         <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="mb-3">
+            <h3 className="text-base font-semibold text-education-navy">List of Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}</h3>
+          </div>
           <div className="flex items-center justify-between gap-4 p-0 mb-4">
             <div className="flex flex-1 items-center gap-3">
               <div className="relative min-w-[280px] max-w-[400px]">
@@ -535,7 +538,7 @@ const Students = () => {
             </div>
           </div>
           
-          <div className="text-sm text-gray-500 flex items-center justify-between mb-3 pb-3 border-b border-gray-200">
+          <div className="text-sm text-gray-500 flex items-center justify-between mb-3">
             <span>
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -562,16 +565,7 @@ const Students = () => {
               )}
             </span>
           </div>
-
-          {/* Students List Header */}
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base font-semibold text-education-navy flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              <span className="text-sm">
-                List of Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}
-              </span>
-            </h3>
-          </div>
+          
         
           {/* Table View */}
           <div className="border-t border-b border-gray-200 overflow-hidden">
@@ -582,13 +576,12 @@ const Students = () => {
                   <th scope="col" className="px-3 py-2 text-left font-medium">ID</th>
                   <th scope="col" className="px-3 py-2 text-left font-medium">Program</th>
                   <th scope="col" className="px-3 py-2 text-left font-medium">Year & Section</th>
-                  <th scope="col" className="px-3 py-2 text-left font-medium">Contact</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200 text-sm">
                 {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center">
+                  <td colSpan={4} className="px-3 py-6 text-center">
                     <div className="flex justify-center">
                       <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
                     </div>
@@ -597,7 +590,7 @@ const Students = () => {
                 </tr>
                 ) : students.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">
                     {pagination.totalCount === 0 
                       ? 'No students found. Add your first student!'
                       : 'No students match the current filters. Try adjusting your search or filters.'}
@@ -621,9 +614,6 @@ const Students = () => {
                           <div className="text-sm font-medium text-gray-900">
                             {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
                           </div>
-                          <div className="text-xs">
-                            {student.status ? getStatusBadge(student.status) : <span className="text-gray-400">No status</span>}
-                          </div>
                         </div>
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-sm">
@@ -638,24 +628,6 @@ const Students = () => {
                           <span className="text-gray-300">•</span>
                           <span> {student.section || 'N/A'}</span>
                         </div>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-sm">
-                        {student.email && (
-                          <a 
-                            href={`mailto:${student.email}`} 
-                            className="text-blue-600 hover:underline hover:text-blue-800 flex items-center gap-1 group"
-                            title={student.email}
-                          >
-                            <Mail className="w-3.5 h-3.5 text-gray-400 group-hover:text-blue-600" />
-                            <span className="truncate max-w-[120px]">{student.email}</span>
-                          </a>
-                        )}
-                        {student.contact_no && (
-                          <div className="mt-0.5 flex items-center gap-1 text-gray-500">
-                            <Phone className="w-3.5 h-3.5 text-gray-400" />
-                            <span className="text-sm">{student.contact_no}</span>
-                          </div>
-                        )}
                       </td>
                     </tr>
                   ))
