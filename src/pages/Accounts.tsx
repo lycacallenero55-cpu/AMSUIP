@@ -265,50 +265,6 @@ const Accounts = () => {
 
         </div>
 
-        {/* Show search and filters only for admins */}
-        {currentUserProfile?.role === 'admin' && (
-          <div className="flex items-center justify-between gap-4 p-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">Showed:</span>
-              <Select
-                value={displayPageSize >= 999999 ? "all" : displayPageSize.toString()}
-                onValueChange={(value) => {
-                  if (value === "all") {
-                    handlePageSizeChange(999999);
-                  } else {
-                    handlePageSizeChange(parseInt(value));
-                  }
-                }}
-              >
-                <SelectTrigger className="h-8 w-24">
-                  <SelectValue>
-                    {displayPageSize.toString()}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                  <SelectItem value="250">250</SelectItem>
-                  <SelectItem value="all">ALL</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">Search:</span>
-              <div className="relative min-w-[240px] max-w-[340px]">
-                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <Input
-                  type="search"
-                  placeholder="Search accounts..."
-                  className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Show accounts table only for admins */}
         {currentUserProfile?.role === 'admin' ? (
           <Card>
@@ -322,60 +278,100 @@ const Accounts = () => {
             {/* Big space below List of Accounts label */}
             <div className="mb-8"></div>
             
+            {/* Show search and filters inside the card */}
+            <div className="flex items-center justify-between gap-4 p-0 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Showed:</span>
+                <Select
+                  value={displayPageSize >= 999999 ? "all" : displayPageSize.toString()}
+                  onValueChange={(value) => {
+                    if (value === "all") {
+                      handlePageSizeChange(999999);
+                    } else {
+                      handlePageSizeChange(parseInt(value));
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-24">
+                    <SelectValue>
+                      {displayPageSize.toString()}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="250">250</SelectItem>
+                    <SelectItem value="all">ALL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Search:</span>
+                <div className="relative min-w-[240px] max-w-[340px]">
+                  <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                  <Input
+                    type="search"
+                    placeholder="Search accounts..."
+                    className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            
             <CardContent>
-              <div className="border-t border-b">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="h-8">
-                      <TableHead className="px-3 py-2">User</TableHead>
-                      <TableHead className="px-3 py-2">Email</TableHead>
-                      <TableHead className="px-3 py-2">Role</TableHead>
-                      <TableHead className="px-3 py-2">Status</TableHead>
-                      <TableHead className="px-3 py-2">Created</TableHead>
-                      <TableHead className="px-3 py-2 text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+              <div className="border-t border-b border-gray-200 overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr className="text-xs text-gray-500 h-8">
+                      <th scope="col" className="px-3 py-2 text-left font-medium">User</th>
+                      <th scope="col" className="px-3 py-2 text-left font-medium">Email</th>
+                      <th scope="col" className="px-3 py-2 text-left font-medium">Role</th>
+                      <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
+                      <th scope="col" className="px-3 py-2 text-left font-medium">Created</th>
+                      <th scope="col" className="px-3 py-2 text-left font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200 text-sm">
                     {isLoading ? (
-                      <TableRow className="h-8">
-                        <TableCell colSpan={6} className="px-3 py-1 text-center">
+                      <tr className="h-8">
+                        <td colSpan={6} className="px-3 py-1 text-center">
                           <div className="flex justify-center">
                             <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                           </div>
                           <p className="mt-1 text-xs text-gray-500">Loading accounts...</p>
-                        </TableCell>
-                      </TableRow>
+                        </td>
+                      </tr>
                     ) : filteredProfiles.length === 0 ? (
-                      <TableRow className="h-8">
-                        <TableCell colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
+                      <tr className="h-8">
+                        <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
                           No accounts found matching the current filters.
-                        </TableCell>
-                      </TableRow>
+                        </td>
+                      </tr>
                     ) : (
                       filteredProfiles.map((profile) => (
-                        <TableRow key={profile.id} className="h-8">
-                          <TableCell className="px-3 py-1">
+                        <tr key={profile.id} className="hover:bg-gray-50 h-8">
+                          <td className="px-3 py-1 whitespace-nowrap">
                             <div className="text-sm font-medium text-gray-900">
                               {profile.first_name && profile.last_name 
                                 ? `${profile.first_name} ${profile.last_name}`
                                 : profile.email.split('@')[0]}
                             </div>
-                          </TableCell>
-                          <TableCell className="px-3 py-1">
-                            <div className="text-sm text-gray-500">{profile.email}</div>
-                          </TableCell>
-                          <TableCell className="px-3 py-1">
+                          </td>
+                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                            {profile.email}
+                          </td>
+                          <td className="px-3 py-1 whitespace-nowrap">
                             <RoleBadge role={profile.role} />
-                          </TableCell>
-                          <TableCell className="px-3 py-1">
+                          </td>
+                          <td className="px-3 py-1 whitespace-nowrap">
                             <StatusBadge status={profile.status} />
-                          </TableCell>
-                          <TableCell className="px-3 py-1">
-                            <div className="text-sm text-gray-500">
-                              {format(new Date(profile.created_at), 'MMM d, yyyy')}
-                            </div>
-                          </TableCell>
-                          <TableCell className="px-3 py-1 text-right">
+                          </td>
+                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                            {format(new Date(profile.created_at), 'MMM d, yyyy')}
+                          </td>
+                          <td className="px-3 py-1 whitespace-nowrap text-right">
                             {profile.status === 'pending' && (
                               <div className="flex gap-2 justify-end">
                                 <Button
@@ -397,12 +393,12 @@ const Accounts = () => {
                                 </Button>
                               </div>
                             )}
-                          </TableCell>
-                        </TableRow>
+                          </td>
+                        </tr>
                       ))
                     )}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
               </div>
             </CardContent>
           </Card>
