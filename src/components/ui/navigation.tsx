@@ -221,7 +221,6 @@ const DesktopNavigation = () => {
     return cachedUserRole || 'user';
   });
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [isCollapsing, setIsCollapsing] = useState(false);
   const isInitialMount = useRef(true);
     const navItems = getNavItems(userRole);
   
@@ -303,19 +302,8 @@ const DesktopNavigation = () => {
   };
 
   const handleToggleSidebar = () => {
-    if (!isCollapsed) {
-      // Starting to collapse - instantly hide labels
-      setIsCollapsing(true);
-      // Start the actual collapse after a minimal delay to ensure instant fade
-      setTimeout(() => {
-        toggleSidebar();
-        // Reset collapsing state after animation completes
-        setTimeout(() => setIsCollapsing(false), 300);
-      }, 50);
-    } else {
-      // Expanding - normal behavior
-      toggleSidebar();
-    }
+    // Width-only animation; items remain static
+    toggleSidebar();
   };
 
   return (
@@ -334,7 +322,7 @@ const DesktopNavigation = () => {
         
         {/* Menu Items */}
         <div className={cn(
-          isCollapsed ? "space-y-2 mb-0 mt-0" : "space-y-1.5 mb-0"
+          "space-y-1.5 mb-0"
         )}>
           
           {navItems.map((item, index) => {
@@ -348,38 +336,21 @@ const DesktopNavigation = () => {
               <div
                 className={cn(
                   "flex items-center cursor-pointer group relative",
-                  // Stage 2: Item positioning - each with progressive delay
-                  "transition-all duration-300 ease-in-out",
-                  isCollapsed
-                    ? "h-9 justify-center px-0 w-full rounded-sm"
-                    : "h-9 justify-start gap-3 px-3 w-full rounded-sm",
-                  isActive
+                  // Only color/hover transitions; no positional animation
+                  "transition-colors duration-200",
+                  // Unified dimensions/padding in both states
+                  "h-9 justify-start px-3 w-full rounded-sm overflow-hidden",
+                  isActive 
                     ? "bg-gradient-primary shadow-glow text-white"
                     : "hover:bg-sidebar-accent/50 hover:text-foreground"
                 )}
-                style={{
-                  // Stage 2: Progressive delay for smooth upward movement
-                  transitionDelay: isCollapsed ? `${250 + index * 30}ms` : '0ms'
-                }}
               >
-                  <Icon className={cn(
-                    "flex-shrink-0",
-                    // Icon sizes - smaller in open state, larger in collapsed state
-                    isCollapsed ? "w-4 h-4" : "w-4 h-4" // Same size for consistency
-                  )} />
-                  
-                  <span className={cn(
-                    "font-medium whitespace-nowrap min-w-0",
-                    // Stage 3: Text content - fades smoothly after positioning, instant fade when collapsing
-                    isCollapsing ? "transition-opacity duration-75" : "transition-all duration-250 ease-in-out delay-300",
-                    isCollapsed || isCollapsing
-                      ? "opacity-0 translate-x-2 w-0 overflow-hidden text-xs" 
-                      : "opacity-100 translate-x-0 flex-1 text-sm"
-                  )}>
-                    {item.label}
-                  </span>
-                </div>
-              );
+                <Icon className="flex-shrink-0 w-4 h-4" />
+                <span className="ml-3 font-medium whitespace-nowrap min-w-0 flex-1 text-sm">
+                  {item.label}
+                </span>
+              </div>
+            );
 
             return (
               <Link key={item.href} to={item.href} className="block">
