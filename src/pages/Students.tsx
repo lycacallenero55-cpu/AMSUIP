@@ -4,9 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Search, X, UserPlus, FileDown, Trash2, Edit, Check, Download, Mail, Phone, GraduationCap, Table, LayoutGrid, Users, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
+import type React from "react";
 import { toast } from "sonner";
 import StudentImport from "@/components/StudentImport";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -364,133 +363,9 @@ const Students = () => {
       .toUpperCase();
   };
 
-  const getAttendanceColor = (rate: number) => {
-    if (rate >= 90) return "text-accent";
-    if (rate >= 80) return "text-primary";
-    return "text-destructive";
-  };
+  // Removed status/attendance helpers from table layout
 
-  const getStatusBadge = (status: string) => {
-    return status === "Active" 
-      ? <Badge className="bg-accent/10 text-accent border-accent/20">Active</Badge>
-      : <Badge className="bg-muted text-muted-foreground">Inactive</Badge>;
-  };
-
-  // Pagination component
-  const PaginationControls = () => {
-    const { currentPage, totalPages, totalCount, pageSize } = pagination;
-    
-    if (totalPages <= 1) return null;
-
-    const getVisiblePages = () => {
-      const delta = 2;
-      const range = [];
-      const rangeWithDots = [];
-
-      for (let i = Math.max(2, currentPage - delta); i <= Math.min(totalPages - 1, currentPage + delta); i++) {
-        range.push(i);
-      }
-
-      if (currentPage - delta > 2) {
-        rangeWithDots.push(1, '...');
-      } else {
-        rangeWithDots.push(1);
-      }
-
-      rangeWithDots.push(...range);
-
-      if (currentPage + delta < totalPages - 1) {
-        rangeWithDots.push('...', totalPages);
-      } else if (totalPages > 1) {
-        rangeWithDots.push(totalPages);
-      }
-
-      return rangeWithDots;
-    };
-
-    const startItem = ((currentPage - 1) * pageSize) + 1;
-    const endItem = Math.min(currentPage * pageSize, totalCount);
-
-    return (
-      <div className="flex items-center justify-between px-4 py-3 bg-white border-t border-gray-200">
-        <div className="flex items-center text-sm text-gray-700">
-          <span>Showing {startItem.toLocaleString()} to {endItem.toLocaleString()} of {totalCount.toLocaleString()} students</span>
-          <div className="ml-4 flex items-center space-x-2">
-            <span>Show:</span>
-            <Select
-              value={pageSize.toString()}
-              onValueChange={(value) => handlePageSizeChange(parseInt(value))}
-            >
-              <SelectTrigger className="w-20 h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="25">25</SelectItem>
-                <SelectItem value="50">50</SelectItem>
-                <SelectItem value="100">100</SelectItem>
-                <SelectItem value="200">200</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-1">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(1)}
-            disabled={currentPage === 1}
-            className="h-8 w-8 p-0"
-          >
-            <ChevronsLeft className="h-4 w-4" />
-          </Button>
-          
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(currentPage - 1)}
-            disabled={currentPage === 1}
-            className="h-8 w-8 p-0"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-
-          {getVisiblePages().map((page, index) => (
-            <Button
-              key={index}
-              variant={currentPage === page ? "default" : "outline"}
-              size="sm"
-              onClick={() => typeof page === 'number' && handlePageChange(page)}
-              disabled={typeof page === 'string'}
-              className="h-8 min-w-[32px] px-2"
-            >
-              {page}
-            </Button>
-          ))}
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(currentPage + 1)}
-            disabled={currentPage === totalPages}
-            className="h-8 w-8 p-0"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePageChange(totalPages)}
-            disabled={currentPage === totalPages}
-            className="h-8 w-8 p-0"
-          >
-            <ChevronsRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-    );
-  };
+  // Pagination controls are removed from bottom; page size control moved to top as "Showed".
 
   return (
     <Layout>
