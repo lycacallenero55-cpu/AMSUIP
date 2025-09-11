@@ -232,7 +232,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
         {/* Left side - Logo and toggle */}
         <div className="flex items-center gap-4">
           <div 
-            className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 -ml-2"
+            className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105"
             onClick={toggleSidebar}
           >
             <GraduationCap className="w-5 h-5 text-primary-foreground" />
