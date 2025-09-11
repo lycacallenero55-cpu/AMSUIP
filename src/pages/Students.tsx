@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, ChevronDown } from "lucide-react";
 import type React from "react";
 import { toast } from "sonner";
 import StudentImport from "@/components/StudentImport";
@@ -47,6 +47,7 @@ const Students = () => {
     program: '',
     year: ''
   });
+  const [isCustomInput, setIsCustomInput] = useState(false);
   
   // Pagination state
   const [pagination, setPagination] = useState<PaginationState>({
@@ -400,31 +401,47 @@ const Students = () => {
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Showed:</span>
               <div className="relative">
-                <Input
-                  type="number"
-                  min="10"
-                  value={pagination.pageSize}
-                  onChange={(e) => {
-                    const value = parseInt(e.target.value);
-                    if (!isNaN(value) && value >= 10) {
-                      handlePageSizeChange(value);
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const value = parseInt(e.target.value);
-                    if (isNaN(value) || value < 10) {
-                      // Reset to current valid value if invalid
-                      e.target.value = pagination.pageSize.toString();
-                    }
-                  }}
-                  className="h-8 w-24 text-center pr-8"
-                  placeholder="50"
-                />
-                <div className="absolute right-1 top-1/2 transform -translate-y-1/2 pointer-events-none">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
+                {isCustomInput ? (
+                  <Input
+                    type="number"
+                    min="10"
+                    value={pagination.pageSize}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value);
+                      if (!isNaN(value) && value >= 10) {
+                        handlePageSizeChange(value);
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const value = parseInt(e.target.value);
+                      if (isNaN(value) || value < 10) {
+                        e.target.value = pagination.pageSize.toString();
+                      }
+                      setIsCustomInput(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setIsCustomInput(false);
+                        e.currentTarget.blur();
+                      }
+                      if (e.key === 'Escape') {
+                        setIsCustomInput(false);
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    className="h-8 w-24 text-center pr-8"
+                    placeholder="50"
+                    autoFocus
+                  />
+                ) : (
+                  <div
+                    className="h-8 w-24 flex items-center justify-between px-3 border border-input bg-background rounded-md cursor-pointer hover:bg-accent/50 transition-colors"
+                    onClick={() => setIsCustomInput(true)}
+                  >
+                    <span className="text-sm">{pagination.pageSize}</span>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2">
