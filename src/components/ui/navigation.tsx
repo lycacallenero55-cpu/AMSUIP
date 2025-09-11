@@ -337,17 +337,15 @@ const DesktopNavigation = () => {
                   "flex items-center cursor-pointer group relative",
                   // Only color/hover transitions; no positional animation
                   "transition-colors duration-200",
-                  // Unified dimensions; conditional left padding to perfectly center icon when collapsed
-                  isCollapsed 
-                    ? "h-9 justify-start pl-[8px] pr-0 w-full rounded-sm overflow-hidden"
-                    : "h-9 justify-start px-3 w-full rounded-sm overflow-hidden",
+                  // Unified dimensions in both states to prevent distortion
+                  "h-8 justify-start px-2 w-full rounded-sm overflow-hidden",
                   isActive 
                     ? "bg-gradient-primary shadow-glow text-white"
                     : "hover:bg-sidebar-accent/50 hover:text-foreground"
                 )}
               >
                 <Icon className="flex-shrink-0 w-4 h-4" />
-                <span className="ml-3 font-medium whitespace-nowrap min-w-0 flex-1 text-sm">
+                <span className="ml-2 font-medium whitespace-nowrap min-w-0 flex-1 text-sm">
                   {item.label}
                 </span>
               </div>
