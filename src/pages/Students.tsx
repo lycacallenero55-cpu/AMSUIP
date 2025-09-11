@@ -497,73 +497,62 @@ const Students = () => {
       <PageWrapper skeletonType="table">
         <div className="px-6 py-4">
         <div className="mb-3">
-          <div className="flex flex-col">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-1">
-              <div>
-                <h1 className="text-lg font-bold text-education-navy">STUDENTS</h1>
-                <p className="text-sm text-muted-foreground">
-                  Manage and monitor student records
-                </p>
-              </div>
-              <div className="mt-2 md:mt-0">
-                <StudentImport 
-                  onImportComplete={handleStudentAdded}
-                  onImportSuccess={handleStudentAdded}
-                />
-              </div>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-1">
+            <div>
+              <h1 className="text-2xl font-bold text-education-navy">STUDENTS</h1>
+              <p className="text-sm text-muted-foreground">
+                Manage and monitor student records
+              </p>
             </div>
           </div>
         </div>
         
         {/* Search and Students Section */}
         <div className="bg-white rounded-lg shadow-sm p-4">
-          <div className="mb-3">
+          <div className="flex items-center justify-between mb-3">
             <h3 className="text-base font-semibold text-education-navy">List of Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}</h3>
+            <div className="mt-0">
+              <StudentImport 
+                onImportComplete={handleStudentAdded}
+                onImportSuccess={handleStudentAdded}
+              />
+            </div>
           </div>
-          <div className="flex items-center justify-between gap-4 p-0 mb-4">
-            <div className="flex flex-1 items-center gap-3">
-              <div className="relative min-w-[280px] max-w-[400px]">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+          {/* Top controls row */}
+          <div className="flex items-center justify-between gap-4 p-0 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Showed:</span>
+              <Select
+                value={pagination.pageSize.toString()}
+                onValueChange={(value) => handlePageSizeChange(parseInt(value))}
+              >
+                <SelectTrigger className="h-8 w-24">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="25">25</SelectItem>
+                  <SelectItem value="50">50</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                  <SelectItem value="200">200</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Search:</span>
+              <div className="relative min-w-[240px] max-w-[340px]">
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                 {isSearching && (
-                  <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-primary animate-spin" />
+                  <Loader2 className="absolute right-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-primary animate-spin" />
                 )}
                 <Input
-                  placeholder="Search by name or ID..."
-                  className="pl-10 pr-10 h-10 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200 [&::-webkit-search-cancel-button]:hidden"
+                  placeholder="name or ID..."
+                  className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200 [&::-webkit-search-cancel-button]:hidden"
                   value={searchTerm}
                   onChange={handleSearchChange}
                   type="search"
                 />
               </div>
             </div>
-          </div>
-          
-          <div className="text-sm text-gray-500 flex items-center justify-between mb-3">
-            <span>
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Loading students...
-                </span>
-              ) : (
-                <>
-                  Showing {students.length} of {pagination.totalCount.toLocaleString()} students
-                  {(searchTerm || filters.program || filters.year) && (
-                    <span>
-                      {' '}matching current filters
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="ml-2 h-auto p-0 text-blue-600 hover:bg-accent/30 hover:text-blue-700 hover:underline transition-colors duration-200 rounded-sm px-1.5 py-0.5"
-                        onClick={clearFilters}
-                      >
-                        Clear all
-                      </Button>
-                    </span>
-                  )}
-                </>
-              )}
-            </span>
           </div>
           
         
@@ -608,7 +597,7 @@ const Students = () => {
                 </tr>
                 ) : (
                   students.map((student) => (
-                    <tr key={student.id} className="hover:bg-gray-50">
+                    <tr key={student.id} className="hover:bg-gray-50 h-8">
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div>
                           <div className="text-sm font-medium text-gray-900">
@@ -634,43 +623,9 @@ const Students = () => {
                 )}
               </tbody>
             </table>
-          <PaginationControls />
           </div>
         </div>
       </div>
-
-      {/* Summary Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-8">
-        <Card className="bg-gradient-card border-0 shadow-card">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-gray-900">{totalStudentsCount.toLocaleString()}</div>
-            <div className="text-sm text-gray-500">Total Students</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-gradient-card border-0 shadow-card">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-accent">
-              {students.filter(student => student.status === 'Active').length.toLocaleString()}
-            </div>
-            <div className="text-sm text-muted-foreground">Active Students (Current Page)</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-gradient-card border-0 shadow-card">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-primary">89.2%</div>
-            <div className="text-sm text-muted-foreground">Avg Attendance</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-gradient-card border-0 shadow-card">
-          <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-education-green">
-              {uniquePrograms.length}
-            </div>
-            <div className="text-sm text-muted-foreground">Programs</div>
-          </CardContent>
-        </Card>
-      </div>
-      </PageWrapper>
     </Layout>
   );
 }
