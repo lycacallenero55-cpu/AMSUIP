@@ -59,7 +59,6 @@ const Students = () => {
 
   const [uniquePrograms, setUniquePrograms] = useState<string[]>([]);
   const [uniqueYears, setUniqueYears] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
 
   // Performance tracking
   const [isSearching, setIsSearching] = useState(false);
@@ -516,7 +515,7 @@ const Students = () => {
           </div>
         </div>
         
-        {/* Search, Filter, and Students Section */}
+        {/* Search and Students Section */}
         <div className="bg-white rounded-lg shadow-sm p-4">
           <div className="flex items-center justify-between gap-4 p-0 mb-4">
             <div className="flex flex-1 items-center gap-3">
@@ -533,56 +532,6 @@ const Students = () => {
                   type="search"
                 />
               </div>
-              
-              <Select
-                value={filters.program || 'all'}
-                onValueChange={(value) => handleFilterChange('program', value)}
-              >
-                <SelectTrigger className="h-10 min-w-[140px] border-border hover:bg-muted/80 transition-colors duration-200">
-                  <SelectValue placeholder="All Programs" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border shadow-elegant">
-                  <SelectItem value="all">All Programs</SelectItem>
-                  {uniquePrograms.map((program) => (
-                    <SelectItem key={program} value={program}>
-                      {program}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              
-              <Select
-                value={filters.year || 'all'}
-                onValueChange={(value) => handleFilterChange('year', value)}
-              >
-                <SelectTrigger className="h-10 min-w-[100px] border-border hover:bg-muted/80 transition-colors duration-200">
-                  <SelectValue placeholder="All Years" />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border shadow-elegant">
-                  <SelectItem value="all">All Years</SelectItem>
-                  {uniqueYears.map((year) => (
-                    <SelectItem key={year} value={year}>
-                      {year}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="flex items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-10 w-10 p-0 border border-border hover:border-foreground/20 transition-colors duration-200"
-                onClick={() => setViewMode(viewMode === 'table' ? 'grid' : 'table')}
-                title={viewMode === 'table' ? 'Switch to grid view' : 'Switch to table view'}
-              >
-                {viewMode === 'table' ? (
-                  <LayoutGrid className="h-4 w-4" />
-                ) : (
-                  <Table className="h-4 w-4" />
-                )}
-              </Button>
             </div>
           </div>
           
@@ -619,15 +568,14 @@ const Students = () => {
             <h3 className="text-base font-semibold text-education-navy flex items-center gap-2">
               <Users className="w-4 h-4" />
               <span className="text-sm">
-                Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}
+                List of Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}
               </span>
             </h3>
           </div>
         
-          {viewMode === 'table' ? (
-            /* Table View */
-            <div className="rounded-lg border border-gray-200 overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
+          {/* Table View */}
+          <div className="border-t border-b border-gray-200 overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr className="text-xs text-gray-500">
                   <th scope="col" className="px-3 py-2 text-left font-medium">Student</th>
@@ -714,117 +662,8 @@ const Students = () => {
                 )}
               </tbody>
             </table>
-            <PaginationControls />
+          <PaginationControls />
           </div>
-        ) : (
-          /* Grid View */
-          <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {loading ? (
-                <div className="col-span-full text-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto" />
-                  <p className="mt-2 text-sm text-gray-500">Loading students...</p>
-                </div>
-              ) : students.length === 0 ? (
-                <div className="col-span-full text-center py-8">
-                  <p className="text-sm text-gray-500">
-                    {pagination.totalCount === 0 
-                      ? 'No students found. Add your first student!'
-                      : 'No students match the current filters.'}
-                  </p>
-                  {pagination.totalCount > 0 && (
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      className="mt-3 h-8 text-xs hover:bg-gray-100 hover:text-gray-900"
-                      onClick={clearFilters}
-                    >
-                      Clear all filters
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                students.map((student) => (
-                  <Card key={student.id} className="bg-white border border-gray-200 rounded-md shadow-sm hover:shadow transition-shadow h-full">
-                    <CardContent className="p-3">
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white text-xs font-medium">
-                            {getInitials(`${student.firstname} ${student.surname}`)}
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-medium text-gray-900 leading-tight">
-                              {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
-                            </h3>
-                            <p className="text-xs text-gray-500">ID: {student.student_id}</p>
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="h-5 text-[10px] bg-green-50 text-green-600 border-green-100">
-                          {student.status || 'Active'}
-                        </Badge>
-                      </div>
-
-                      <div className="space-y-1.5 text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <GraduationCap className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                          <span className="text-gray-700 truncate">{student.program}</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-1.5 text-gray-600">
-                          <span>{student.year}</span>
-                          <span className="text-gray-300">•</span>
-                          <span>{student.section || 'N/A'}</span>
-                        </div>
-                        
-                        {student.email && (
-                          <div className="flex items-center gap-1.5">
-                            <Mail className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                            <a 
-                              href={`mailto:${student.email}`} 
-                              className="text-blue-600 hover:underline hover:text-blue-800 truncate"
-                              title={student.email}
-                            >
-                              {student.email}
-                            </a>
-                          </div>
-                        )}
-                        
-                        {student.contact_no && (
-                          <div className="flex items-center gap-1.5">
-                            <Phone className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                            <a 
-                              href={`tel:${student.contact_no}`} 
-                              className="text-blue-600 hover:underline hover:text-blue-800"
-                            >
-                              {student.contact_no}
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                      
-                      <div className="mt-2 pt-2 border-t border-gray-100">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-[10px] text-gray-500">Attendance</p>
-                            <p className="text-sm font-medium">
-                              <span className={getAttendanceColor(85)}>85%</span>
-                              <span className="text-gray-400 text-xs"> / 100%</span>
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </div>
-            {pagination.totalPages > 1 && (
-              <div className="mt-4">
-                <PaginationControls />
-              </div>
-            )}
-          </>
-        )}
         </div>
       </div>
 
