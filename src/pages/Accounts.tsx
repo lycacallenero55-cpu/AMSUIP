@@ -261,7 +261,7 @@ const Accounts = () => {
             <div className="mb-8"></div>
             
             {/* Show search and filters inside the card */}
-            <div className="flex items-center justify-between gap-4 px-4 mb-3">
+            <div className="flex items-center justify-between gap-4 p-0 mb-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Showed:</span>
                 <Select
