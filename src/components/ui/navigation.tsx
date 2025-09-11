@@ -328,10 +328,9 @@ const DesktopNavigation = () => {
       )} style={{height: 'calc(100vh - 56px)'}}>
       <div className={cn(
         "flex-1",
-        isCollapsed ? "px-2 pb-2" : "p-4"
+        isCollapsed ? "px-2 pb-2 pt-2" : "p-4 pt-2"
       )}>
-        {/* Empty space where header used to be */}
-        <div className="h-16"></div>
+        {/* Spacer removed to align items directly under header */}
         
         {/* Menu Items */}
         <div className={cn(
@@ -351,13 +350,11 @@ const DesktopNavigation = () => {
                   "flex items-center cursor-pointer group relative",
                   // Stage 2: Item positioning - each with progressive delay
                   "transition-all duration-300 ease-in-out",
-                  isCollapsed 
-                    ? "h-8 justify-center w-6 mx-auto p-0 rounded-sm" // Larger container with smaller active background
-                    : "h-9 justify-start gap-3 px-3 w-full rounded-sm", // Slightly smaller expanded items, perfect square-round
-                  isActive 
-                    ? isCollapsed 
-                      ? "bg-gradient-primary shadow-glow text-white h-6 w-6 mx-auto rounded-sm"
-                      : "bg-gradient-primary shadow-glow text-white"
+                  isCollapsed
+                    ? "h-9 justify-center px-0 w-full rounded-sm"
+                    : "h-9 justify-start gap-3 px-3 w-full rounded-sm",
+                  isActive
+                    ? "bg-gradient-primary shadow-glow text-white"
                     : "hover:bg-sidebar-accent/50 hover:text-foreground"
                 )}
                 style={{
