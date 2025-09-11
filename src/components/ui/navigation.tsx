@@ -339,7 +339,7 @@ const DesktopNavigation = () => {
                   "transition-colors duration-200",
                   // Unified dimensions; conditional left padding to perfectly center icon when collapsed
                   isCollapsed 
-                    ? "h-9 justify-start pl-[16px] pr-0 w-full rounded-sm overflow-hidden"
+                    ? "h-9 justify-start pl-[8px] pr-0 w-full rounded-sm overflow-hidden"
                     : "h-9 justify-start px-3 w-full rounded-sm overflow-hidden",
                   isActive 
                     ? "bg-gradient-primary shadow-glow text-white"
