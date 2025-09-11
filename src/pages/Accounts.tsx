@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2 } from "lucide-react";
 
 import { 
   Search, 
@@ -79,6 +80,8 @@ const Accounts = () => {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentUserProfile, setCurrentUserProfile] = useState<Profile | null>(null);
+  const [displayPageSize, setDisplayPageSize] = useState(10);
+  const [totalAccountsCount, setTotalAccountsCount] = useState(0);
   const { user } = useAuth();
   
 
@@ -148,7 +151,9 @@ const Accounts = () => {
         status: (user.status || 'active') as AccountStatus
       }));
       
-      setProfiles([...adminProfiles, ...userProfiles]);
+      const allProfiles = [...adminProfiles, ...userProfiles];
+      setProfiles(allProfiles);
+      setTotalAccountsCount(allProfiles.length);
     } catch (error) {
       console.error('Error loading accounts:', error);
       toast.error('Failed to load accounts');
@@ -156,6 +161,26 @@ const Accounts = () => {
       setIsLoading(false);
     }
   };
+
+  // Handle page size change
+  const handlePageSizeChange = (newPageSize: number) => {
+    // Allow very large numbers for "ALL" case, otherwise ensure minimum value of 10
+    const validPageSize = newPageSize >= 999999 ? newPageSize : Math.max(10, newPageSize);
+    
+    // Update display page size (what user sees in the control)
+    if (newPageSize >= 999999) {
+      setDisplayPageSize(totalAccountsCount);
+    } else {
+      setDisplayPageSize(validPageSize);
+    }
+  };
+
+  // Update display page size when total accounts count changes (for "ALL" case)
+  useEffect(() => {
+    if (displayPageSize >= 999999) {
+      setDisplayPageSize(totalAccountsCount);
+    }
+  }, [totalAccountsCount, displayPageSize]);
 
   useEffect(() => {
     if (user) {
@@ -243,13 +268,39 @@ const Accounts = () => {
         {/* Show search and filters only for admins */}
         {currentUserProfile?.role === 'admin' && (
           <div className="flex items-center justify-between gap-4 p-0">
-            <div className="flex flex-1 items-center gap-3">
-              <div className="relative min-w-[280px] max-w-[400px]">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Showed:</span>
+              <Select
+                value={displayPageSize >= 999999 ? "all" : displayPageSize.toString()}
+                onValueChange={(value) => {
+                  if (value === "all") {
+                    handlePageSizeChange(999999);
+                  } else {
+                    handlePageSizeChange(parseInt(value));
+                  }
+                }}
+              >
+                <SelectTrigger className="h-8 w-24">
+                  <SelectValue>
+                    {displayPageSize.toString()}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                  <SelectItem value="250">250</SelectItem>
+                  <SelectItem value="all">ALL</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Search:</span>
+              <div className="relative min-w-[240px] max-w-[340px]">
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                 <Input
                   type="search"
                   placeholder="Search accounts..."
-                  className="pl-10 h-10 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
+                  className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -267,63 +318,89 @@ const Accounts = () => {
                 {filteredProfiles.length} {filteredProfiles.length === 1 ? 'account' : 'accounts'} found
               </CardDescription>
             </CardHeader>
+            
+            {/* Big space below List of Accounts label */}
+            <div className="mb-8"></div>
+            
             <CardContent>
               <div className="border-t border-b">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead>User</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                    <TableRow className="h-8">
+                      <TableHead className="px-3 py-2">User</TableHead>
+                      <TableHead className="px-3 py-2">Email</TableHead>
+                      <TableHead className="px-3 py-2">Role</TableHead>
+                      <TableHead className="px-3 py-2">Status</TableHead>
+                      <TableHead className="px-3 py-2">Created</TableHead>
+                      <TableHead className="px-3 py-2 text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredProfiles.map((profile) => (
-                      <TableRow key={profile.id}>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">
+                    {isLoading ? (
+                      <TableRow className="h-8">
+                        <TableCell colSpan={6} className="px-3 py-1 text-center">
+                          <div className="flex justify-center">
+                            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                          </div>
+                          <p className="mt-1 text-xs text-gray-500">Loading accounts...</p>
+                        </TableCell>
+                      </TableRow>
+                    ) : filteredProfiles.length === 0 ? (
+                      <TableRow className="h-8">
+                        <TableCell colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
+                          No accounts found matching the current filters.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredProfiles.map((profile) => (
+                        <TableRow key={profile.id} className="h-8">
+                          <TableCell className="px-3 py-1">
+                            <div className="text-sm font-medium text-gray-900">
                               {profile.first_name && profile.last_name 
                                 ? `${profile.first_name} ${profile.last_name}`
                                 : profile.email.split('@')[0]}
                             </div>
-                            <div className="text-sm text-muted-foreground">{profile.email}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell><RoleBadge role={profile.role} /></TableCell>
-                        <TableCell><StatusBadge status={profile.status} /></TableCell>
-                        <TableCell>
-                          <div className="text-sm text-muted-foreground">
-                            {format(new Date(profile.created_at), 'MMM d, yyyy')}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {profile.status === 'pending' && (
-                            <div className="flex gap-2 justify-end">
-                              <Button
-                                size="sm"
-                                onClick={() => handleApprove(profile.id)}
-                                className="bg-green-600 hover:bg-green-700"
-                              >
-                                <CheckCircle2 className="h-4 w-4 mr-1" />
-                                Approve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleReject(profile.id)}
-                                className="text-red-600 border-red-200 hover:bg-red-50"
-                              >
-                                <XCircle className="h-4 w-4 mr-1" />
-                                Reject
-                              </Button>
+                          </TableCell>
+                          <TableCell className="px-3 py-1">
+                            <div className="text-sm text-gray-500">{profile.email}</div>
+                          </TableCell>
+                          <TableCell className="px-3 py-1">
+                            <RoleBadge role={profile.role} />
+                          </TableCell>
+                          <TableCell className="px-3 py-1">
+                            <StatusBadge status={profile.status} />
+                          </TableCell>
+                          <TableCell className="px-3 py-1">
+                            <div className="text-sm text-gray-500">
+                              {format(new Date(profile.created_at), 'MMM d, yyyy')}
                             </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                          <TableCell className="px-3 py-1 text-right">
+                            {profile.status === 'pending' && (
+                              <div className="flex gap-2 justify-end">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApprove(profile.id)}
+                                  className="bg-green-600 hover:bg-green-700 h-6 text-xs"
+                                >
+                                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleReject(profile.id)}
+                                  className="text-red-600 border-red-200 hover:bg-red-50 h-6 text-xs"
+                                >
+                                  <XCircle className="h-3 w-3 mr-1" />
+                                  Reject
+                                </Button>
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </div>
