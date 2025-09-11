@@ -599,11 +599,27 @@ async def identify_signature_owner(
                                         model = keras.models.load_model(tmp_path)
                                         logger.info(f"Loaded {model_type} model using standard Keras")
                                     
-                                    # Set the appropriate model
+                                    # Set the appropriate model with safeguards
                                     if model_type == 'embedding':
                                         request_model_manager.embedding_model = model
                                     elif model_type == 'classification':
-                                        request_model_manager.classification_head = model
+                                        try:
+                                            # Heuristic: route authenticity files to authenticity_head
+                                            if 'authenticity' in (model_path or '').lower():
+                                                request_model_manager.authenticity_head = model
+                                            else:
+                                                # If single-unit output, treat as authenticity
+                                                output_shape = getattr(model, 'output_shape', None)
+                                                if output_shape and isinstance(output_shape, (list, tuple)):
+                                                    last_dim = output_shape[-1][-1] if isinstance(output_shape[-1], (list, tuple)) else output_shape[-1]
+                                                    if last_dim == 1:
+                                                        request_model_manager.authenticity_head = model
+                                                    else:
+                                                        request_model_manager.classification_head = model
+                                                else:
+                                                    request_model_manager.classification_head = model
+                                        except Exception:
+                                            request_model_manager.classification_head = model
                                     elif model_type == 'authenticity':
                                         request_model_manager.authenticity_head = model
                                     elif model_type == 'siamese':
@@ -748,6 +764,8 @@ async def identify_signature_owner(
         if predicted_owner_id is not None:
             individual_prediction = result.get("predicted_student_id")
             logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+            # Preserve the original individual prediction for agreement checks later
+            original_individual_prediction = individual_prediction
             if individual_prediction != predicted_owner_id:
                 logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
@@ -796,7 +814,8 @@ async def identify_signature_owner(
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
-            agree = (predicted_owner_id is not None and result.get("predicted_student_id") == predicted_owner_id)
+            # Agreement must be based on the pre-override individual prediction
+            agree = (predicted_owner_id is not None and original_individual_prediction == predicted_owner_id)
         except Exception:
             agree = False
         if agree and (global_score >= 0.70 or student_confidence >= 0.40):
