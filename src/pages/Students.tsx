@@ -51,7 +51,7 @@ const Students = () => {
   // Pagination state
   const [pagination, setPagination] = useState<PaginationState>({
     currentPage: 1,
-    pageSize: 50,
+    pageSize: 10,
     totalCount: 0,
     totalPages: 0
   });
@@ -316,7 +316,7 @@ const Students = () => {
   // Initialize component
   useEffect(() => {
     fetchFilterOptions();
-    fetchStudents('', '', '', 1, 50);
+    fetchStudents('', '', '', 1, 10);
     fetchTotalStudentsCount();
   }, []);
 
@@ -399,50 +399,26 @@ const Students = () => {
           <div className="flex items-center justify-between gap-4 p-0 mb-3">
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Showed:</span>
-              <div className="relative">
-                <Input
-                  type="number"
-                  min="10"
-                  value={pagination.pageSize >= 999999 ? "" : pagination.pageSize}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    if (value === "") {
-                      // Allow empty input for typing
-                      return;
-                    }
-                    const numValue = parseInt(value);
-                    if (!isNaN(numValue) && numValue >= 10) {
-                      handlePageSizeChange(numValue);
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const value = parseInt(e.currentTarget.value);
-                      if (!isNaN(value) && value >= 10) {
-                        handlePageSizeChange(value);
-                      } else if (e.currentTarget.value === "") {
-                        // If empty, set to 10
-                        handlePageSizeChange(10);
-                      }
-                    }
-                  }}
-                  className="h-8 w-24 text-center pr-8"
-                  placeholder={pagination.pageSize >= 999999 ? "ALL" : "50"}
-                />
-                <div 
-                  className="absolute right-1 top-1/2 transform -translate-y-1/2 cursor-pointer"
-                  onClick={() => {
-                    // Toggle between current value and ALL
-                    if (pagination.pageSize >= 999999) {
-                      handlePageSizeChange(50);
-                    } else {
-                      handlePageSizeChange(999999);
-                    }
-                  }}
-                >
-                  <ChevronDown className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-                </div>
-              </div>
+              <Select
+                value={pagination.pageSize >= 999999 ? "all" : pagination.pageSize.toString()}
+                onValueChange={(value) => {
+                  if (value === "all") {
+                    handlePageSizeChange(999999);
+                  } else {
+                    handlePageSizeChange(parseInt(value));
+                  }
+                }}
+              >
+                <SelectTrigger className="h-8 w-24">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                  <SelectItem value="250">250</SelectItem>
+                  <SelectItem value="all">ALL</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Search:</span>
