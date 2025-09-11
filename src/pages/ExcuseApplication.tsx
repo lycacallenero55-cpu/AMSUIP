@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from "@/components/ui/label";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { UnsavedChangesDialog } from "@/components/UnsavedChangesDialog";
+import { Loader2 } from "lucide-react";
+import PageWrapper from "@/components/PageWrapper";
 
 import { FileText, Clock, AlertCircle, CheckCircle2, Plus, Search, Filter, Eye, Check, X, ChevronsUpDown, CalendarIcon, Edit, ZoomIn, ZoomOut, Trash2 } from "lucide-react";
 import { format } from "date-fns";
@@ -82,6 +84,9 @@ const ExcuseApplicationContent = () => {
   const [viewMode, setViewMode] = useState<'view' | 'edit'>('view');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const [displayPageSize, setDisplayPageSize] = useState(10);
+  const [totalExcusesCount, setTotalExcusesCount] = useState(0);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const {
     showConfirmDialog,
@@ -138,10 +143,12 @@ const ExcuseApplicationContent = () => {
 
       if (error) throw error;
       console.log('Fetched excuses data:', data);
-      setExcuses((data || []).map(excuse => ({
+      const excusesData = (data || []).map(excuse => ({
         ...excuse,
         status: excuse.status as ExcuseStatus
-      })));
+      }));
+      setExcuses(excusesData);
+      setTotalExcusesCount(excusesData.length);
     } catch (error) {
       console.error('Error fetching excuses:', error);
       toast({
@@ -153,6 +160,26 @@ const ExcuseApplicationContent = () => {
       setLoading(false);
     }
   };
+
+  // Handle page size change
+  const handlePageSizeChange = (newPageSize: number) => {
+    // Allow very large numbers for "ALL" case, otherwise ensure minimum value of 10
+    const validPageSize = newPageSize >= 999999 ? newPageSize : Math.max(10, newPageSize);
+    
+    // Update display page size (what user sees in the control)
+    if (newPageSize >= 999999) {
+      setDisplayPageSize(totalExcusesCount);
+    } else {
+      setDisplayPageSize(validPageSize);
+    }
+  };
+
+  // Update display page size when total excuses count changes (for "ALL" case)
+  useEffect(() => {
+    if (displayPageSize >= 999999) {
+      setDisplayPageSize(totalExcusesCount);
+    }
+  }, [totalExcusesCount, displayPageSize]);
 
   const fetchStudents = async () => {
     try {
@@ -404,189 +431,220 @@ const ExcuseApplicationContent = () => {
     }
   };
 
-  const getStatusBadge = (status: ExcuseStatus) => {
-    switch (status) {
-      case 'approved':
-        return (
-          <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-            <CheckCircle2 className="w-3 h-3 mr-1" />
-            Approved
-          </Badge>
-        );
-      case 'rejected':
-        return (
-          <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
-            <AlertCircle className="w-3 h-3 mr-1" />
-            Rejected
-          </Badge>
-        );
-      default:
-        return (
-          <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">
-            <Clock className="w-3 h-3 mr-1" />
-            Pending
-          </Badge>
-        );
-    }
+  const getStatusDisplay = (status: ExcuseStatus) => {
+    return (
+      <span className="text-sm text-gray-500 capitalize">
+        {status}
+      </span>
+    );
   };
 
+  // Filter excuses based on search term
+  const filteredExcuses = excuses.filter(excuse => {
+    const matchesSearch = 
+      `${excuse.students?.firstname} ${excuse.students?.surname}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      excuse.students?.student_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      excuse.students?.program?.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    return matchesSearch;
+  });
+
   return (
-    <div className="flex-1 space-y-4 px-6 py-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-bold tracking-tight">EXCUSE APPLICATIONS</h1>
-          <p className="text-sm text-muted-foreground">
-            Review and manage student excuse applications for absences
-          </p>
-        </div>
-        <Button 
-          className="bg-gradient-primary shadow-glow h-9"
-          onClick={() => setIsFormOpen(true)}
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          New Application
-        </Button>
-      </div>
-
-      {/* Filter and Search Section */}
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="flex gap-2">
-          <Select defaultValue="all" onValueChange={(value) => {
-            // Filter logic would go here
-          }}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter by status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="approved">Approved</SelectItem>
-              <SelectItem value="rejected">Rejected</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-          <Input
-            placeholder="Search applications..."
-            className="pl-10"
-            onChange={(e) => {
-              // Search logic would go here
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Applications Grid */}
-      {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
-        </div>
-      ) : excuses.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {excuses.map((excuse) => (
-            <Card key={excuse.id} className="hover:shadow-md transition-shadow">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <CardTitle className="text-base font-semibold text-gray-900 truncate">
-                      {excuse.students?.firstname} {excuse.students?.surname}
-                    </CardTitle>
-                    <p className="text-sm text-gray-500 mt-1">
-                      {excuse.students?.student_id} • {excuse.students?.program}
-                    </p>
-                  </div>
-                  <div className="ml-2">
-                    {getStatusBadge(excuse.status)}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-3">
-                  <div className="flex items-center text-sm text-gray-600">
-                    <CalendarIcon className="h-4 w-4 mr-2 text-gray-400" />
-                    {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
-                  </div>
-                  
-                  {excuse.documentation_url && (
-                    <div className="flex items-center text-sm text-gray-600">
-                      <FileText className="h-4 w-4 mr-2 text-gray-400" />
-                      <span className="truncate">Documentation attached</span>
-                    </div>
-                  )}
-                  
-                  <div className="flex items-center text-sm text-gray-600">
-                    <Clock className="h-4 w-4 mr-2 text-gray-400" />
-                    Submitted {format(new Date(excuse.created_at), 'MMM d, yyyy')}
-                  </div>
-                  
-                  <div className="flex gap-2 pt-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1 h-8"
-                      onClick={() => {
-                        setSelectedExcuse(excuse);
-                        setViewMode('view');
-                        setIsViewOpen(true);
-                      }}
-                    >
-                      <Eye className="h-3 w-3 mr-1" />
-                      View
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1 h-8"
-                      onClick={() => {
-                        setSelectedExcuse(excuse);
-                        setViewMode('edit');
-                        setIsEditMode(true);
-                        setFormData({
-                          student_id: excuse.student_id?.toString() || '',
-                          session_id: excuse.session_id?.toString() || '',
-                          absence_date: excuse.absence_date || '',
-                          documentation_url: excuse.documentation_url || ''
-                        });
-                        setIsFormOpen(true);
-                      }}
-                    >
-                      <Edit className="h-3 w-3 mr-1" />
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 w-8 p-0"
-                      onClick={() => {
-                        setDeleteTarget(excuse.id);
-                        setShowDeleteConfirm(true);
-                      }}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <Card className="text-center py-12">
-          <div className="flex flex-col items-center">
-            <FileText className="h-12 w-12 text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No excuse applications</h3>
-            <p className="text-gray-500 mb-4">Get started by creating a new excuse application.</p>
+    <div className="px-6 py-4">
+      <div className="mb-3">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-1">
+          <div>
+            <h1 className="text-2xl font-bold text-education-navy">EXCUSE APPLICATIONS</h1>
+            <p className="text-sm text-muted-foreground">
+              Review and manage student excuse applications for absences
+            </p>
+          </div>
+          <div className="mt-2 md:mt-0">
             <Button 
+              className="bg-gradient-primary shadow-glow h-9"
               onClick={() => setIsFormOpen(true)}
-              className="bg-gradient-primary shadow-glow"
             >
               <Plus className="w-4 h-4 mr-2" />
               New Application
             </Button>
           </div>
-        </Card>
-      )}
+        </div>
+      </div>
+      
+      {/* Excuse Applications Section */}
+      <div className="bg-white rounded-lg shadow-sm p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-education-navy">List of Excuse Applications</h3>
+        </div>
+        
+        {/* Big space below List of Excuse Applications label */}
+        <div className="mb-8"></div>
+        
+        {/* Top controls row */}
+        <div className="flex items-center justify-between gap-4 p-0 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Showed:</span>
+            <Select
+              value={displayPageSize >= 999999 ? "all" : displayPageSize.toString()}
+              onValueChange={(value) => {
+                if (value === "all") {
+                  handlePageSizeChange(999999);
+                } else {
+                  handlePageSizeChange(parseInt(value));
+                }
+              }}
+            >
+              <SelectTrigger className="h-8 w-24">
+                <SelectValue>
+                  {displayPageSize.toString()}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="250">250</SelectItem>
+                <SelectItem value="all">ALL</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Search:</span>
+            <div className="relative min-w-[240px] max-w-[340px]">
+              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Search applications..."
+                className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                type="search"
+              />
+            </div>
+          </div>
+        </div>
+        
+        {/* Table View */}
+        <div className="border-t border-b border-gray-200 overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr className="text-xs text-gray-500 h-8">
+                <th scope="col" className="px-3 py-2 text-left font-medium">Name</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Date of Session</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Documentation</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200 text-sm">
+              {loading ? (
+                <tr className="h-8">
+                  <td colSpan={5} className="px-3 py-1 text-center">
+                    <div className="flex justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">Loading applications...</p>
+                  </td>
+                </tr>
+              ) : filteredExcuses.length === 0 ? (
+                <tr className="h-8">
+                  <td colSpan={5} className="px-3 py-1 text-center text-sm text-gray-500">
+                    {excuses.length === 0 
+                      ? 'No excuse applications found. Add your first application!'
+                      : 'No applications match the current search. Try adjusting your search.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredExcuses.map((excuse) => (
+                  <tr key={excuse.id} className="hover:bg-gray-50 h-8">
+                    <td className="px-3 py-1 whitespace-nowrap">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">
+                          {excuse.students?.firstname} {excuse.students?.surname}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {excuse.students?.student_id} • {excuse.students?.program}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap">
+                      {excuse.documentation_url ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs"
+                          onClick={() => {
+                            setSelectedExcuse(excuse);
+                            setViewMode('view');
+                            setIsViewOpen(true);
+                          }}
+                        >
+                          <Eye className="h-3 w-3 mr-1" />
+                          View
+                        </Button>
+                      ) : (
+                        <span className="text-sm text-gray-400">No attachment</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      {getStatusDisplay(excuse.status)}
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-right">
+                      <div className="flex gap-2 justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs"
+                          onClick={() => {
+                            setSelectedExcuse(excuse);
+                            setViewMode('view');
+                            setIsViewOpen(true);
+                          }}
+                        >
+                          <Eye className="h-3 w-3 mr-1" />
+                          View
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs"
+                          onClick={() => {
+                            setSelectedExcuse(excuse);
+                            setViewMode('edit');
+                            setIsEditMode(true);
+                            setFormData({
+                              student_id: excuse.student_id?.toString() || '',
+                              session_id: excuse.session_id?.toString() || '',
+                              absence_date: excuse.absence_date || '',
+                              documentation_url: excuse.documentation_url || ''
+                            });
+                            setIsFormOpen(true);
+                          }}
+                        >
+                          <Edit className="h-3 w-3 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => {
+                            setDeleteTarget(excuse.id);
+                            setShowDeleteConfirm(true);
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* Form Dialog */}
       <Dialog open={isFormOpen} onOpenChange={handleOpenChange}>
@@ -990,7 +1048,9 @@ const ExcuseApplicationContent = () => {
 const ExcuseApplication = () => {
   return (
     <Layout>
-      <ExcuseApplicationContent />
+      <PageWrapper skeletonType="table">
+        <ExcuseApplicationContent />
+      </PageWrapper>
     </Layout>
   );
 };
