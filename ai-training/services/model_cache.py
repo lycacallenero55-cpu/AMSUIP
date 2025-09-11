@@ -8,7 +8,7 @@ import tensorflow as tf
 from tensorflow import keras
 import os
 from config import settings
-from utils.storage import download_from_supabase, load_model_from_supabase
+# Removed Supabase imports - using S3 directly
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +50,87 @@ class ModelCache:
             # Try embedding model first (lighter/faster)
             if embedding_path:
                 try:
-                    logger.info(f"📥 Loading embedding model directly from Supabase: {embedding_path}")
-                    model = await load_model_from_supabase(embedding_path)
-                    logger.info(f"✅ Loaded embedding model from Supabase")
-                    return model
+                    logger.info(f"📥 Loading embedding model from S3: {embedding_path}")
+                    if embedding_path.startswith('https://') and 'amazonaws.com' in embedding_path:
+                        import requests
+                        import tempfile
+                        import os
+                        
+                        # Extract S3 key and create presigned URL
+                        s3_key = embedding_path.split('amazonaws.com/')[-1]
+                        from utils.s3_storage import create_presigned_get
+                        presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                        
+                        response = requests.get(presigned_url, timeout=30)
+                        response.raise_for_status()
+                        
+                        with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                            tmp_file.write(response.content)
+                            tmp_path = tmp_file.name
+                        
+                        try:
+                            # Try custom deserialization first (for optimized S3 models)
+                            try:
+                                from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                with open(tmp_path, 'rb') as f:
+                                    model_data = f.read()
+                                model = _deserialize_model_from_bytes(model_data)
+                                logger.info(f"✅ Loaded embedding model using custom deserialization")
+                            except Exception as custom_error:
+                                logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                model = keras.models.load_model(tmp_path)
+                                logger.info(f"✅ Loaded embedding model using standard Keras")
+                            return model
+                        finally:
+                            try:
+                                os.unlink(tmp_path)
+                            except:
+                                pass
+                    else:
+                        logger.warning(f"Non-S3 embedding model path not supported: {embedding_path}")
                 except Exception as e:
                     logger.warning(f"Failed to load embedding model: {e}")
             
             # Fallback to full model
-            logger.info(f"📥 Loading full model directly from Supabase: {model_path}")
-            model = await load_model_from_supabase(model_path)
-            logger.info(f"✅ Loaded full model from Supabase")
-            return model
+            logger.info(f"📥 Loading full model from S3: {model_path}")
+            if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                import requests
+                import tempfile
+                import os
+                
+                # Extract S3 key and create presigned URL
+                s3_key = model_path.split('amazonaws.com/')[-1]
+                from utils.s3_storage import create_presigned_get
+                presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                
+                response = requests.get(presigned_url, timeout=30)
+                response.raise_for_status()
+                
+                with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                    tmp_file.write(response.content)
+                    tmp_path = tmp_file.name
+                
+                try:
+                    # Try custom deserialization first (for optimized S3 models)
+                    try:
+                        from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                        with open(tmp_path, 'rb') as f:
+                            model_data = f.read()
+                        model = _deserialize_model_from_bytes(model_data)
+                        logger.info(f"✅ Loaded full model using custom deserialization")
+                    except Exception as custom_error:
+                        logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                        model = keras.models.load_model(tmp_path)
+                        logger.info(f"✅ Loaded full model using standard Keras")
+                    return model
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+            else:
+                logger.warning(f"Non-S3 model path not supported: {model_path}")
+                return None
             
         except Exception as e:
             logger.error(f"Failed to load model: {e}")

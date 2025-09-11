@@ -3,12 +3,13 @@ from typing import Optional
 from PIL import Image
 import io
 import logging
+from datetime import datetime
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor
 from utils.image_processing import validate_image
-from utils.storage import load_model_from_supabase, load_model_from_s3
+# Removed non-existent imports - using direct S3 download instead
 from utils.s3_storage import create_presigned_get, download_bytes
 from models.global_signature_model import GlobalSignatureVerificationModel
 import requests
@@ -17,12 +18,100 @@ from config import settings
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+@router.get("/health")
+async def verification_health():
+    """Health check for verification system"""
+    try:
+        # Check if we can access the database
+        has_db = False
+        try:
+            await db_manager.get_trained_models()
+            has_db = True
+        except Exception as e:
+            logger.warning(f"Database check failed: {e}")
+        
+        # Check if we have any trained models
+        model_count = 0
+        try:
+            models = await db_manager.get_trained_models()
+            model_count = len(models) if models else 0
+        except Exception as e:
+            logger.warning(f"Model count check failed: {e}")
+        
+        return {
+            "status": "healthy" if has_db else "degraded",
+            "database_available": has_db,
+            "trained_models_count": model_count,
+            "preprocessor_available": preprocessor is not None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+@router.get("/debug/models")
+async def debug_models():
+    """Debug endpoint to check model availability"""
+    try:
+        # Check database connection
+        db_status = "connected"
+        try:
+            await db_manager.get_trained_models()
+        except Exception as e:
+            db_status = f"error: {str(e)}"
+        
+        # Check for AI models
+        ai_model_info = None
+        if hasattr(db_manager, 'get_latest_ai_model'):
+            try:
+                latest_ai = await db_manager.get_latest_ai_model()
+                if latest_ai:
+                    ai_model_info = {
+                        "id": latest_ai.get("id"),
+                        "status": latest_ai.get("status"),
+                        "embedding_path": latest_ai.get("embedding_model_path"),
+                        "classification_path": latest_ai.get("model_path"),
+                        "authenticity_path": latest_ai.get("authenticity_model_path"),
+                        "mappings_path": latest_ai.get("mappings_path")
+                    }
+                else:
+                    ai_model_info = "No AI models found"
+            except Exception as e:
+                ai_model_info = f"Error loading AI model: {str(e)}"
+        else:
+            ai_model_info = "get_latest_ai_model method not available"
+        
+        # Check legacy models
+        legacy_models = []
+        try:
+            models = await db_manager.get_trained_models()
+            if models:
+                legacy_models = [{"id": m.get("id"), "status": m.get("status"), "type": m.get("training_metrics", {}).get("model_type")} for m in models[:5]]
+        except Exception as e:
+            legacy_models = f"Error loading legacy models: {str(e)}"
+        
+        return {
+            "database_status": db_status,
+            "ai_model_info": ai_model_info,
+            "legacy_models": legacy_models,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 # Global model instance
 signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
-def _get_fallback_response(endpoint_type="identify", student_id=None):
-    """Return a fallback response when database is unavailable"""
+def _get_fallback_response(endpoint_type="identify", student_id=None, error_message="System temporarily unavailable"):
+    """Return a fallback response when system is unavailable"""
     base_response = {
         "is_match": False,
         "confidence": 0.0,
@@ -32,12 +121,13 @@ def _get_fallback_response(endpoint_type="identify", student_id=None):
         "authenticity_score": 0.0,
         "predicted_student": {
             "id": 0,
-            "name": "Database Unavailable"
+            "name": "System Unavailable"
         },
         "is_unknown": True,
-        "model_type": "database_unavailable",
+        "model_type": "system_unavailable",
         "ai_architecture": "none",
-        "error": "Database connection failed. Please check your Supabase configuration."
+        "error": error_message,
+        "success": False
     }
     
     if endpoint_type == "verify":
@@ -134,76 +224,229 @@ async def identify_signature_owner(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Try to get latest AI model first, fallback to legacy models
+        latest_ai_model = None
         try:
-            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+            if hasattr(db_manager, 'get_latest_ai_model'):
+                latest_ai_model = await db_manager.get_latest_ai_model()
+                logger.info(f"Latest AI model found: {latest_ai_model is not None}")
+            else:
+                logger.warning("get_latest_ai_model method not available")
         except Exception as e:
-            logger.warning(f"Database connection failed: {e}")
-            return _get_fallback_response("identify")
+            logger.error(f"Database connection failed: {e}")
+            return _get_fallback_response("identify", error_message=f"Database error: {str(e)}")
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Use new AI model
+            logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
                 'classification': latest_ai_model.get("model_path"),
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
+            logger.info(f"Model paths: {model_paths}")
             
-            # Load AI models
+            # Load AI models with proper error handling
             try:
+                # Create a fresh model manager for this request
+                from models.signature_embedding_model import SignatureEmbeddingModel
+                request_model_manager = SignatureEmbeddingModel(max_students=150)
+                
                 for model_type, model_path in model_paths.items():
-                    if model_path:
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                            model = await load_model_from_s3(model_path)
-                        else:
-                            model = await load_model_from_supabase(model_path)
+                    if not model_path:
+                        continue
                         
-                        # Set the appropriate model
-                        if model_type == 'embedding':
-                            signature_ai_manager.embedding_model = model
-                        elif model_type == 'classification':
-                            signature_ai_manager.classification_head = model
-                        elif model_type == 'authenticity':
-                            signature_ai_manager.authenticity_head = model
-                        elif model_type == 'siamese':
-                            signature_ai_manager.siamese_model = model
+                    try:
+                        # Load model from S3 or Supabase
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            # Download model from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
+                            response.raise_for_status()
+                            
+                            # Save to temporary file and load
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                # Try custom deserialization first (for optimized S3 models)
+                                try:
+                                    from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                    with open(tmp_path, 'rb') as f:
+                                        model_data = f.read()
+                                    model = _deserialize_model_from_bytes(model_data)
+                                    logger.info(f"Loaded model using custom deserialization")
+                                except Exception as custom_error:
+                                    logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                    model = keras.models.load_model(tmp_path)
+                                    logger.info(f"Loaded model using standard Keras")
+                                
+                                # Set the appropriate model
+                                if model_type == 'embedding':
+                                    request_model_manager.embedding_model = model
+                                elif model_type == 'classification':
+                                    request_model_manager.classification_head = model
+                                elif model_type == 'authenticity':
+                                    request_model_manager.authenticity_head = model
+                                elif model_type == 'siamese':
+                                    request_model_manager.siamese_model = model
+                                    
+                            finally:
+                                # Clean up temp file
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            # Load from Supabase (implement if needed)
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to load {model_type} model from {model_path}: {e}")
+                        continue
                 
                 # Load student mappings
                 mappings_path = latest_ai_model.get("mappings_path")
                 if mappings_path:
-                    import json
-                    import requests
-                    mappings_data = requests.get(mappings_path).json()
-                    signature_ai_manager.student_to_id = mappings_data['student_to_id']
-                    signature_ai_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    try:
+                        import json
+                        import requests
+                        mappings_response = requests.get(mappings_path, timeout=10)
+                        mappings_response.raise_for_status()
+                        mappings_data = mappings_response.json()
+                        request_model_manager.student_to_id = mappings_data['student_to_id']
+                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    except Exception as e:
+                        logger.error(f"Failed to load student mappings: {e}")
+                        # Continue without mappings - will use fallback
+                
+                # Use the request-specific model manager
+                signature_ai_manager = request_model_manager
+                
+                # CRITICAL FIX: Ensure mappings are loaded
+                if not signature_ai_manager.id_to_student:
+                    logger.warning("No student mappings loaded, loading from database...")
+                    try:
+                        # Try to get only the students that were used in training
+                        try:
+                            # Get students that have signatures (these are the ones used in training)
+                            students_with_signatures = await db_manager.list_students_with_images()
+                            if students_with_signatures:
+                                # Extract unique student IDs from signatures
+                                trained_student_ids = set()
+                                for student_data in students_with_signatures:
+                                    if 'student_id' in student_data:
+                                        trained_student_ids.add(student_data['student_id'])
+                                
+                                logger.info(f"DEBUG: Found {len(trained_student_ids)} students with signatures: {list(trained_student_ids)}")
+                                
+                                # Get student details for only the trained students
+                                students = []
+                                for student_id in trained_student_ids:
+                                    try:
+                                        student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
+                                        if student_response.data:
+                                            student = student_response.data[0]
+                                            logger.info(f"DEBUG: Student {student_id} fields: {list(student.keys())}")
+                                            
+                                            # Try to construct a proper name from available fields
+                                            name = None
+                                            
+                                            # Try to combine firstname and surname (based on the actual field names)
+                                            if student.get('firstname') and student.get('surname'):
+                                                name = f"{student['firstname']} {student['surname']}"
+                                            elif student.get('firstname'):
+                                                name = student['firstname']
+                                            elif student.get('surname'):
+                                                name = student['surname']
+                                            # Try other name field combinations
+                                            elif student.get('first_name') and student.get('last_name'):
+                                                name = f"{student['first_name']} {student['last_name']}"
+                                            elif student.get('first_name'):
+                                                name = student['first_name']
+                                            elif student.get('last_name'):
+                                                name = student['last_name']
+                                            # Try other name fields
+                                            elif student.get('full_name'):
+                                                name = student['full_name']
+                                            elif student.get('student_name'):
+                                                name = student['student_name']
+                                            elif student.get('name'):
+                                                name = student['name']
+                                            # If we have email, try to extract name from it
+                                            elif student.get('email'):
+                                                email = student['email']
+                                                # Extract name from email (before @)
+                                                email_name = email.split('@')[0]
+                                                # Convert dots and underscores to spaces and capitalize
+                                                name = email_name.replace('.', ' ').replace('_', ' ').title()
+                                            else:
+                                                name = f"Student_{student_id}"
+                                            
+                                            student['name'] = name
+                                            logger.info(f"DEBUG: Student {student_id} name: {name}")
+                                            students.append(student)
+                                    except Exception as student_error:
+                                        logger.warning(f"Failed to get student {student_id}: {student_error}")
+                                        continue
+                                
+                                logger.info(f"DEBUG: Loaded {len(students)} trained students")
+                            else:
+                                logger.warning("DEBUG: No students with signatures found")
+                                students = []
+                        except Exception as e:
+                            logger.error(f"Failed to get students from students table: {e}")
+                            students = []
+                        
+                        if students:
+                            logger.info(f"DEBUG: First student data structure: {students[0] if students else 'None'}")
+                            for i, student in enumerate(students):
+                                logger.info(f"DEBUG: Student {i}: {student}")
+                                student_id = student.get('id')
+                                student_name = student.get('name')
+                                logger.info(f"DEBUG: Extracted student_id={student_id}, name={student_name}")
+                                if student_id and student_name:
+                                    # Map model class index (i) to actual student ID
+                                    signature_ai_manager.student_to_id[student_name] = i
+                                    signature_ai_manager.id_to_student[i] = student_name
+                                    # Also map the actual student ID for reference
+                                    signature_ai_manager.id_to_student[student_id] = student_name
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            # Only log first few mappings to avoid spam
+                            sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                            logger.info(f"Sample student mappings: {sample_mappings}")
+                        else:
+                            logger.warning("DEBUG: No students returned from database")
+                    except Exception as e:
+                        logger.error(f"Failed to load emergency mappings: {e}")
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
                 return _get_fallback_response("identify")
         else:
-            # Fallback to legacy models
+            # Fallback to legacy models or return error
+            logger.warning("No AI model available, checking for legacy models...")
             try:
                 all_models = await db_manager.get_trained_models()
+                logger.info(f"Found {len(all_models) if all_models else 0} legacy models")
             except Exception as e:
-                logger.warning(f"Database connection failed: {e}")
-                return _get_fallback_response("identify")
+                logger.error(f"Database connection failed: {e}")
+                return _get_fallback_response("identify", error_message=f"Database error: {str(e)}")
             
             if not all_models:
-                return {
-                    "predicted_student": {
-                        "id": 0,
-                        "name": "No Model Available"
-                    },
-                    "is_match": False,
-                    "confidence": 0.0,
-                    "global_score": None,
-                    "student_confidence": 0.0,
-                    "authenticity_score": 0.0,
-                    "is_unknown": True,
-                    "model_type": "no_model_available",
-                    "ai_architecture": "none",
-                    "error": "No trained models available. Please train a model first."
-                }
+                return _get_fallback_response("identify", error_message="No trained models available. Please train a model first.")
 
             # Use latest completed AI model (accept individual and gpu variants)
             eligible = [
@@ -242,13 +485,60 @@ async def identify_signature_owner(
                 embed_path = latest_model.get("embedding_model_path") or ""
                 auth_path = latest_model.get("authenticity_model_path") or ""
                 if embed_path:
-                    signature_ai_manager.embedding_model = await (
-                        load_model_from_s3(embed_path) if (embed_path.startswith('https://') and 'amazonaws.com' in embed_path) else load_model_from_supabase(embed_path)
-                    )
+                    try:
+                        if embed_path.startswith('https://') and 'amazonaws.com' in embed_path:
+                            # Download from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(embed_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.embedding_model = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {embed_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to load embedding model: {e}")
+                
                 if auth_path:
-                    signature_ai_manager.authenticity_head = await (
-                        load_model_from_s3(auth_path) if (auth_path.startswith('https://') and 'amazonaws.com' in auth_path) else load_model_from_supabase(auth_path)
-                    )
+                    try:
+                        if auth_path.startswith('https://') and 'amazonaws.com' in auth_path:
+                            # Download from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            response = requests.get(auth_path, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.authenticity_head = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {auth_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to load authenticity model: {e}")
                 if model_path and not auth_path and not embed_path:
                     # legacy single path (classification). Try by S3 key first
                     if model_key:
@@ -265,9 +555,74 @@ async def identify_signature_owner(
                             try: os.unlink(tmp.name)
                             except OSError: pass
                     else:
-                        signature_ai_manager.classification_head = await (
-                            load_model_from_s3(model_path) if (model_path.startswith('https://') and 'amazonaws.com' in model_path) else load_model_from_supabase(model_path)
-                        )
+                        # Load model directly from S3
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            try:
+                                import tempfile
+                                import os
+                                from tensorflow import keras
+                                
+                                # Extract S3 key from URL and create presigned URL
+                                s3_key = model_path.split('amazonaws.com/')[-1]
+                                from utils.s3_storage import create_presigned_get
+                                presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                                
+                                logger.info(f"Downloading {model_type} model from S3: {s3_key}")
+                                response = requests.get(presigned_url, timeout=60)
+                                response.raise_for_status()
+                                
+                                # Verify download size
+                                content_length = len(response.content)
+                                logger.info(f"Downloaded {model_type} model: {content_length} bytes")
+                                
+                                if content_length < 1000:  # Models should be much larger
+                                    raise ValueError(f"Downloaded file too small: {content_length} bytes")
+                                
+                                with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                    tmp_file.write(response.content)
+                                    tmp_path = tmp_file.name
+                                    
+                                logger.info(f"Saved {model_type} model to: {tmp_path}")
+                                
+                                try:
+                                    logger.info(f"Loading {model_type} model from: {tmp_path}")
+                                    
+                                    # Try custom deserialization first (for optimized S3 models)
+                                    try:
+                                        from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                        with open(tmp_path, 'rb') as f:
+                                            model_data = f.read()
+                                        model = _deserialize_model_from_bytes(model_data)
+                                        logger.info(f"Loaded {model_type} model using custom deserialization")
+                                    except Exception as custom_error:
+                                        logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                        model = keras.models.load_model(tmp_path)
+                                        logger.info(f"Loaded {model_type} model using standard Keras")
+                                    
+                                    # Set the appropriate model
+                                    if model_type == 'embedding':
+                                        request_model_manager.embedding_model = model
+                                    elif model_type == 'classification':
+                                        request_model_manager.classification_head = model
+                                    elif model_type == 'authenticity':
+                                        request_model_manager.authenticity_head = model
+                                    elif model_type == 'siamese':
+                                        request_model_manager.siamese_model = model
+                                    
+                                    logger.info(f"Successfully loaded {model_type} model")
+                                    
+                                except Exception as load_error:
+                                    logger.error(f"Failed to load {model_type} model from {tmp_path}: {load_error}")
+                                    raise
+                                finally:
+                                    try:
+                                        os.unlink(tmp_path)
+                                    except:
+                                        pass
+                            except Exception as e:
+                                logger.error(f"Failed to load classification model: {e}")
+                        else:
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("identify")
@@ -284,30 +639,56 @@ async def identify_signature_owner(
                 gsm = GlobalSignatureVerificationModel()
                 model_path = latest_global.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    gsm.load_model(model_path)
-                else:
-                    model_obj = await load_model_from_supabase(model_path)
+                    # Download global model from S3 using presigned URL
+                    s3_key = model_path.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    
+                    import requests
+                    import tempfile
+                    import os
+                    
+                    response = requests.get(presigned_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    
                     try:
-                        gsm.embedding_model = model_obj
-                    except Exception:
-                        pass
-                # Compute test embedding
+                        gsm.load_model(tmp_path)
+                        # Compute test embedding
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
                 test_emb = gsm.embed_images([processed_signature])[0]
                 # Try cached centroids first
                 centroids = await _load_cached_centroids(latest_global) or {}
                 import numpy as np
                 best_sid = None
                 best_score = -1.0
+                second_best = -1.0
+                best_cos = -1.0
+                second_cos = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
                         centroid = np.array(centroid)
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
+                            second_best = best_score
+                            second_cos = best_cos
                             best_score = score01
+                            best_cos = cosine
                             best_sid = sid
+                        elif score01 > second_best:
+                            second_best = score01
+                            second_cos = cosine
                 else:
                     # Fallback: compute quick centroids online
                     candidate_ids = await _list_candidate_student_ids(limit=50)
@@ -320,18 +701,41 @@ async def identify_signature_owner(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
+                            second_best = best_score
+                            second_cos = best_cos
                             best_score = score01
+                            best_cos = cosine
                             best_sid = sid
+                        elif score01 > second_best:
+                            second_best = score01
+                            second_cos = cosine
                 if best_sid is not None:
                     predicted_owner_id = int(best_sid)
                     hybrid["global_score"] = float(best_score)
+                    if second_best >= 0:
+                        hybrid["global_margin"] = float(best_score - second_best)
+                        if second_cos >= -1.0:
+                            # Raw cosine margin (0..2 range typical around -1..1)
+                            hybrid["global_margin_raw"] = float(best_cos - second_cos)
         except Exception as e:
             logger.warning(f"Global-first selection failed: {e}")
 
         # Individual model inference to get overall confidence
         try:
+            # Check if we have any loaded models
+            has_any_model = (
+                signature_ai_manager.embedding_model is not None or
+                signature_ai_manager.classification_head is not None or
+                signature_ai_manager.authenticity_head is not None
+            )
+            
+            if not has_any_model:
+                logger.error("No models loaded for verification")
+                return _get_fallback_response("identify", error_message="No AI models were successfully loaded. Please check if models exist and are accessible.")
+            
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
         except ValueError as e:
@@ -342,27 +746,114 @@ async def identify_signature_owner(
             return _get_fallback_response("identify")
         
         if predicted_owner_id is not None:
-            if result.get("predicted_student_id") != predicted_owner_id:
+            individual_prediction = result.get("predicted_student_id")
+            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+            if individual_prediction != predicted_owner_id:
+                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                # Update the predicted student name to match the new ID
+                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
             else:
+                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
-        return {
-            "predicted_student": {
-                "id": result["predicted_student_id"],
-                "name": result["predicted_student_name"],
-            },
-            "is_match": result["is_genuine"],
+        # Apply robust unknown/match logic
+        student_confidence = float(result.get("student_confidence", 0.0))
+        global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
+        global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        has_auth = signature_ai_manager.authenticity_head is not None
+        # Improved unknown thresholding with better outlier detection
+        is_unknown = True
+        
+        # Check if we have a valid prediction first
+        if predicted_owner_id is not None and predicted_owner_id > 0:
+            # Accept if global is confident AND has good separation
+            if global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02):
+                if has_auth:
+                    is_unknown = not bool(result.get("is_genuine", False))
+                else:
+                    is_unknown = False
+            # Also accept if individual model is confident (even without global)
+            elif student_confidence >= 0.60:
+                is_unknown = False
+            # Special case: if both models agree on same student, be more lenient
+            elif (predicted_owner_id == result.get("predicted_student_id") and 
+                  global_score >= 0.60 and student_confidence >= 0.40):
+                is_unknown = False
+        else:
+            # No valid prediction from global model
+            is_unknown = True
+            
+        result["is_unknown"] = is_unknown
+
+        # Determine match logic for identify: do not gate on authenticity if head absent
+        # Match if either ownership confidence passes thresholds OR authenticity passes (auth only helps)
+        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
+        is_match = (not is_unknown) and (ownership_ok or auth_ok)
+
+        # Agreement boost: if individual and global agree on the same student, relax unknown
+        try:
+            agree = (predicted_owner_id is not None and result.get("predicted_student_id") == predicted_owner_id)
+        except Exception:
+            agree = False
+        if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+            result["is_unknown"] = False
+            is_unknown = False
+            
+        # Enhanced outlier detection for untrained students
+        # If both models are very uncertain, force unknown regardless of prediction
+        if (global_score < 0.55 and student_confidence < 0.40 and 
+            (global_margin < 0.02 or global_margin_raw < 0.01)):
+            result["is_unknown"] = True
+            is_unknown = True
+            logger.info(f"Forcing unknown due to low confidence: global={global_score:.3f}, student={student_confidence:.3f}")
+            
+        # Special case for small student counts (<=2) - be more lenient
+        trained_student_count = len(signature_ai_manager.id_to_student) if signature_ai_manager.id_to_student else 0
+        if trained_student_count <= 2 and not is_unknown:
+            # For very small datasets, relax thresholds significantly
+            if (global_score >= 0.50 or student_confidence >= 0.30 or 
+                (predicted_owner_id == result.get("predicted_student_id") and global_score >= 0.45)):
+                result["is_unknown"] = False
+                is_unknown = False
+                logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
+
+        # DEBUG: Log comprehensive verification details
+        logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
+        logger.info(f"DEBUG: Confidence scores - student={student_confidence:.3f}, global={global_score:.3f}, auth={result.get('authenticity_score', 0.0):.3f}")
+        logger.info(f"DEBUG: Margins - global_margin={global_margin:.3f}, raw_margin={global_margin_raw:.3f}")
+        logger.info(f"DEBUG: Decisions - is_unknown={is_unknown}, is_match={is_match}, ownership_ok={ownership_ok}")
+        logger.info(f"DEBUG: Final result - predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
+        
+        # Mask unknowns instead of returning a trained ID
+        predicted_block = {
+            "id": 0 if is_unknown else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+        }
+
+        response_obj = {
+            "predicted_student": predicted_block,
+            "is_match": is_match,
             "confidence": float(combined_confidence),
             "score": float(combined_confidence),
             "global_score": hybrid.get("global_score"),
+            "global_margin": hybrid.get("global_margin"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
-            "ai_architecture": "signature_embedding_network"
+            "ai_architecture": "signature_embedding_network",
+            "success": True
         }
+        # Back-compat fields for UI
+        response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
+        response_obj["predicted_student_name"] = "Unknown" if is_unknown else result["predicted_student_name"]
+        response_obj["is_genuine"] = is_match
+        return response_obj
         
     except HTTPException:
         raise
@@ -386,11 +877,16 @@ async def verify_signature(
         test_image = Image.open(io.BytesIO(test_data))
 
         # Use the same AI model loading logic as identify
+        latest_ai_model = None
         try:
-            latest_ai_model = await db_manager.get_latest_ai_model() if hasattr(db_manager, 'get_latest_ai_model') else None
+            if hasattr(db_manager, 'get_latest_ai_model'):
+                latest_ai_model = await db_manager.get_latest_ai_model()
+                logger.info(f"Latest AI model found for verify: {latest_ai_model is not None}")
+            else:
+                logger.warning("get_latest_ai_model method not available")
         except Exception as e:
-            logger.warning(f"Database connection failed: {e}")
-            return _get_fallback_response("verify", student_id)
+            logger.error(f"Database connection failed: {e}")
+            return _get_fallback_response("verify", student_id, error_message=f"Database error: {str(e)}")
         
         if latest_ai_model and latest_ai_model.get("status") == "completed":
             # Load AI models (same as identify function)
@@ -402,30 +898,189 @@ async def verify_signature(
             }
             
             try:
+                # Create a fresh model manager for this request
+                from models.signature_embedding_model import SignatureEmbeddingModel
+                request_model_manager = SignatureEmbeddingModel(max_students=150)
+                
                 for model_type, model_path in model_paths.items():
-                    if model_path:
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                            model = await load_model_from_s3(model_path)
-                        else:
-                            model = await load_model_from_supabase(model_path)
+                    if not model_path:
+                        continue
                         
-                        if model_type == 'embedding':
-                            signature_ai_manager.embedding_model = model
-                        elif model_type == 'classification':
-                            signature_ai_manager.classification_head = model
-                        elif model_type == 'authenticity':
-                            signature_ai_manager.authenticity_head = model
-                        elif model_type == 'siamese':
-                            signature_ai_manager.siamese_model = model
+                    try:
+                        # Load model from S3 or Supabase
+                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                            # Download model from S3
+                            import requests
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
+                            response.raise_for_status()
+                            
+                            # Save to temporary file and load
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                # Try custom deserialization first (for optimized S3 models)
+                                try:
+                                    from utils.optimized_s3_saving import _deserialize_model_from_bytes
+                                    with open(tmp_path, 'rb') as f:
+                                        model_data = f.read()
+                                    model = _deserialize_model_from_bytes(model_data)
+                                    logger.info(f"Loaded model using custom deserialization")
+                                except Exception as custom_error:
+                                    logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
+                                    model = keras.models.load_model(tmp_path)
+                                    logger.info(f"Loaded model using standard Keras")
+                                
+                                # Set the appropriate model
+                                if model_type == 'embedding':
+                                    request_model_manager.embedding_model = model
+                                elif model_type == 'classification':
+                                    request_model_manager.classification_head = model
+                                elif model_type == 'authenticity':
+                                    request_model_manager.authenticity_head = model
+                                elif model_type == 'siamese':
+                                    request_model_manager.siamese_model = model
+                                    
+                            finally:
+                                # Clean up temp file
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        else:
+                            # Load from Supabase (implement if needed)
+                            logger.warning(f"Supabase model loading not implemented for {model_path}")
+                            continue
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to load {model_type} model from {model_path}: {e}")
+                        continue
                 
                 # Load student mappings
                 mappings_path = latest_ai_model.get("mappings_path")
                 if mappings_path:
-                    import json
-                    import requests
-                    mappings_data = requests.get(mappings_path).json()
-                    signature_ai_manager.student_to_id = mappings_data['student_to_id']
-                    signature_ai_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    try:
+                        import json
+                        import requests
+                        mappings_response = requests.get(mappings_path, timeout=10)
+                        mappings_response.raise_for_status()
+                        mappings_data = mappings_response.json()
+                        request_model_manager.student_to_id = mappings_data['student_to_id']
+                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                    except Exception as e:
+                        logger.error(f"Failed to load student mappings: {e}")
+                        # Continue without mappings - will use fallback
+                
+                # Use the request-specific model manager
+                signature_ai_manager = request_model_manager
+                
+                # CRITICAL FIX: Ensure mappings are loaded
+                if not signature_ai_manager.id_to_student:
+                    logger.warning("No student mappings loaded, loading from database...")
+                    try:
+                        # Try to get only the students that were used in training
+                        try:
+                            # Get students that have signatures (these are the ones used in training)
+                            students_with_signatures = await db_manager.list_students_with_images()
+                            if students_with_signatures:
+                                # Extract unique student IDs from signatures
+                                trained_student_ids = set()
+                                for student_data in students_with_signatures:
+                                    if 'student_id' in student_data:
+                                        trained_student_ids.add(student_data['student_id'])
+                                
+                                logger.info(f"DEBUG: Found {len(trained_student_ids)} students with signatures: {list(trained_student_ids)}")
+                                
+                                # Get student details for only the trained students
+                                students = []
+                                for student_id in trained_student_ids:
+                                    try:
+                                        student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
+                                        if student_response.data:
+                                            student = student_response.data[0]
+                                            logger.info(f"DEBUG: Student {student_id} fields: {list(student.keys())}")
+                                            
+                                            # Try to construct a proper name from available fields
+                                            name = None
+                                            
+                                            # Try to combine firstname and surname (based on the actual field names)
+                                            if student.get('firstname') and student.get('surname'):
+                                                name = f"{student['firstname']} {student['surname']}"
+                                            elif student.get('firstname'):
+                                                name = student['firstname']
+                                            elif student.get('surname'):
+                                                name = student['surname']
+                                            # Try other name field combinations
+                                            elif student.get('first_name') and student.get('last_name'):
+                                                name = f"{student['first_name']} {student['last_name']}"
+                                            elif student.get('first_name'):
+                                                name = student['first_name']
+                                            elif student.get('last_name'):
+                                                name = student['last_name']
+                                            # Try other name fields
+                                            elif student.get('full_name'):
+                                                name = student['full_name']
+                                            elif student.get('student_name'):
+                                                name = student['student_name']
+                                            elif student.get('name'):
+                                                name = student['name']
+                                            # If we have email, try to extract name from it
+                                            elif student.get('email'):
+                                                email = student['email']
+                                                # Extract name from email (before @)
+                                                email_name = email.split('@')[0]
+                                                # Convert dots and underscores to spaces and capitalize
+                                                name = email_name.replace('.', ' ').replace('_', ' ').title()
+                                            else:
+                                                name = f"Student_{student_id}"
+                                            
+                                            student['name'] = name
+                                            logger.info(f"DEBUG: Student {student_id} name: {name}")
+                                            students.append(student)
+                                    except Exception as student_error:
+                                        logger.warning(f"Failed to get student {student_id}: {student_error}")
+                                        continue
+                                
+                                logger.info(f"DEBUG: Loaded {len(students)} trained students")
+                            else:
+                                logger.warning("DEBUG: No students with signatures found")
+                                students = []
+                        except Exception as e:
+                            logger.error(f"Failed to get students from students table: {e}")
+                            students = []
+                        
+                        if students:
+                            logger.info(f"DEBUG: First student data structure: {students[0] if students else 'None'}")
+                            for i, student in enumerate(students):
+                                logger.info(f"DEBUG: Student {i}: {student}")
+                                student_id = student.get('id')
+                                student_name = student.get('name')
+                                logger.info(f"DEBUG: Extracted student_id={student_id}, name={student_name}")
+                                if student_id and student_name:
+                                    # Map model class index (i) to actual student ID
+                                    signature_ai_manager.student_to_id[student_name] = i
+                                    signature_ai_manager.id_to_student[i] = student_name
+                                    # Also map the actual student ID for reference
+                                    signature_ai_manager.id_to_student[student_id] = student_name
+                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
+                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
+                            # Only log first few mappings to avoid spam
+                            sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
+                            logger.info(f"Sample student mappings: {sample_mappings}")
+                        else:
+                            logger.warning("DEBUG: No students returned from database")
+                    except Exception as e:
+                        logger.error(f"Failed to load emergency mappings: {e}")
                 
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
@@ -451,9 +1106,38 @@ async def verify_signature(
             try:
                 model_path = latest_model.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    signature_ai_manager.classification_head = await load_model_from_s3(model_path)
+                    # Load model directly from S3
+                    if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                        try:
+                            import tempfile
+                            import os
+                            from tensorflow import keras
+                            
+                            # Extract S3 key from URL and create presigned URL
+                            s3_key = model_path.split('amazonaws.com/')[-1]
+                            from utils.s3_storage import create_presigned_get
+                            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                            
+                            response = requests.get(presigned_url, timeout=30)
+                            response.raise_for_status()
+                            
+                            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                                tmp_file.write(response.content)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                signature_ai_manager.classification_head = keras.models.load_model(tmp_path)
+                            finally:
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        except Exception as e:
+                            logger.error(f"Failed to load classification model: {e}")
+                    else:
+                        logger.warning(f"Supabase model loading not implemented for {model_path}")
                 else:
-                    signature_ai_manager.classification_head = await load_model_from_supabase(model_path)
+                    logger.warning(f"Supabase model loading not implemented for {model_path}")
             except Exception as e:
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("verify", student_id)
@@ -470,13 +1154,34 @@ async def verify_signature(
                 gsm = GlobalSignatureVerificationModel()
                 model_path = latest_global.get("model_path")
                 if model_path.startswith('https://') and 'amazonaws.com' in model_path:
-                    gsm.load_model(model_path)
-                else:
-                    model_obj = await load_model_from_supabase(model_path)
+                    # Download global model from S3 using presigned URL
+                    s3_key = model_path.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    
+                    import requests
+                    import tempfile
+                    import os
+                    
+                    response = requests.get(presigned_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    
                     try:
-                        gsm.embedding_model = model_obj
-                    except Exception:
-                        pass
+                        gsm.load_model(tmp_path)
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+                else:
+                    logger.warning(f"Supabase model loading not implemented for global model: {model_path}")
+                    # Skip global model if not S3
+                    return _get_fallback_response("identify", error_message="Global model not available")
+                
                 test_emb = gsm.embed_images([processed_signature])[0]
                 centroids = await _load_cached_centroids(latest_global) or {}
                 import numpy as np
@@ -488,7 +1193,8 @@ async def verify_signature(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -503,7 +1209,8 @@ async def verify_signature(
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
                         cosine = num / den
-                        score01 = (cosine + 1.0) / 2.0
+                        # Tuned scaling to avoid near-1.0 inflation
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
                         if score01 > best_score:
                             best_score = score01
                             best_sid = sid
@@ -515,6 +1222,17 @@ async def verify_signature(
 
         # Individual model inference
         try:
+            # Check if we have any loaded models
+            has_any_model = (
+                signature_ai_manager.embedding_model is not None or
+                signature_ai_manager.classification_head is not None or
+                signature_ai_manager.authenticity_head is not None
+            )
+            
+            if not has_any_model:
+                logger.warning("No models loaded for verification")
+                return _get_fallback_response("verify", student_id)
+            
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
         except ValueError as e:
@@ -525,16 +1243,38 @@ async def verify_signature(
             return _get_fallback_response("verify", student_id)
         
         if predicted_owner_id is not None:
-            if result.get("predicted_student_id") != predicted_owner_id:
+            individual_prediction = result.get("predicted_student_id")
+            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+            if individual_prediction != predicted_owner_id:
+                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
                 combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                # Update the predicted student name to match the new ID
+                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
             else:
+                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                 combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
+        # Apply robust unknown/match logic
+        student_confidence = float(result.get("student_confidence", 0.0))
+        global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        has_auth = signature_ai_manager.authenticity_head is not None
+        is_unknown = (student_confidence < 0.60 and global_score < 0.65)
+        result["is_unknown"] = is_unknown
+
         # Check if the predicted student matches the target student
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
-        is_match = is_correct_student and result["is_genuine"]
+        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
+        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
+        is_match = is_correct_student and (not is_unknown) and (ownership_ok or auth_ok)
+
+        # Mask unknowns in response
+        predicted_block = {
+            "id": 0 if is_unknown else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+        }
 
         return {
             "is_match": is_match,
@@ -543,16 +1283,14 @@ async def verify_signature(
             "global_score": hybrid.get("global_score"),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
-            "predicted_student": {
-                "id": result["predicted_student_id"],
-                "name": result["predicted_student_name"],
-            },
+            "predicted_student": predicted_block,
             "target_student_id": student_id,
             "is_correct_student": is_correct_student,
             "is_genuine": result["is_genuine"],
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
-            "ai_architecture": "signature_embedding_network"
+            "ai_architecture": "signature_embedding_network",
+            "success": True
         }
         
     except HTTPException:

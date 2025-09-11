@@ -293,7 +293,7 @@ class DatabaseManager:
             for r in rows:
                 metrics = r.get("training_metrics", {}) or {}
                 model_type = str(metrics.get("model_type", ""))
-                if model_type in ("ai_signature_verification", "ai_signature_verification_gpu"):
+                if model_type in ("ai_signature_verification", "ai_signature_verification_gpu", "ai_signature_verification_individual"):
                     return r
             return None
         except Exception as e:

@@ -96,19 +96,17 @@ def preprocess_image(image: Image.Image, target_size: int) -> Image.Image:
         out = cv2.resize(canvas, (target_size, target_size), interpolation=cv2.INTER_AREA)
         out_pil = Image.fromarray(out).convert('RGB')
         
-        # FIXED: Normalize to [0,1] range for consistent model input
-        # Convert to numpy array with float32 dtype and normalize
-        out_array = np.array(out_pil, dtype=np.float32) / 255.0
-        return out_array
+        # FIXED: Return PIL Image for consistency with signature preprocessing
+        # The signature preprocessing pipeline expects PIL Image input
+        return out_pil
 
     except Exception as e:
         logger.error(f"Image preprocessing failed: {e}")
         # Fallback: simple resize and convert
         try:
             fallback = image.convert('RGB').resize((target_size, target_size), Image.Resampling.LANCZOS)
-            out_array = np.array(fallback, dtype=np.float32) / 255.0
             logger.warning("Using fallback preprocessing")
-            return out_array
+            return fallback
         except Exception as fallback_error:
             logger.error(f"Fallback preprocessing also failed: {fallback_error}")
             raise

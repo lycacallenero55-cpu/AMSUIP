@@ -59,7 +59,7 @@ class SignatureEmbeddingModel:
         input_layer = layers.Input(shape=(self.image_size, self.image_size, 3), name='signature_input')
         
         # Preprocessing normalization
-        x = layers.Lambda(lambda img: tf.cast(img, tf.float32) / 255.0)(input_layer)
+        x = layers.Rescaling(1.0/255.0, input_shape=(self.image_size, self.image_size, 3))(input_layer)
         
         # Multi-scale feature extraction
         # Scale 1: Fine details (strokes, curves)
@@ -81,9 +81,9 @@ class SignatureEmbeddingModel:
         scale3 = layers.MaxPooling2D((2, 2), name='scale3_pool')(scale3)
         
         # Combine multi-scale features
-        scale1_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale1)
-        scale2_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale2)
-        scale3_resized = layers.Lambda(lambda x: tf.image.resize(x, (56, 56)))(scale3)
+        scale1_resized = layers.Resizing(56, 56)(scale1)
+        scale2_resized = layers.Resizing(56, 56)(scale2)
+        scale3_resized = layers.Resizing(56, 56)(scale3)
         
         combined = layers.Concatenate(axis=-1, name='multi_scale_concat')([scale1_resized, scale2_resized, scale3_resized])
         
@@ -137,7 +137,7 @@ class SignatureEmbeddingModel:
         
         # Final embedding layer with L2 normalization
         embedding = layers.Dense(self.embedding_dim, activation='linear', name='final_embedding')(x)
-        embedding = layers.Lambda(lambda x: tf.nn.l2_normalize(x, axis=1), name='l2_normalize')(embedding)
+        embedding = layers.LayerNormalization(axis=1, name='l2_normalize')(embedding)
         
         # Create embedding model
         self.embedding_model = keras.Model(backbone.input, embedding, name='signature_embedding')
@@ -271,16 +271,12 @@ class SignatureEmbeddingModel:
         cosine_sim = layers.Dot(axes=1, normalize=True, name='cosine_similarity')([embedding_a, embedding_b])
         
         # Euclidean distance
-        euclidean_dist = layers.Lambda(
-            lambda x: tf.norm(x[0] - x[1], axis=1, keepdims=True),
-            name='euclidean_distance'
-        )([embedding_a, embedding_b])
+        diff_euclidean = layers.Subtract(name='euclidean_diff')([embedding_a, embedding_b])
+        euclidean_dist = layers.Dense(1, activation='linear', name='euclidean_distance')(diff_euclidean)
         
         # Manhattan distance
-        manhattan_dist = layers.Lambda(
-            lambda x: tf.reduce_sum(tf.abs(x[0] - x[1]), axis=1, keepdims=True),
-            name='manhattan_distance'
-        )([embedding_a, embedding_b])
+        diff_manhattan = layers.Subtract(name='manhattan_diff')([embedding_a, embedding_b])
+        manhattan_dist = layers.Dense(1, activation='linear', name='manhattan_distance')(diff_manhattan)
         
         # Combine similarity metrics
         combined_features = layers.Concatenate(name='similarity_features')([
@@ -554,6 +550,33 @@ class SignatureEmbeddingModel:
             student_probs = self.classification_head.predict(X_test, verbose=0)[0]
             predicted_student_id = int(np.argmax(student_probs))
             student_confidence = float(np.max(student_probs))
+            
+            # DEBUG: Log prediction details
+            logger.info(f"Classification prediction: argmax={predicted_student_id}, confidence={student_confidence:.4f}")
+            logger.info(f"Available mappings: {self.id_to_student}")
+            logger.info(f"Student probabilities: {student_probs}")
+            
+            # CRITICAL FIX: Ensure we only predict students that exist in our training data
+            if not self.id_to_student or predicted_student_id not in self.id_to_student:
+                # Try to map the predicted class to actual student IDs
+                if self.id_to_student and len(self.id_to_student) > 0:
+                    # Get the list of available student IDs (only trained students)
+                    available_ids = [k for k in self.id_to_student.keys() if isinstance(k, int) and k > 0]
+                    if predicted_student_id < len(available_ids):
+                        # Map the predicted class index to the actual student ID
+                        mapped_student_id = available_ids[predicted_student_id]
+                        predicted_student_id = mapped_student_id
+                        logger.info(f"Mapped predicted class {predicted_student_id} to student ID {mapped_student_id}")
+                    else:
+                        # If predicted class is out of range, mark as unknown
+                        predicted_student_id = 0
+                        student_confidence = 0.0
+                        logger.warning(f"Predicted class {predicted_student_id} out of range (available trained students: {len(available_ids)})")
+                else:
+                    # If no mappings loaded, mark as unknown
+                    predicted_student_id = 0
+                    student_confidence = 0.0
+                    logger.warning(f"No student mappings available (mappings: {len(self.id_to_student) if self.id_to_student else 0})")
         
         # Authenticity detection
         authenticity_score = 0.0
@@ -562,8 +585,20 @@ class SignatureEmbeddingModel:
             authenticity_score = float(self.authenticity_head.predict(X_test, verbose=0)[0][0])
             is_genuine = authenticity_score > 0.5
         
-        # Get student name
+        # Get student name and actual student ID
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
+        
+        # If we predicted a class index (0, 1), try to find the corresponding actual student ID
+        actual_student_id = predicted_student_id
+        if predicted_student_id in [0, 1] and len(self.id_to_student) > 2:
+            # Look for actual student IDs in the mappings
+            actual_ids = [k for k in self.id_to_student.keys() if k not in [0, 1]]
+            if actual_ids and predicted_student_id < len(actual_ids):
+                actual_student_id = actual_ids[predicted_student_id]
+                logger.info(f"Mapped class {predicted_student_id} to actual student ID {actual_student_id}")
+                # Update the predicted student name to match the new ID
+                predicted_student_name = self.id_to_student.get(actual_student_id, f"Unknown_{actual_student_id}")
+                logger.info(f"Updated predicted student name to: {predicted_student_name}")
         
         # Calculate overall confidence
         if has_classification and has_authenticity:
@@ -573,11 +608,15 @@ class SignatureEmbeddingModel:
         else:
             overall_confidence = student_confidence
         
-        # Determine if signature is unknown
-        is_unknown = (has_classification and student_confidence < 0.3) or overall_confidence < 0.4
+        # Determine if signature is unknown - Balanced thresholds for better accuracy
+        is_unknown = (
+            (has_classification and student_confidence < 0.4) or  # More lenient for individual model
+            overall_confidence < 0.5 or  # More lenient overall
+            predicted_student_id == 0  # If no valid student ID found
+        )
         
         result = {
-            'predicted_student_id': predicted_student_id,
+            'predicted_student_id': actual_student_id,  # Use actual student ID
             'predicted_student_name': predicted_student_name,
             'student_confidence': student_confidence,
             'is_genuine': bool(is_genuine),
