@@ -411,6 +411,9 @@ const Students = () => {
               />
             </div>
           </div>
+          
+          {/* Big space below List of Students label */}
+          <div className="mb-8"></div>
           {/* Top controls row */}
           <div className="flex items-center justify-between gap-4 p-0 mb-3">
             <div className="flex items-center gap-2">
