@@ -501,6 +501,7 @@ const Students = () => {
           </div>
         </div>
       </div>
+      </PageWrapper>
     </Layout>
   );
 }
