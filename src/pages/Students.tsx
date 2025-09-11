@@ -47,7 +47,6 @@ const Students = () => {
     program: '',
     year: ''
   });
-  const [isCustomInput, setIsCustomInput] = useState(false);
   
   // Pagination state
   const [pagination, setPagination] = useState<PaginationState>({
@@ -295,8 +294,8 @@ const Students = () => {
 
   // Handle page size change
   const handlePageSizeChange = (newPageSize: number) => {
-    // Ensure minimum value of 10
-    const validPageSize = Math.max(10, newPageSize);
+    // Allow very large numbers for "ALL" case, otherwise ensure minimum value of 10
+    const validPageSize = newPageSize >= 999999 ? newPageSize : Math.max(10, newPageSize);
     setPagination(prev => ({ 
       ...prev, 
       pageSize: validPageSize, 
@@ -401,47 +400,48 @@ const Students = () => {
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Showed:</span>
               <div className="relative">
-                {isCustomInput ? (
-                  <Input
-                    type="number"
-                    min="10"
-                    value={pagination.pageSize}
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value);
+                <Input
+                  type="number"
+                  min="10"
+                  value={pagination.pageSize >= 999999 ? "" : pagination.pageSize}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === "") {
+                      // Allow empty input for typing
+                      return;
+                    }
+                    const numValue = parseInt(value);
+                    if (!isNaN(numValue) && numValue >= 10) {
+                      handlePageSizeChange(numValue);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const value = parseInt(e.currentTarget.value);
                       if (!isNaN(value) && value >= 10) {
                         handlePageSizeChange(value);
+                      } else if (e.currentTarget.value === "") {
+                        // If empty, set to 10
+                        handlePageSizeChange(10);
                       }
-                    }}
-                    onBlur={(e) => {
-                      const value = parseInt(e.target.value);
-                      if (isNaN(value) || value < 10) {
-                        e.target.value = pagination.pageSize.toString();
-                      }
-                      setIsCustomInput(false);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        setIsCustomInput(false);
-                        e.currentTarget.blur();
-                      }
-                      if (e.key === 'Escape') {
-                        setIsCustomInput(false);
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    className="h-8 w-24 text-center pr-8"
-                    placeholder="50"
-                    autoFocus
-                  />
-                ) : (
-                  <div
-                    className="h-8 w-24 flex items-center justify-between px-3 border border-input bg-background rounded-md cursor-pointer hover:bg-accent/50 transition-colors"
-                    onClick={() => setIsCustomInput(true)}
-                  >
-                    <span className="text-sm">{pagination.pageSize}</span>
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                )}
+                    }
+                  }}
+                  className="h-8 w-24 text-center pr-8"
+                  placeholder={pagination.pageSize >= 999999 ? "ALL" : "50"}
+                />
+                <div 
+                  className="absolute right-1 top-1/2 transform -translate-y-1/2 cursor-pointer"
+                  onClick={() => {
+                    // Toggle between current value and ALL
+                    if (pagination.pageSize >= 999999) {
+                      handlePageSizeChange(50);
+                    } else {
+                      handlePageSizeChange(999999);
+                    }
+                  }}
+                >
+                  <ChevronDown className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
