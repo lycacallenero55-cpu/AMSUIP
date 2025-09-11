@@ -534,6 +534,23 @@ class SignatureEmbeddingModel:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
         has_authenticity = self.authenticity_head is not None
+
+        # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
+        if has_classification:
+            try:
+                output_shape = getattr(self.classification_head, 'output_shape', None)
+                if output_shape is not None:
+                    last_dim = output_shape[-1][-1] if isinstance(output_shape[-1], (list, tuple)) else output_shape[-1]
+                    if last_dim == 1:
+                        # Re-route to authenticity behavior
+                        if not has_authenticity:
+                            self.authenticity_head = self.classification_head
+                            has_authenticity = True
+                        self.classification_head = None
+                        has_classification = False
+                        logger.info("Classification head is 1-unit; treating it as authenticity head instead of classifier")
+            except Exception:
+                pass
         if not (has_classification or has_authenticity):
             raise ValueError("No verification heads loaded. Please load a trained model first.")
         

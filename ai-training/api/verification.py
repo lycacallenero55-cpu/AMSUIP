@@ -774,7 +774,11 @@ async def identify_signature_owner(
                 logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
             else:
                 logger.info(f"Both models agree on prediction: {predicted_owner_id}")
-                combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
+                # If global margin is zero (degenerate tie), avoid inflating agreement
+                if float(hybrid.get("global_margin", 0.0) or 0.0) <= 1e-6 and float(hybrid.get("global_margin_raw", 0.0) or 0.0) <= 1e-6:
+                    combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                else:
+                    combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
             result["predicted_student_id"] = predicted_owner_id
         
         # Apply robust unknown/match logic
@@ -844,6 +848,10 @@ async def identify_signature_owner(
 
         # Compute final match after any adjustments above
         is_match = (not is_unknown) and (ownership_ok or auth_ok)
+
+        # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
+        if is_match and combined_confidence < 0.75:
+            combined_confidence = 0.75
 
         # DEBUG: Log comprehensive verification details
         logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
