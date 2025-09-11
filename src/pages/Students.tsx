@@ -47,6 +47,7 @@ const Students = () => {
     program: '',
     year: ''
   });
+  const [displayPageSize, setDisplayPageSize] = useState(10);
   
   // Pagination state
   const [pagination, setPagination] = useState<PaginationState>({
@@ -296,6 +297,14 @@ const Students = () => {
   const handlePageSizeChange = (newPageSize: number) => {
     // Allow very large numbers for "ALL" case, otherwise ensure minimum value of 10
     const validPageSize = newPageSize >= 999999 ? newPageSize : Math.max(10, newPageSize);
+    
+    // Update display page size (what user sees in the control)
+    if (newPageSize >= 999999) {
+      setDisplayPageSize(totalStudentsCount);
+    } else {
+      setDisplayPageSize(validPageSize);
+    }
+    
     setPagination(prev => ({ 
       ...prev, 
       pageSize: validPageSize, 
@@ -326,6 +335,13 @@ const Students = () => {
       debouncedSearch.cancel();
     };
   }, [debouncedSearch]);
+
+  // Update display page size when total students count changes (for "ALL" case)
+  useEffect(() => {
+    if (pagination.pageSize >= 999999) {
+      setDisplayPageSize(totalStudentsCount);
+    }
+  }, [totalStudentsCount, pagination.pageSize]);
 
   const handleStudentAdded = () => {
     // Refresh current page
@@ -400,7 +416,7 @@ const Students = () => {
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Showed:</span>
               <Select
-                value={pagination.pageSize >= 999999 ? "all" : pagination.pageSize.toString()}
+                value={pagination.pageSize >= 999999 ? "all" : displayPageSize.toString()}
                 onValueChange={(value) => {
                   if (value === "all") {
                     handlePageSizeChange(999999);
@@ -410,7 +426,9 @@ const Students = () => {
                 }}
               >
                 <SelectTrigger className="h-8 w-24">
-                  <SelectValue />
+                  <SelectValue>
+                    {displayPageSize.toString()}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="10">10</SelectItem>
