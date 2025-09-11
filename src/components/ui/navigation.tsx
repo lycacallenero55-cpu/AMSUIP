@@ -311,7 +311,7 @@ const DesktopNavigation = () => {
       <div className={cn(
         "h-full flex flex-col bg-background border-r border-sidebar-border",
         // Container-only width animation (fast & smooth); items remain static
-        "transition-[width] duration-150 ease-in-out",
+        "transition-[width] duration-120 ease-in-out",
         isCollapsed ? "w-12" : "w-64"
       )} style={{height: 'calc(100vh - 56px)'}}>
       <div className={cn(
@@ -337,8 +337,10 @@ const DesktopNavigation = () => {
                   "flex items-center cursor-pointer group relative",
                   // Only color/hover transitions; no positional animation
                   "transition-colors duration-200",
-                  // Unified dimensions/padding in both states
-                  "h-9 justify-start px-3 w-full rounded-sm overflow-hidden",
+                  // Unified dimensions; conditional left padding to perfectly center icon when collapsed
+                  isCollapsed 
+                    ? "h-9 justify-start pl-[16px] pr-0 w-full rounded-sm overflow-hidden"
+                    : "h-9 justify-start px-3 w-full rounded-sm overflow-hidden",
                   isActive 
                     ? "bg-gradient-primary shadow-glow text-white"
                     : "hover:bg-sidebar-accent/50 hover:text-foreground"
