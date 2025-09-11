@@ -249,13 +249,13 @@ const Accounts = () => {
 
         {/* Show accounts table only for admins */}
         {currentUserProfile?.role === 'admin' ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>List of Accounts</CardTitle>
-              <CardDescription>
+          <div className="bg-white rounded-lg shadow-sm p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-semibold text-education-navy">List of Accounts</h3>
+              <div className="text-sm text-muted-foreground">
                 {filteredProfiles.length} {filteredProfiles.length === 1 ? 'account' : 'accounts'} found
-              </CardDescription>
-            </CardHeader>
+              </div>
+            </div>
             
             {/* Big space below List of Accounts label */}
             <div className="mb-8"></div>
@@ -302,8 +302,7 @@ const Accounts = () => {
               </div>
             </div>
             
-            <CardContent>
-              <div className="border-t border-b border-gray-200 overflow-hidden">
+            <div className="border-t border-b border-gray-200 overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr className="text-xs text-gray-500 h-8">
@@ -381,9 +380,8 @@ const Accounts = () => {
                     )}
                   </tbody>
                 </table>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ) : (
           /* For non-admin users, show a message */
           <Card>
