@@ -252,9 +252,6 @@ const Accounts = () => {
           <div className="bg-white rounded-lg shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-base font-semibold text-education-navy">List of Accounts</h3>
-              <div className="text-sm text-muted-foreground">
-                {filteredProfiles.length} {filteredProfiles.length === 1 ? 'account' : 'accounts'} found
-              </div>
             </div>
             
             {/* Big space below List of Accounts label */}
