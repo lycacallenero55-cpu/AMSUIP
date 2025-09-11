@@ -608,10 +608,10 @@ class SignatureEmbeddingModel:
         else:
             overall_confidence = student_confidence
         
-        # Determine if signature is unknown - STRICTER thresholds to prevent false positives
+        # Determine if signature is unknown - Balanced thresholds for better accuracy
         is_unknown = (
-            (has_classification and student_confidence < 0.5) or  # Increased from 0.3 to 0.5
-            overall_confidence < 0.6 or  # Increased from 0.4 to 0.6
+            (has_classification and student_confidence < 0.4) or  # More lenient for individual model
+            overall_confidence < 0.5 or  # More lenient overall
             predicted_student_id == 0  # If no valid student ID found
         )
         

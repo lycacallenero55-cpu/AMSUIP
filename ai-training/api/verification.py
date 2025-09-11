@@ -765,14 +765,28 @@ async def identify_signature_owner(
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
         has_auth = signature_ai_manager.authenticity_head is not None
-        # Stricter unknown thresholding with margin requirement
+        # Improved unknown thresholding with better outlier detection
         is_unknown = True
-        if (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02)):
-            # Accept only if global is confident AND separated
-            if has_auth:
-                is_unknown = not bool(result.get("is_genuine", False))
-            else:
+        
+        # Check if we have a valid prediction first
+        if predicted_owner_id is not None and predicted_owner_id > 0:
+            # Accept if global is confident AND has good separation
+            if global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02):
+                if has_auth:
+                    is_unknown = not bool(result.get("is_genuine", False))
+                else:
+                    is_unknown = False
+            # Also accept if individual model is confident (even without global)
+            elif student_confidence >= 0.60:
                 is_unknown = False
+            # Special case: if both models agree on same student, be more lenient
+            elif (predicted_owner_id == result.get("predicted_student_id") and 
+                  global_score >= 0.60 and student_confidence >= 0.40):
+                is_unknown = False
+        else:
+            # No valid prediction from global model
+            is_unknown = True
+            
         result["is_unknown"] = is_unknown
 
         # Determine match logic for identify: do not gate on authenticity if head absent
@@ -789,9 +803,31 @@ async def identify_signature_owner(
         if agree and (global_score >= 0.70 or student_confidence >= 0.40):
             result["is_unknown"] = False
             is_unknown = False
+            
+        # Enhanced outlier detection for untrained students
+        # If both models are very uncertain, force unknown regardless of prediction
+        if (global_score < 0.55 and student_confidence < 0.40 and 
+            (global_margin < 0.02 or global_margin_raw < 0.01)):
+            result["is_unknown"] = True
+            is_unknown = True
+            logger.info(f"Forcing unknown due to low confidence: global={global_score:.3f}, student={student_confidence:.3f}")
+            
+        # Special case for small student counts (<=2) - be more lenient
+        trained_student_count = len(signature_ai_manager.id_to_student) if signature_ai_manager.id_to_student else 0
+        if trained_student_count <= 2 and not is_unknown:
+            # For very small datasets, relax thresholds significantly
+            if (global_score >= 0.50 or student_confidence >= 0.30 or 
+                (predicted_owner_id == result.get("predicted_student_id") and global_score >= 0.45)):
+                result["is_unknown"] = False
+                is_unknown = False
+                logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
 
-        # DEBUG: Log the final result before constructing response
-        logger.info(f"DEBUG: Final result before response: predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
+        # DEBUG: Log comprehensive verification details
+        logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
+        logger.info(f"DEBUG: Confidence scores - student={student_confidence:.3f}, global={global_score:.3f}, auth={result.get('authenticity_score', 0.0):.3f}")
+        logger.info(f"DEBUG: Margins - global_margin={global_margin:.3f}, raw_margin={global_margin_raw:.3f}")
+        logger.info(f"DEBUG: Decisions - is_unknown={is_unknown}, is_match={is_match}, ownership_ok={ownership_ok}")
+        logger.info(f"DEBUG: Final result - predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
         
         # Mask unknowns instead of returning a trained ID
         predicted_block = {
