@@ -528,6 +528,7 @@ const ExcuseApplicationContent = () => {
             <thead className="bg-gray-50">
               <tr className="text-xs text-gray-500 h-8">
                 <th scope="col" className="px-3 py-2 text-left font-medium">Name</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">ID</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Date of Session</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Documentation</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
@@ -537,7 +538,7 @@ const ExcuseApplicationContent = () => {
             <tbody className="bg-white divide-y divide-gray-200 text-sm">
               {loading ? (
                 <tr className="h-8">
-                  <td colSpan={5} className="px-3 py-1 text-center">
+                  <td colSpan={6} className="px-3 py-1 text-center">
                     <div className="flex justify-center">
                       <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                     </div>
@@ -546,7 +547,7 @@ const ExcuseApplicationContent = () => {
                 </tr>
               ) : filteredExcuses.length === 0 ? (
                 <tr className="h-8">
-                  <td colSpan={5} className="px-3 py-1 text-center text-sm text-gray-500">
+                  <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
                     {excuses.length === 0 
                       ? 'No excuse applications found. Add your first application!'
                       : 'No applications match the current search. Try adjusting your search.'}
@@ -556,33 +557,32 @@ const ExcuseApplicationContent = () => {
                 filteredExcuses.map((excuse) => (
                   <tr key={excuse.id} className="hover:bg-gray-50 h-8">
                     <td className="px-3 py-1 whitespace-nowrap">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {excuse.students?.firstname} {excuse.students?.surname}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {excuse.students?.student_id} • {excuse.students?.program}
-                        </div>
+                      <div className="text-sm font-medium text-gray-900">
+                        {excuse.students?.firstname} {excuse.students?.surname}
                       </div>
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      {excuse.students?.student_id}
                     </td>
                     <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                       {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
                     </td>
                     <td className="px-3 py-1 whitespace-nowrap">
                       {excuse.documentation_url ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 text-xs"
+                        <div 
+                          className="w-12 h-8 bg-gray-100 rounded border cursor-pointer overflow-hidden"
                           onClick={() => {
                             setSelectedExcuse(excuse);
                             setViewMode('view');
                             setIsViewOpen(true);
                           }}
                         >
-                          <Eye className="h-3 w-3 mr-1" />
-                          View
-                        </Button>
+                          <img 
+                            src={excuse.documentation_url} 
+                            alt="Excuse letter preview" 
+                            className="w-full h-full object-cover hover:opacity-80 transition-opacity"
+                          />
+                        </div>
                       ) : (
                         <span className="text-sm text-gray-400">No attachment</span>
                       )}
@@ -591,24 +591,23 @@ const ExcuseApplicationContent = () => {
                       {getStatusDisplay(excuse.status)}
                     </td>
                     <td className="px-3 py-1 whitespace-nowrap text-right">
-                      <div className="flex gap-2 justify-end">
+                      <div className="flex gap-1 justify-end">
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-6 text-xs"
+                          className="h-6 w-6 p-0"
                           onClick={() => {
                             setSelectedExcuse(excuse);
                             setViewMode('view');
                             setIsViewOpen(true);
                           }}
                         >
-                          <Eye className="h-3 w-3 mr-1" />
-                          View
+                          <Eye className="h-3 w-3" />
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-6 text-xs"
+                          className="h-6 w-6 p-0"
                           onClick={() => {
                             setSelectedExcuse(excuse);
                             setViewMode('edit');
@@ -622,8 +621,7 @@ const ExcuseApplicationContent = () => {
                             setIsFormOpen(true);
                           }}
                         >
-                          <Edit className="h-3 w-3 mr-1" />
-                          Edit
+                          <Edit className="h-3 w-3" />
                         </Button>
                         <Button
                           variant="outline"
