@@ -790,10 +790,9 @@ async def identify_signature_owner(
         result["is_unknown"] = is_unknown
 
         # Determine match logic for identify: do not gate on authenticity if head absent
-        # Match if either ownership confidence passes thresholds OR authenticity passes (auth only helps)
+        # Start with baseline ownership_ok; we'll update it below if models agree
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
         auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
-        is_match = (not is_unknown) and (ownership_ok or auth_ok)
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
@@ -801,8 +800,10 @@ async def identify_signature_owner(
         except Exception:
             agree = False
         if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+            # If both models agree with at least moderate confidence, treat as known
             result["is_unknown"] = False
             is_unknown = False
+            ownership_ok = True  # elevate ownership due to cross-model agreement
             
         # Enhanced outlier detection for untrained students
         # If both models are very uncertain, force unknown regardless of prediction
@@ -821,6 +822,9 @@ async def identify_signature_owner(
                 result["is_unknown"] = False
                 is_unknown = False
                 logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
+
+        # Compute final match after any adjustments above
+        is_match = (not is_unknown) and (ownership_ok or auth_ok)
 
         # DEBUG: Log comprehensive verification details
         logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
