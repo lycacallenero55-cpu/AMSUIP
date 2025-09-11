@@ -382,38 +382,38 @@ const Dashboard = () => {
         </div>
       </div>
       
-      {/* Enhanced Stats Cards */}
+      {/* Minimalist Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 border-0 shadow-sm hover:shadow-md transition-all duration-200 group">
+        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
-            <CardTitle className="text-sm font-medium text-blue-700">Total Students</CardTitle>
-            <div className="p-2 bg-blue-200 rounded-lg group-hover:bg-blue-300 transition-colors">
-              <Users className="h-4 w-4 text-blue-800" />
+            <CardTitle className="text-sm font-medium text-gray-700">Total Students</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Users className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
-            <div className="text-3xl font-bold text-blue-900 mb-1">
+            <div className="text-3xl font-bold text-gray-900 mb-1">
               {loading ? '' : totalStudents.toLocaleString()}
             </div>
-            <div className="flex items-center text-sm text-blue-700">
+            <div className="flex items-center text-sm text-gray-600">
               <BarChart3 className="h-3 w-3 mr-1" />
               +5.2% this month
             </div>
           </CardContent>
         </Card>
         
-        <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-0 shadow-sm hover:shadow-md transition-all duration-200 group">
+        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
-            <CardTitle className="text-sm font-medium text-purple-700">Today's Attendance</CardTitle>
-            <div className="p-2 bg-purple-200 rounded-lg group-hover:bg-purple-300 transition-colors">
-              <UserCheck className="h-4 w-4 text-purple-800" />
+            <CardTitle className="text-sm font-medium text-gray-700">Today's Attendance</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <UserCheck className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
-            <div className="text-3xl font-bold text-purple-900 mb-1">
+            <div className="text-3xl font-bold text-gray-900 mb-1">
               {realTimeStats.todayAttendance.toLocaleString()}
             </div>
-            <div className="flex items-center text-sm text-purple-700">
+            <div className="flex items-center text-sm text-gray-600">
               {yesterdayHigherAttendance ? (
                 <TrendingUp className="h-3 w-3 mr-1" />
               ) : (
@@ -424,16 +424,16 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-gradient-to-br from-green-50 to-green-100 border-0 shadow-sm hover:shadow-md transition-all duration-200 group">
+        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
-            <CardTitle className="text-sm font-medium text-green-700">Attendance Rate</CardTitle>
-            <div className="p-2 bg-green-200 rounded-lg group-hover:bg-green-300 transition-colors">
-              <Activity className="h-4 w-4 text-green-800" />
+            <CardTitle className="text-sm font-medium text-gray-700">Attendance Rate</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Activity className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
-            <div className="text-3xl font-bold text-green-900 mb-1">94.2%</div>
-            <div className="flex items-center text-sm text-green-700">
+            <div className="text-3xl font-bold text-gray-900 mb-1">94.2%</div>
+            <div className="flex items-center text-sm text-gray-600">
               {yesterdayHigherRate ? (
                 <TrendingUp className="h-3 w-3 mr-1" />
               ) : (
@@ -444,36 +444,36 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-gradient-to-br from-orange-50 to-orange-100 border-0 shadow-sm hover:shadow-md transition-all duration-200 group">
+        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
-            <CardTitle className="text-sm font-medium text-orange-700">Today's Sessions</CardTitle>
-            <div className="p-2 bg-orange-200 rounded-lg group-hover:bg-orange-300 transition-colors">
-              <CalendarClock className="h-4 w-4 text-orange-800" />
+            <CardTitle className="text-sm font-medium text-gray-700">Today's Sessions</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <CalendarClock className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
-            <div className="text-3xl font-bold text-orange-900 mb-1">
+            <div className="text-3xl font-bold text-gray-900 mb-1">
               {realTimeStats.activeClasses}
             </div>
-            <div className="flex items-center text-sm text-orange-700">
+            <div className="flex items-center text-sm text-gray-600">
               <CheckCircle className="h-3 w-3 mr-1" />
               {mockCompletedSessionsToday} completed
             </div>
           </CardContent>
         </Card>
         
-        <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 border-0 shadow-sm hover:shadow-md transition-all duration-200 group">
+        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
-            <CardTitle className="text-sm font-medium text-indigo-700">Academic Year</CardTitle>
-            <div className="p-2 bg-indigo-200 rounded-lg group-hover:bg-indigo-300 transition-colors">
-              <CalendarDays className="h-4 w-4 text-indigo-800" />
+            <CardTitle className="text-sm font-medium text-gray-700">Academic Year</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <CalendarDays className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
-            <div className="text-2xl font-bold text-indigo-900 mb-1">
+            <div className="text-2xl font-bold text-gray-900 mb-1">
               {academicYear?.year || '2024-2025'}
             </div>
-            <div className="flex items-center text-sm text-indigo-700">
+            <div className="flex items-center text-sm text-gray-600">
               <CalendarDays className="h-3 w-3 mr-1" />
               {academicYear?.semester || 'First Semester'}
             </div>
@@ -485,7 +485,7 @@ const Dashboard = () => {
 
       {/* Chart and Recent Sessions Section */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <Card className="col-span-4 bg-white border-0 shadow-sm">
+        <Card className="col-span-4 bg-white border border-gray-200 shadow-sm">
           <CardHeader className="pb-4">
             <div className="flex justify-between items-start">
               <div>
@@ -594,7 +594,7 @@ const Dashboard = () => {
         </Card>
 
         {/* Recent Attendance Sessions */}
-        <Card className="col-span-3 bg-white border-0 shadow-sm">
+        <Card className="col-span-3 bg-white border border-gray-200 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex justify-between items-center">
               <div>
@@ -613,7 +613,7 @@ const Dashboard = () => {
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="h-[300px] overflow-y-auto">
             <div className="space-y-3">
               {recentSessions.length > 0 ? (
                 recentSessions.map((session, index) => (

@@ -1,4 +1,5 @@
 import Navigation from "@/components/ui/navigation";
+import Header from "@/components/Header";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState, useEffect } from "react";
@@ -27,6 +28,9 @@ const Layout = ({ children }: LayoutProps) => {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Header Component */}
+      <Header isMobile={!isDesktop} />
+      
       {/* Navigation Component (handles both desktop and mobile) */}
       <Navigation />
       

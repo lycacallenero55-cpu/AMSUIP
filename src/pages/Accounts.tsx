@@ -262,13 +262,13 @@ const Accounts = () => {
         {currentUserProfile?.role === 'admin' ? (
           <Card>
             <CardHeader>
-              <CardTitle>User Accounts</CardTitle>
+              <CardTitle>List of Accounts</CardTitle>
               <CardDescription>
                 {filteredProfiles.length} {filteredProfiles.length === 1 ? 'account' : 'accounts'} found
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="border rounded-lg">
+              <div className="border-t border-b">
                 <Table>
                   <TableHeader>
                     <TableRow>

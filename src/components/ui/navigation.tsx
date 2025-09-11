@@ -330,69 +330,13 @@ const DesktopNavigation = () => {
         "flex-1",
         isCollapsed ? "px-2 pb-2" : "p-4"
       )}>
-        {/* Header */}
-        <div className={cn(
-          "flex items-center",
-          // Stage 2: Items positioning - after width change completes
-          "transition-all duration-300 ease-in-out delay-200",
-          isCollapsed ? "justify-center mb-0" : "gap-3 mb-8"
-        )}>
-                     {isCollapsed ? (
-             <Tooltip>
-               <TooltipTrigger asChild>
-                 <div 
-                   className="bg-gradient-primary flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 w-8 h-8 rounded-md"
-                   onClick={handleToggleSidebar}
-                 >
-                   <GraduationCap className="w-6 h-6 text-primary-foreground" />
-                 </div>
-               </TooltipTrigger>
-               <TooltipContent side="right" align="center">
-                 Expand sidebar
-               </TooltipContent>
-             </Tooltip>
-           ) : (
-             <div 
-               className="bg-gradient-primary flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105 w-10 h-10 rounded-md"
-               onClick={handleToggleSidebar}
-             >
-               <GraduationCap className="w-7 h-7 text-primary-foreground" />
-             </div>
-           )}
-          <div className={cn(
-            "flex-1 flex items-center overflow-hidden",
-            // Stage 3: Content transition - after positioning settles, instant fade when collapsing
-            isCollapsing ? "transition-opacity duration-75" : "transition-all duration-300 ease-in-out delay-250",
-            isCollapsed || isCollapsing ? "opacity-0 translate-x-2 w-0" : "opacity-100 translate-x-0"
-          )}>
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold text-education-navy whitespace-nowrap">AMSUIP</h1>
-              <p className="text-sm text-muted-foreground whitespace-nowrap">{getPanelLabel()}</p>
-            </div>
-          </div>
-        </div>
+        {/* Empty space where header used to be */}
+        <div className="h-16"></div>
         
         {/* Menu Items */}
         <div className={cn(
           isCollapsed ? "space-y-2 mb-0 mt-0" : "space-y-1.5 mb-0"
         )}>
-          {/* MENU Label */}
-          {!isCollapsed && (
-            <div className={cn(
-              // Stage 2: Labels positioning - synchronized with header
-              "transition-all duration-300 ease-in-out delay-200",
-              "px-3 pb-0"
-            )}>
-              <span className={cn(
-                "font-medium text-muted-foreground/60 uppercase tracking-wider block",
-                // Stage 3: Text styling - after positioning completes, instant fade when collapsing
-                isCollapsing ? "transition-opacity duration-75" : "transition-all duration-300 ease-in-out delay-300",
-                "text-xs opacity-100 text-left"
-              )}>
-                MENU
-              </span>
-            </div>
-          )}
           
           {navItems.map((item, index) => {
             
@@ -789,27 +733,13 @@ const MobileDrawer = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
           animationFillMode: 'forwards'
         }}
       >
-        <div className="flex justify-between items-center mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-primary rounded-lg flex items-center justify-center">
-              <GraduationCap className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-education-navy">AMSUIP</h1>
-              <p className="text-sm text-muted-foreground">{getPanelLabel()}</p>
-            </div>
-          </div>
+        <div className="flex justify-end items-center mb-8">
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="h-5 w-5" />
           </Button>
         </div>
 
         <div className="space-y-1.5">
-          <div className="px-4 pt-2 pb-1">
-            <span className="text-xs font-medium text-muted-foreground/60 uppercase tracking-wider">
-              MENU
-            </span>
-          </div>
           {navItems.map((item) => {
             const isActive = item.isActive 
               ? item.isActive(location.pathname) 
@@ -910,6 +840,16 @@ const Navigation = () => {
     setIsMobileOpen(false);
   };
 
+  // Expose mobile drawer state to parent components
+  useEffect(() => {
+    // This allows the Header component to control mobile navigation
+    window.mobileDrawerState = {
+      isOpen: isMobileOpen,
+      toggle: toggleMobileDrawer,
+      close: closeMobileDrawer
+    };
+  }, [isMobileOpen]);
+
 
 
   if (isDesktop) {
@@ -922,21 +862,6 @@ const Navigation = () => {
 
   return (
     <>
-      {/* Mobile Header */}
-      <header className="sticky top-0 z-50 md:hidden bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center">
-              <GraduationCap className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <h1 className="text-lg font-bold text-education-navy">AMSUIP</h1>
-          </div>
-          <Button variant="ghost" size="icon" onClick={toggleMobileDrawer}>
-            <Menu className="h-5 w-5" />
-          </Button>
-        </div>
-      </header>
-      
       <MobileDrawer isOpen={isMobileOpen} onClose={closeMobileDrawer} />
     </>
   );
