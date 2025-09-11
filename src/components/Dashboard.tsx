@@ -387,8 +387,8 @@ const Dashboard = () => {
         <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Total Students</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <Users className="h-4 w-4 text-gray-600" />
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Users className="h-4 w-4 text-blue-700" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
@@ -405,8 +405,8 @@ const Dashboard = () => {
         <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Today's Attendance</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <UserCheck className="h-4 w-4 text-gray-600" />
+            <div className="p-2 bg-purple-100 rounded-lg">
+              <UserCheck className="h-4 w-4 text-purple-700" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
@@ -427,8 +427,8 @@ const Dashboard = () => {
         <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Attendance Rate</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <Activity className="h-4 w-4 text-gray-600" />
+            <div className="p-2 bg-green-100 rounded-lg">
+              <Activity className="h-4 w-4 text-green-700" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
@@ -447,8 +447,8 @@ const Dashboard = () => {
         <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Today's Sessions</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <CalendarClock className="h-4 w-4 text-gray-600" />
+            <div className="p-2 bg-orange-100 rounded-lg">
+              <CalendarClock className="h-4 w-4 text-orange-700" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">
@@ -465,8 +465,8 @@ const Dashboard = () => {
         <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Academic Year</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <CalendarDays className="h-4 w-4 text-gray-600" />
+            <div className="p-2 bg-indigo-100 rounded-lg">
+              <CalendarDays className="h-4 w-4 text-indigo-700" />
             </div>
           </CardHeader>
           <CardContent className="pt-0 px-6 pb-6">

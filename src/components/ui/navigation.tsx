@@ -325,7 +325,7 @@ const DesktopNavigation = () => {
         // Stage 1: Width transition - horizontal shrinking/expanding
         "transition-[width] duration-250 ease-in-out",
         isCollapsed ? "w-12" : "w-64"
-      )}>
+      )} style={{height: 'calc(100vh - 56px)'}}>
       <div className={cn(
         "flex-1",
         isCollapsed ? "px-2 pb-2" : "p-4"
@@ -403,174 +403,7 @@ const DesktopNavigation = () => {
           })}
         </div>
 
-        {/* OTHER section - ZERO spacing above in any state */}
-        <div className={cn(
-          // ZERO spacing above OTHER in any state - should be IMMEDIATELY after menu items
-          "mt-0",
-          isCollapsed ? "space-y-1" : "space-y-1.5"
-        )}>
-          {/* OTHER Label */}
-          {!isCollapsed && (
-            <div className={cn(
-              // Stage 2: Labels positioning - synchronized with menu items
-              "transition-all duration-300 ease-in-out delay-200",
-              "px-3 py-0"
-            )}>
-              <span className={cn(
-                "font-medium text-muted-foreground/60 uppercase tracking-wider block",
-                // Stage 3: Text styling - after positioning completes, instant fade when collapsing
-                isCollapsing ? "transition-opacity duration-75" : "transition-all duration-300 ease-in-out delay-300",
-                "text-xs opacity-100 text-left"
-              )}>
-                OTHER
-              </span>
-            </div>
-          )}
-          
-          {/* Profile Item */}
-          <Link to="/profile" className="block">
-            {isCollapsed ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex items-center cursor-pointer group relative",
-                      // Stage 2: Profile item positioning - after main menu items
-                      "transition-all duration-300 ease-in-out delay-400",
-                      isCollapsed 
-                        ? "h-8 justify-center w-6 mx-auto p-0 rounded-sm" // Larger container with smaller active background
-                        : "h-9 justify-start gap-3 px-3 w-full rounded-sm", // Slightly smaller expanded items, perfect square-round
-                      location.pathname === '/profile'
-                        ? isCollapsed 
-                          ? "bg-gradient-primary shadow-glow text-white h-6 w-6 mx-auto rounded-sm"
-                          : "bg-gradient-primary shadow-glow text-white"
-                        : "hover:bg-sidebar-accent/50 hover:text-foreground"
-                    )}
-                  >
-                    <User className={cn(
-                      "flex-shrink-0",
-                      // Icon sizes - consistent with main menu
-                      isCollapsed ? "w-4 h-4" : "w-4 h-4"
-                    )} />
-                    <span className={cn(
-                      "font-medium whitespace-nowrap min-w-0",
-                      // Stage 3: Profile text - fades after positioning, instant fade when collapsing
-                      isCollapsing ? "transition-opacity duration-75" : "transition-all duration-250 ease-in-out delay-450",
-                      isCollapsed || isCollapsing
-                        ? "opacity-0 translate-x-2 w-0 overflow-hidden text-xs" 
-                        : "opacity-100 translate-x-0 flex-1 text-sm"
-                    )}>
-                      Profile
-                    </span>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="right" align="center">
-                  Profile
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <div
-                className={cn(
-                  "flex items-center cursor-pointer group relative",
-                  // Stage 2: Profile item positioning - after main menu items
-                  "transition-all duration-300 ease-in-out delay-400",
-                  isCollapsed 
-                    ? "h-8 justify-center w-6 mx-auto p-0 rounded-sm" // Larger container with smaller active background
-                    : "h-9 justify-start gap-3 px-3 w-full rounded-sm", // Slightly smaller expanded items, perfect square-round
-                  location.pathname === '/profile'
-                    ? isCollapsed 
-                      ? "bg-gradient-primary shadow-glow text-white h-6 w-6 mx-auto rounded-sm"
-                      : "bg-gradient-primary shadow-glow text-white"
-                    : "hover:bg-sidebar-accent/50 hover:text-foreground"
-                )}
-              >
-                <User className={cn(
-                  "flex-shrink-0",
-                  // Icon sizes - consistent with main menu
-                  isCollapsed ? "w-4 h-4" : "w-4 h-4"
-                )} />
-                <span className={cn(
-                  "font-medium whitespace-nowrap min-w-0",
-                  // Stage 3: Profile text - fades after positioning, instant fade when collapsing
-                  isCollapsing ? "transition-opacity duration-75" : "transition-all duration-250 ease-in-out delay-450",
-                  isCollapsed || isCollapsing
-                    ? "opacity-0 translate-x-2 w-0 overflow-hidden text-xs" 
-                    : "opacity-100 translate-x-0 flex-1 text-sm"
-                )}>
-                  Profile
-                </span>
-              </div>
-            )}
-          </Link>
-          
-          {/* Log Out Item */}
-          {isCollapsed ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className={cn(
-                    "flex items-center cursor-pointer group relative",
-                    // Stage 2: Logout item positioning - final item
-                    "transition-all duration-300 ease-in-out delay-450",
-                    isCollapsed 
-                      ? "h-8 justify-center w-6 mx-auto p-0 rounded-sm" // Larger container with smaller active background
-                      : "h-9 justify-start gap-3 px-3 w-full rounded-sm", // Slightly smaller expanded items, perfect square-round
-                    "hover:bg-destructive/10 hover:text-destructive text-destructive/90"
-                  )}
-                  onClick={handleLogoutClick}
-                >
-                  <LogOut className={cn(
-                    "flex-shrink-0",
-                    // Icon sizes - consistent with main menu
-                    isCollapsed ? "w-4 h-4" : "w-4 h-4"
-                  )} />
-                  <span className={cn(
-                    "font-medium whitespace-nowrap min-w-0",
-                    // Stage 3: Logout text - fades after positioning, instant fade when collapsing
-                    isCollapsing ? "transition-opacity duration-75" : "transition-all duration-250 ease-in-out delay-500",
-                    isCollapsed || isCollapsing
-                      ? "opacity-0 translate-x-2 w-0 overflow-hidden text-xs" 
-                      : "opacity-100 translate-x-0 flex-1 text-sm"
-                  )}>
-                    Log Out
-                  </span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="right" align="center">
-                Log Out
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            <div
-              className={cn(
-                "flex items-center cursor-pointer group relative",
-                // Stage 2: Logout item positioning - final item
-                "transition-all duration-300 ease-in-out delay-450",
-                isCollapsed 
-                  ? "h-8 justify-center w-6 mx-auto p-0 rounded-sm" // Larger container with smaller active background
-                  : "h-9 justify-start gap-3 px-3 w-full rounded-sm", // Slightly smaller expanded items, perfect square-round
-                "hover:bg-destructive/10 hover:text-destructive text-destructive/90"
-              )}
-              onClick={handleLogoutClick}
-            >
-                              <LogOut className={cn(
-                  "flex-shrink-0",
-                  // Icon sizes - consistent with main menu
-                  isCollapsed ? "w-4 h-4" : "w-4 h-4"
-                )} />
-              <span className={cn(
-                "font-medium whitespace-nowrap min-w-0",
-                // Stage 3: Logout text - fades after positioning, instant fade when collapsing
-                isCollapsing ? "transition-opacity duration-75" : "transition-all duration-250 ease-in-out delay-500",
-                isCollapsed || isCollapsing
-                  ? "opacity-0 translate-x-2 w-0 overflow-hidden text-xs" 
-                  : "opacity-100 translate-x-0 flex-1 text-sm"
-              )}>
-                Log Out
-              </span>
-            </div>
-          )}
-        </div>
+        {/* OTHER section removed; rely on header actions */}
       </div>
       
       {/* Logout Confirmation Dialog */}
@@ -765,35 +598,7 @@ const MobileDrawer = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
           })}
         </div>
 
-        {/* OTHER section */}
-        <div className="mt-auto space-y-1">
-          <div className="px-3 py-1">
-            <span className="text-xs font-medium text-muted-foreground/60 uppercase tracking-wider">
-              OTHER
-            </span>
-          </div>
-          
-          <Link to="/profile" onClick={onClose}>
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-3 h-10 text-sm transition-all duration-200 group relative overflow-hidden hover:bg-[hsl(214,84%,56%)] hover:bg-opacity-10 hover:text-foreground"
-              style={{ margin: '1px 0' }}
-            >
-              <User className="w-4.5 h-4.5" />
-              Profile
-            </Button>
-          </Link>
-          
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-10 text-sm transition-all duration-200 group relative overflow-hidden hover:bg-destructive/10 hover:text-destructive text-destructive/90"
-            style={{ margin: '1px 0' }}
-            onClick={handleLogoutClick}
-          >
-            <LogOut className="w-4.5 h-4.5" />
-            Log Out
-          </Button>
-        </div>
+        {/* OTHER section removed; rely on header actions */}
       </div>
 
       {/* Logout Confirmation Dialog */}
@@ -854,7 +659,7 @@ const Navigation = () => {
 
   if (isDesktop) {
     return (
-      <div className="fixed left-0 top-0 h-full z-40">
+      <div className="fixed left-0 top-14 h-[calc(100vh-56px)] z-40">
         <DesktopNavigation />
       </div>
     );

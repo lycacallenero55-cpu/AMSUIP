@@ -207,8 +207,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
     };
 
     return (
-      <header className="sticky top-0 z-50 md:hidden bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border px-4 py-3">
-        <div className="flex items-center justify-between">
+      <header className="sticky top-0 z-50 md:hidden bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border h-14">
+        <div className="flex items-center justify-between px-4 h-14">
           <div className="flex items-center gap-3">
             <div 
               className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105"
@@ -227,8 +227,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
   }
 
   return (
-    <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border">
-      <div className="flex items-center justify-between px-6 py-3">
+    <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-sidebar-border h-14">
+      <div className="flex items-center justify-between px-6 h-14">
         {/* Left side - Logo and toggle */}
         <div className="flex items-center gap-4">
           <div 
@@ -240,13 +240,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           <h1 className="text-lg font-bold text-education-navy">AMSUIP</h1>
         </div>
 
-        {/* Right side - Panel label, Academic year, and User dropdown */}
+        {/* Right side - Academic first, then Panel label, then User dropdown */}
         <div className="flex items-center gap-4">
-          {/* Panel Label */}
-          <div className="text-sm font-medium text-muted-foreground">
-            {getPanelLabel()}
-          </div>
-
           {/* Academic Year and Semester */}
           {academicYear && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -256,6 +251,11 @@ const Header = ({ isMobile = false }: HeaderProps) => {
               <span>{academicYear.semester}</span>
             </div>
           )}
+
+          {/* Panel Label */}
+          <div className="text-sm font-medium text-muted-foreground">
+            {getPanelLabel()}
+          </div>
 
           {/* User Dropdown */}
           <DropdownMenu>
