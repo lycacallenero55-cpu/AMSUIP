@@ -39,16 +39,8 @@ interface Profile {
 
 // Role Badge Component
 const RoleBadge = ({ role }: { role: UserRole }) => {
-const roleStyles = {
-    admin: "bg-primary/10 text-primary",
-    Instructor: "bg-secondary/10 text-secondary-foreground",
-    'SSG officer': "bg-blue-100 text-blue-800",
-    'ROTC admin': "bg-green-100 text-green-800",
-    'ROTC officer': "bg-purple-100 text-purple-800"
-  };
-
   return (
-    <Badge className={roleStyles[role]}>
+    <Badge className="bg-gray-100 text-gray-800">
       {role.charAt(0).toUpperCase() + role.slice(1)}
     </Badge>
   );
@@ -56,19 +48,9 @@ const roleStyles = {
 
 // Status Badge Component
 const StatusBadge = ({ status }: { status: AccountStatus }) => {
-  const statusStyles = {
-    active: { className: "bg-green-100 text-green-800", icon: <UserCheck className="w-3 h-3 mr-1" /> },
-    inactive: { className: "bg-gray-100 text-gray-600", icon: <UserX className="w-3 h-3 mr-1" /> },
-    pending: { className: "bg-yellow-100 text-yellow-800", icon: <Clock className="w-3 h-3 mr-1" /> },
-    suspended: { className: "bg-red-100 text-red-800", icon: <XCircle className="w-3 h-3 mr-1" /> }
-  };
-
   return (
-    <Badge className={statusStyles[status].className}>
-      <div className="flex items-center">
-        {statusStyles[status].icon}
-        <span className="capitalize">{status}</span>
-      </div>
+    <Badge className="bg-gray-100 text-gray-800">
+      <span className="capitalize">{status}</span>
     </Badge>
   );
 };
@@ -279,7 +261,7 @@ const Accounts = () => {
             <div className="mb-8"></div>
             
             {/* Show search and filters inside the card */}
-            <div className="flex items-center justify-between gap-4 p-0 mb-3">
+            <div className="flex items-center justify-between gap-4 px-4 mb-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Showed:</span>
                 <Select
