@@ -37,21 +37,21 @@ interface Profile {
   rejected_at: string | null;
 }
 
-// Role Badge Component
-const RoleBadge = ({ role }: { role: UserRole }) => {
+// Role Component
+const RoleDisplay = ({ role }: { role: UserRole }) => {
   return (
-    <Badge className="bg-gray-100 text-gray-800">
+    <span className="text-sm text-gray-500">
       {role.charAt(0).toUpperCase() + role.slice(1)}
-    </Badge>
+    </span>
   );
 };
 
-// Status Badge Component
-const StatusBadge = ({ status }: { status: AccountStatus }) => {
+// Status Component
+const StatusDisplay = ({ status }: { status: AccountStatus }) => {
   return (
-    <Badge className="bg-gray-100 text-gray-800">
-      <span className="capitalize">{status}</span>
-    </Badge>
+    <span className="text-sm text-gray-500 capitalize">
+      {status}
+    </span>
   );
 };
 
@@ -261,7 +261,7 @@ const Accounts = () => {
             <div className="mb-8"></div>
             
             {/* Show search and filters inside the card */}
-            <div className="flex items-center justify-between gap-4 px-4 mb-3">
+            <div className="flex items-center justify-between gap-4 p-0 mb-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Showed:</span>
                 <Select
@@ -344,11 +344,11 @@ const Accounts = () => {
                           <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                             {profile.email}
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            <RoleBadge role={profile.role} />
+                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                            <RoleDisplay role={profile.role} />
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            <StatusBadge status={profile.status} />
+                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                            <StatusDisplay status={profile.status} />
                           </td>
                           <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                             {format(new Date(profile.created_at), 'MMM d, yyyy')}
