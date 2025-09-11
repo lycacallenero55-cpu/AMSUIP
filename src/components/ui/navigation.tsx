@@ -310,13 +310,12 @@ const DesktopNavigation = () => {
     <TooltipProvider delayDuration={0}>
       <div className={cn(
         "h-full flex flex-col bg-background border-r border-sidebar-border",
-        // Stage 1: Width transition - horizontal shrinking/expanding
-        "transition-[width] duration-250 ease-in-out",
+        // Container-only width animation (fast & smooth); items remain static
+        "transition-[width] duration-150 ease-in-out",
         isCollapsed ? "w-12" : "w-64"
       )} style={{height: 'calc(100vh - 56px)'}}>
       <div className={cn(
-        "flex-1",
-        isCollapsed ? "px-2 pb-2 pt-2" : "p-4 pt-2"
+        "flex-1 px-2 pb-2 pt-2"
       )}>
         {/* Spacer removed to align items directly under header */}
         
