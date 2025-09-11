@@ -294,12 +294,14 @@ const Students = () => {
 
   // Handle page size change
   const handlePageSizeChange = (newPageSize: number) => {
+    // Ensure minimum value of 10
+    const validPageSize = Math.max(10, newPageSize);
     setPagination(prev => ({ 
       ...prev, 
-      pageSize: newPageSize, 
+      pageSize: validPageSize, 
       currentPage: 1 
     }));
-    fetchStudents(searchTerm, filters.program, filters.year, 1, newPageSize);
+    fetchStudents(searchTerm, filters.program, filters.year, 1, validPageSize);
   };
 
   // Clear all filters
@@ -397,20 +399,33 @@ const Students = () => {
           <div className="flex items-center justify-between gap-4 p-0 mb-3">
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Showed:</span>
-              <Select
-                value={pagination.pageSize.toString()}
-                onValueChange={(value) => handlePageSizeChange(parseInt(value))}
-              >
-                <SelectTrigger className="h-8 w-24">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                  <SelectItem value="200">200</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="10"
+                  value={pagination.pageSize}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value);
+                    if (!isNaN(value) && value >= 10) {
+                      handlePageSizeChange(value);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const value = parseInt(e.target.value);
+                    if (isNaN(value) || value < 10) {
+                      // Reset to current valid value if invalid
+                      e.target.value = pagination.pageSize.toString();
+                    }
+                  }}
+                  className="h-8 w-24 text-center pr-8"
+                  placeholder="50"
+                />
+                <div className="absolute right-1 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Search:</span>
@@ -435,7 +450,7 @@ const Students = () => {
           <div className="border-t border-b border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
-                <tr className="text-xs text-gray-500">
+                <tr className="text-xs text-gray-500 h-8">
                   <th scope="col" className="px-3 py-2 text-left font-medium">Student</th>
                   <th scope="col" className="px-3 py-2 text-left font-medium">ID</th>
                   <th scope="col" className="px-3 py-2 text-left font-medium">Program</th>
@@ -444,17 +459,17 @@ const Students = () => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200 text-sm">
                 {loading ? (
-                <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center">
+                <tr className="h-8">
+                  <td colSpan={4} className="px-3 py-1 text-center">
                     <div className="flex justify-center">
-                      <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                     </div>
-                    <p className="mt-2 text-sm text-gray-500">Loading students...</p>
+                    <p className="mt-1 text-xs text-gray-500">Loading students...</p>
                   </td>
                 </tr>
                 ) : students.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">
+                <tr className="h-8">
+                  <td colSpan={4} className="px-3 py-1 text-center text-sm text-gray-500">
                     {pagination.totalCount === 0 
                       ? 'No students found. Add your first student!'
                       : 'No students match the current filters. Try adjusting your search or filters.'}
@@ -462,7 +477,7 @@ const Students = () => {
                       <Button 
                         variant="outline" 
                         size="sm"
-                        className="mt-3 h-8 text-xs hover:bg-gray-100 hover:text-gray-900"
+                        className="mt-1 h-6 text-xs hover:bg-gray-100 hover:text-gray-900"
                         onClick={clearFilters}
                       >
                         Clear all filters
@@ -473,20 +488,20 @@ const Students = () => {
                 ) : (
                   students.map((student) => (
                     <tr key={student.id} className="hover:bg-gray-50 h-8">
-                      <td className="px-3 py-2 whitespace-nowrap">
+                      <td className="px-3 py-1 whitespace-nowrap">
                         <div>
                           <div className="text-sm font-medium text-gray-900">
                             {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                         {student.student_id}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                         <span className="truncate max-w-[120px] inline-block">{student.program}</span>
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
                         <div className="flex items-center gap-1">
                           <span>{student.year}</span>
                           <span className="text-gray-300">•</span>
