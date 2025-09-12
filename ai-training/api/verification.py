@@ -903,6 +903,113 @@ async def identify_signature_owner(
         # Final match
         is_match = (not is_unknown) and ownership_ok
 
+        # k-NN fallback over trained students' genuine embeddings when still unknown or classifier absent
+        try:
+            need_knn = is_unknown or (signature_ai_manager.classification_head is None)
+            if need_knn:
+                import numpy as np
+                from collections import defaultdict
+                
+                # Compute test embedding once using the embedding model
+                test_arr = signature_ai_manager._preprocess_signature(processed_signature)
+                test_emb = signature_ai_manager.embedding_model.predict(np.expand_dims(test_arr, 0), verbose=0)[0]
+                
+                # Build reference bank from trained students (genuine only)
+                ref_embs = []
+                ref_labels = []
+                trained_ids_list = sorted(list(trained_ids)) if trained_ids else []
+                
+                def _derive_s3_key_from_url(url: str) -> str | None:
+                    if not url:
+                        return None
+                    base = url.split('?', 1)[0]
+                    if "amazonaws.com" not in base:
+                        return None
+                    try:
+                        parts = base.split(".amazonaws.com/")
+                        if len(parts) == 2:
+                            return parts[1] or None
+                        return base.split("/", 3)[-1] or None
+                    except Exception:
+                        return None
+                
+                for sid in trained_ids_list:
+                    rows = await db_manager.list_student_signatures(int(sid))
+                    taken = 0
+                    for r in rows:
+                        if (r.get("label") or "").lower() != "genuine":
+                            continue
+                        url = r.get("s3_url"); key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                        content = None
+                        if key:
+                            try:
+                                content = download_bytes(key)
+                            except Exception:
+                                content = None
+                        if content is None and url:
+                            try:
+                                import requests
+                                if settings.S3_USE_PRESIGNED_GET and key:
+                                    try:
+                                        url = create_presigned_get(key)
+                                    except Exception:
+                                        pass
+                                resp = requests.get(url, timeout=5)
+                                if resp.status_code == 200:
+                                    content = resp.content
+                            except Exception:
+                                content = None
+                        if not content:
+                            continue
+                        try:
+                            img = Image.open(io.BytesIO(content)).convert('RGB')
+                            arr = preprocessor.preprocess_signature(img)
+                            emb = signature_ai_manager.embedding_model.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                            ref_embs.append(emb)
+                            ref_labels.append(int(sid))
+                            taken += 1
+                            if taken >= 8:
+                                break
+                        except Exception:
+                            continue
+                if ref_embs:
+                    R = np.vstack(ref_embs)
+                    L = np.array(ref_labels)
+                    # Cosine similarity
+                    num = np.dot(R, test_emb)
+                    den = (np.linalg.norm(R, axis=1) * (np.linalg.norm(test_emb) + 1e-8)) + 1e-8
+                    sims = num / den
+                    # Top-k voting
+                    k = int(min(10, len(sims)))
+                    idx = np.argsort(-sims)[:k]
+                    top_labels = L[idx]
+                    top_sims = sims[idx]
+                    agg = defaultdict(list)
+                    for lab, s in zip(top_labels, top_sims):
+                        agg[int(lab)].append(float(s))
+                    best_lab = None
+                    best_score = -1.0
+                    second_score = -1.0
+                    for lab, scores in agg.items():
+                        sc = float(np.mean(scores))
+                        if sc > best_score:
+                            second_score = best_score
+                            best_score = sc
+                            best_lab = lab
+                        elif sc > second_score:
+                            second_score = sc
+                    # Decide with strict threshold and margin to avoid wrong owners
+                    if best_lab is not None and best_score >= 0.92 and (best_score - max(second_score, 0.0)) >= 0.02:
+                        result["predicted_student_id"] = int(best_lab)
+                        result["predicted_student_name"] = signature_ai_manager.id_to_student.get(int(best_lab), f"student_{best_lab}")
+                        combined_confidence = max(combined_confidence, float(best_score))
+                        is_unknown = False
+                        is_match = True
+                        ownership_ok = True
+                        logger.info(f"kNN fallback selected student {best_lab} with score {best_score:.3f}")
+        except Exception as e:
+            logger.warning(f"kNN fallback failed: {e}")
+
         # Remove forced-match shortcut; rely on ownership_ok thresholds only
 
         # Do not clamp confidence upward
