@@ -166,7 +166,7 @@ const AllowedTermsContent = () => {
       </div>
       
       {/* Big space between page title and card */}
-      <div className="mb-8"></div>
+      <div className="mb-10"></div>
       
       {/* Allowed Terms Section */}
       <div className="bg-white rounded-lg shadow-sm p-4">
