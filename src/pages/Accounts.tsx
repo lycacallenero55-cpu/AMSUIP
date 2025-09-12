@@ -303,12 +303,12 @@ const Accounts = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr className="text-xs text-black h-8">
-                      <th scope="col" className="px-3 py-2 text-left font-bold">User</th>
-                      <th scope="col" className="px-3 py-2 text-left font-bold">Email</th>
-                      <th scope="col" className="px-3 py-2 text-left font-bold">Role</th>
-                      <th scope="col" className="px-3 py-2 text-left font-bold">Status</th>
-                      <th scope="col" className="px-3 py-2 text-left font-bold">Created</th>
-                      <th scope="col" className="px-3 py-2 text-left font-bold">Actions</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">User</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Email</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Role</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Status</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Created</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">

@@ -340,7 +340,7 @@ const DesktopNavigation = () => {
                   // Unified dimensions in both states to prevent distortion
                   "h-8 justify-start px-2 w-full rounded-sm overflow-hidden",
                   isActive 
-                    ? "bg-gray-200 text-black font-bold"
+                    ? "bg-gray-200 text-black font-semibold"
                     : "hover:bg-gray-100 hover:text-foreground font-normal"
                 )}
               >
@@ -553,7 +553,7 @@ const MobileDrawer = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
                   className={cn(
                     "w-full justify-start gap-3 h-10 text-sm transition-all duration-200 group relative overflow-hidden",
                     isActive 
-                      ? "bg-gray-200 text-black font-bold" 
+                      ? "bg-gray-200 text-black font-semibold" 
                       : "hover:bg-gray-100 hover:text-foreground font-normal"
                   )}
                 >

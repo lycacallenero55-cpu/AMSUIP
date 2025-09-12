@@ -465,10 +465,10 @@ const Students = () => {
           <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr className="text-xs text-black h-8">
-                  <th scope="col" className="px-3 py-2 text-left font-bold">Student</th>
-                  <th scope="col" className="px-3 py-2 text-left font-bold">ID</th>
-                  <th scope="col" className="px-3 py-2 text-left font-bold">Program</th>
-                  <th scope="col" className="px-3 py-2 text-left font-bold">Year & Section</th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Student</th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">ID</th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Program</th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Year & Section</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
