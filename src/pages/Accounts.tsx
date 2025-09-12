@@ -40,7 +40,7 @@ interface Profile {
 // Role Component
 const RoleDisplay = ({ role }: { role: UserRole }) => {
   return (
-    <span className="text-sm text-gray-500">
+    <span className="text-xs text-black opacity-50">
       {role.charAt(0).toUpperCase() + role.slice(1)}
     </span>
   );
@@ -49,7 +49,7 @@ const RoleDisplay = ({ role }: { role: UserRole }) => {
 // Status Component
 const StatusDisplay = ({ status }: { status: AccountStatus }) => {
   return (
-    <span className="text-sm text-gray-500 capitalize">
+    <span className="text-xs text-black opacity-50 capitalize">
       {status}
     </span>
   );
@@ -378,69 +378,67 @@ const Accounts = () => {
                       <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
-                    {isLoading ? (
-                      <tr className="h-8">
-                        <td colSpan={6} className="px-3 py-1 text-center">
-                          <div className="flex justify-center">
-                            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                          </div>
-                          <p className="mt-1 text-xs text-gray-500">Loading accounts...</p>
-                        </td>
-                      </tr>
-                    ) : filteredProfiles.length === 0 ? (
+                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+                    {isLoading ? null : filteredProfiles.length === 0 ? (
                       <tr className="h-8">
                         <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
                           No accounts found matching the current filters.
                         </td>
                       </tr>
                     ) : (
-                      sortedProfiles.map((profile) => (
-                        <tr key={profile.id} className="hover:bg-gray-50 h-8">
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            <div className="font-medium">
-                              {profile.first_name && profile.last_name 
-                                ? `${profile.first_name} ${profile.last_name}`
-                                : profile.email.split('@')[0]}
-                            </div>
-                          </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            {profile.email}
-                          </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            <RoleDisplay role={profile.role} />
-                          </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            <StatusDisplay status={profile.status} />
-                          </td>
-                          <td className="px-3 py-1 whitespace-nowrap">
-                            {format(new Date(profile.created_at), 'MMM d, yyyy')}
-                          </td>
-                          <td className="px-3 py-1 whitespace-nowrap text-right">
-                            {profile.status === 'pending' && (
-                              <div className="flex gap-2 justify-end">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleApprove(profile.id)}
-                                  className="bg-green-600 hover:bg-green-700 h-6 text-xs"
-                                >
-                                  <CheckCircle2 className="h-3 w-3 mr-1" />
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleReject(profile.id)}
-                                  className="text-red-600 border-red-200 hover:bg-red-50 h-6 text-xs"
-                                >
-                                  <XCircle className="h-3 w-3 mr-1" />
-                                  Reject
-                                </Button>
+                      <>
+                        {sortedProfiles.map((profile) => (
+                          <tr key={profile.id} className="hover:bg-gray-50 h-8">
+                            <td className="px-3 py-1 whitespace-nowrap">
+                              <div className="font-medium">
+                                {profile.first_name && profile.last_name 
+                                  ? `${profile.first_name} ${profile.last_name}`
+                                  : profile.email.split('@')[0]}
                               </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))
+                            </td>
+                            <td className="px-3 py-1 whitespace-nowrap">
+                              {profile.email}
+                            </td>
+                            <td className="px-3 py-1 whitespace-nowrap">
+                              <RoleDisplay role={profile.role} />
+                            </td>
+                            <td className="px-3 py-1 whitespace-nowrap">
+                              <StatusDisplay status={profile.status} />
+                            </td>
+                            <td className="px-3 py-1 whitespace-nowrap">
+                              {format(new Date(profile.created_at), 'MMM d, yyyy')}
+                            </td>
+                            <td className="px-3 py-1 whitespace-nowrap text-right">
+                              {profile.status === 'pending' && (
+                                <div className="flex gap-2 justify-end">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleApprove(profile.id)}
+                                    className="bg-green-600 hover:bg-green-700 h-6 text-xs"
+                                  >
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Approve
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleReject(profile.id)}
+                                    className="text-red-600 border-red-200 hover:bg-red-50 h-6 text-xs"
+                                  >
+                                    <XCircle className="h-3 w-3 mr-1" />
+                                    Reject
+                                  </Button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {sortedProfiles.length < 10 && Array.from({ length: 10 - sortedProfiles.length }).map((_, idx) => (
+                          <tr key={`filler-${idx}`} className="h-8">
+                            <td colSpan={6} className="px-3 py-1">&nbsp;</td>
+                          </tr>
+                        ))}
+                      </>
                     )}
                   </tbody>
                 </table>

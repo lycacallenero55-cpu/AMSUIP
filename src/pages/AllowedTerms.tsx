@@ -267,17 +267,8 @@ const AllowedTermsContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th> {/* Empty for actions */}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
-              {loading ? (
-                <tr className="h-8">
-                  <td colSpan={3} className="px-3 py-1 text-center">
-                    <div className="flex justify-center">
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">Loading terms...</p>
-                  </td>
-                </tr>
-              ) : paginatedTerms.length === 0 ? (
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+              {loading ? null : paginatedTerms.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={3} className="px-3 py-1 text-center text-sm text-gray-500">
                     {terms.length === 0 
@@ -286,36 +277,43 @@ const AllowedTermsContent = () => {
                   </td>
                 </tr>
               ) : (
-                paginatedTerms.map((term) => (
-                  <tr key={term.id} className="hover:bg-gray-50 h-8">
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      <div className="font-medium">{term.academic_year}</div>
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      {term.semester}
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap text-right">
-                      <div className="flex gap-1 justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => handleEdit(term)}
-                        >
-                          <Edit className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => handleDelete(term.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                <>
+                  {paginatedTerms.map((term) => (
+                    <tr key={term.id} className="hover:bg-gray-50 h-8">
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        <div className="font-medium">{term.academic_year}</div>
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        {term.semester}
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap text-right">
+                        <div className="flex gap-1 justify-end">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => handleEdit(term)}
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => handleDelete(term.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {paginatedTerms.length < 10 && Array.from({ length: 10 - paginatedTerms.length }).map((_, idx) => (
+                    <tr key={`filler-${idx}`} className="h-8">
+                      <td colSpan={3} className="px-3 py-1">&nbsp;</td>
+                    </tr>
+                  ))}
+                </>
               )}
             </tbody>
           </table>
