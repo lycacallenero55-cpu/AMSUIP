@@ -192,6 +192,10 @@ async def _list_candidate_student_ids(limit: int = 50, allowed_ids: set[int] | N
             if len(ids) >= limit:
                 break
         return ids
+    except Exception as e:
+        logger.warning(f"Failed to list candidate students: {e}")
+        return []
+
 async def _get_trained_student_ids() -> set[int]:
     try:
         models = await db_manager.get_trained_models()
@@ -201,10 +205,6 @@ async def _get_trained_student_ids() -> set[int]:
     except Exception as e:
         logger.warning(f"Failed to get trained student ids: {e}")
         return set()
-
-    except Exception as e:
-        logger.warning(f"Failed to list candidate students: {e}")
-        return []
 
 async def _load_cached_centroids(latest_global: dict) -> dict | None:
     try:
