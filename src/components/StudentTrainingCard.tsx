@@ -78,8 +78,8 @@ const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
             </span>
           </div>
           <div className="flex items-center gap-2 text-xs mr-1">
-            <span className="text-green-600 font-medium">{card.genuineFiles.length}</span>
-            <span className="text-red-600 font-medium">{card.forgedFiles.length}</span>
+            <span className="text-green-600 font-medium">{card.genuineCount ?? card.genuineFiles.length}</span>
+            <span className="text-red-600 font-medium">{card.forgedCount ?? card.forgedFiles.length}</span>
           </div>
           <Button
             variant="ghost"
