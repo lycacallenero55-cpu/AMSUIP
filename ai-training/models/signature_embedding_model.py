@@ -425,18 +425,18 @@ class SignatureEmbeddingModel:
         num_students = len(self.student_to_id)
         self.create_classification_head(num_students=num_students)
         
-        # Optimized callbacks for faster training
+        # Optimized callbacks for minimal signature training (like Teachable Machine)
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=5,
+                patience=3,  # Reduced patience for minimal data
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=3,
+                patience=2,  # Reduced patience for minimal data
                 min_lr=1e-6,
                 verbose=1
             )
@@ -446,7 +446,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Training student classification model with {num_students} classes...")
         classification_history = self.classification_head.fit(
             X, y_student,
-            batch_size=min(32, len(X) // 4),  # Adaptive batch size for small datasets
+            batch_size=min(16, max(1, len(X) // 2)),  # Smaller batch size for minimal signatures
             epochs=epochs,
             validation_split=0.2,
             callbacks=callbacks,

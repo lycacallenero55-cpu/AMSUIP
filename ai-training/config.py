@@ -25,7 +25,7 @@ class Settings:
     # Model Configuration
     MODEL_IMAGE_SIZE = int(os.getenv("MODEL_IMAGE_SIZE", 224))
     MODEL_BATCH_SIZE = int(os.getenv("MODEL_BATCH_SIZE", 32))
-    MODEL_EPOCHS = int(os.getenv("MODEL_EPOCHS", 20))  # Reduced for faster training
+    MODEL_EPOCHS = int(os.getenv("MODEL_EPOCHS", 15))  # Optimized for minimal signatures like Teachable Machine
     MODEL_LEARNING_RATE = float(os.getenv("MODEL_LEARNING_RATE", 0.0002))  # Further reduced to prevent overfitting
 
         # CPU Optimization
@@ -37,8 +37,8 @@ class Settings:
     SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "models")
     
     # Training Configuration
-    MIN_GENUINE_SAMPLES = int(os.getenv("MIN_GENUINE_SAMPLES", 10))
-    MIN_FORGED_SAMPLES = int(os.getenv("MIN_FORGED_SAMPLES", 5))
+    MIN_GENUINE_SAMPLES = int(os.getenv("MIN_GENUINE_SAMPLES", 3))  # Reduced for minimal requirements like Teachable Machine
+    MIN_FORGED_SAMPLES = int(os.getenv("MIN_FORGED_SAMPLES", 0))   # Disabled - no forgery detection needed
     MAX_TRAINING_TIME = int(os.getenv("MAX_TRAINING_TIME", 3600))
 
     # Verification Settings

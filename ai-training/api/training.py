@@ -504,8 +504,7 @@ async def start_training(
             # Use uploaded files
             if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                 raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+            # Forged samples not required since forgery detection is disabled
             genuine_data = [await f.read() for f in genuine_files]
             forged_data = [await f.read() for f in forged_files]
         else:
@@ -542,7 +541,7 @@ async def start_training(
                     genuine_data.append(data)
                 else:
                     forged_data.append(data)
-            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
                 raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
 
         result = await train_signature_model(student, genuine_data, forged_data)
@@ -606,13 +605,12 @@ async def start_gpu_training(
                         continue
                     if label == "genuine": genuine_data.append(content)
                     else: forged_data.append(content)
-                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                # Forged samples not required since forgery detection is disabled
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             
@@ -647,8 +645,7 @@ async def start_gpu_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                # Forged samples not required since forgery detection is disabled
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             
@@ -726,13 +723,12 @@ async def start_async_training(
                         continue
                     if label == "genuine": genuine_data.append(content)
                     else: forged_data.append(content)
-                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                # Forged samples not required since forgery detection is disabled
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
@@ -749,8 +745,7 @@ async def start_async_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                # Forged samples not required since forgery detection is disabled
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
@@ -984,7 +979,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         # Validate minimum totals across all selected students
         total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
         total_forged = sum(len(v["forged_images"]) for v in per_student.values())
-        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+        if total_genuine < settings.MIN_GENUINE_SAMPLES:
             raise Exception("Insufficient stored signatures across selected students to train global model")
 
         # Build training data structure for GPU service (expects simple dict of lists of arrays)
@@ -1099,7 +1094,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
 
         total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
         total_forged = sum(len(v["forged_images"]) for v in per_student.values())
-        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+        if total_genuine < settings.MIN_GENUINE_SAMPLES:
             raise Exception("Insufficient stored signatures across selected students to train global model")
 
         training_data = {}

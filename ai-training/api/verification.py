@@ -894,11 +894,12 @@ async def identify_signature_owner(
             
         result["is_unknown"] = is_unknown
 
-        # Determine match logic for identify: stricter gating to avoid wrong matches
-        # Require either decent classifier confidence OR very high global score with non-trivial separation
+        # Optimized for minimal signatures: more lenient thresholds for owner identification
+        # Like Teachable Machine - prioritize identifying the owner even with lower confidence
         ownership_ok = (
-            student_confidence >= 0.60 or
-            (global_score >= 0.90 and (global_margin >= 0.02 or global_margin_raw >= 0.02))
+            student_confidence >= 0.40 or  # Lowered from 0.60
+            (global_score >= 0.80 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or  # Lowered thresholds
+            (student_confidence >= 0.30 and global_score >= 0.70)  # Combined confidence for minimal data
         )
         
         # Do not auto-accept individual prediction if global was rejected (avoid false positives)
@@ -912,7 +913,7 @@ async def identify_signature_owner(
             agree = (predicted_owner_id is not None and original_individual_prediction == predicted_owner_id)
         except Exception:
             agree = False
-        if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+        if agree and (global_score >= 0.60 or student_confidence >= 0.30):  # Lowered for minimal signatures
             # If both models agree with at least moderate confidence, treat as known
             result["is_unknown"] = False
             is_unknown = False
@@ -1038,8 +1039,8 @@ async def identify_signature_owner(
                             best_lab = lab
                         elif sc > second_score:
                             second_score = sc
-                    # Decide with strict threshold and margin to avoid wrong owners
-                    if best_lab is not None and best_score >= 0.92 and (best_score - max(second_score, 0.0)) >= 0.02:
+                    # Optimized for minimal signatures: more lenient k-NN thresholds
+                    if best_lab is not None and best_score >= 0.85 and (best_score - max(second_score, 0.0)) >= 0.01:
                         result["predicted_student_id"] = int(best_lab)
                         result["predicted_student_name"] = signature_ai_manager.id_to_student.get(int(best_lab), f"student_{best_lab}")
                         combined_confidence = max(combined_confidence, float(best_score))
