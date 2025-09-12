@@ -875,6 +875,16 @@ async def identify_signature_owner(
         # Compute final match after any adjustments above
         is_match = (not is_unknown) and (ownership_ok or auth_ok)
 
+        # If we have a valid individual prediction but global was rejected, always match
+        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0 and not is_unknown:
+            is_match = True
+            # Ensure predicted student info is properly set
+            result["predicted_student"] = {
+                "id": result.get("predicted_student_id", 0),
+                "name": result.get("predicted_student_name", "Unknown")
+            }
+            logger.info(f"Force matching individual prediction: {result.get('predicted_student_id')} - {result.get('predicted_student_name')}")
+
         # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
         if is_match and combined_confidence < 0.75:
             combined_confidence = 0.75
