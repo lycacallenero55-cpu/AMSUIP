@@ -1030,7 +1030,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 for s in students:
                     sid = int(s["id"])  # type: ignore[index]
                     bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                    if bucket["genuine_images"] and bucket["forged_images"]:
+                    if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
                         await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                         individual_count += 1
             except Exception as e:
@@ -1175,7 +1175,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
             for s in students:
                 sid = int(s["id"])  # type: ignore[index]
                 bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                if bucket["genuine_images"] and bucket["forged_images"]:
+                if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
                     await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                     individual_count += 1
         except Exception as e:
