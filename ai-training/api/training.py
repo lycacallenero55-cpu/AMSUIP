@@ -179,7 +179,8 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     # Create proper classification head for identification
     _X, _y_student, _y_auth = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
-    local_manager.create_classification_head()
+    num_students = len(local_manager.student_to_id)
+    local_manager.create_classification_head(num_students=num_students)
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())

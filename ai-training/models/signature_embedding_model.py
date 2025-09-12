@@ -145,7 +145,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Created embedding network with {self.embedding_model.count_params():,} parameters")
         return self.embedding_model
     
-    def create_classification_head(self) -> keras.Model:
+    def create_classification_head(self, num_students: int = None) -> keras.Model:
         """
         Create classification head for student identification
         """
@@ -162,8 +162,9 @@ class SignatureEmbeddingModel:
         x = layers.BatchNormalization(name='class_bn2')(x)
         x = layers.Dropout(0.2, name='class_dropout2')(x)
         
-        # Student classification output - use actual number of students, not max
-        num_students = len(self.student_to_id) if self.student_to_id else self.max_students
+        # Student classification output - use provided num_students or actual count
+        if num_students is None:
+            num_students = len(self.student_to_id) if self.student_to_id else self.max_students
         student_output = layers.Dense(
             num_students, 
             activation='softmax', 
@@ -384,6 +385,8 @@ class SignatureEmbeddingModel:
         y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
         logger.info(f"Prepared {len(all_images)} images across {len(self.student_to_id)} students")
+        logger.info(f"Student mappings: {self.student_to_id}")
+        logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
         return X, y_student, y_authenticity
     
     def _preprocess_signature(self, image: Union[np.ndarray, Image.Image]) -> np.ndarray:
@@ -415,11 +418,12 @@ class SignatureEmbeddingModel:
         """
         logger.info("Starting classification-only training for faster identification...")
         
-        # Prepare data
+        # Prepare data first to set up student mappings
         X, y_student, y_authenticity = self.prepare_training_data(training_data)
         
-        # Create only the classification model
-        self.create_classification_head()
+        # Create only the classification model with correct number of students
+        num_students = len(self.student_to_id)
+        self.create_classification_head(num_students=num_students)
         
         # Optimized callbacks for faster training
         callbacks = [
@@ -439,10 +443,10 @@ class SignatureEmbeddingModel:
         ]
         
         # Train classification model only
-        logger.info("Training student classification model...")
+        logger.info(f"Training student classification model with {num_students} classes...")
         classification_history = self.classification_head.fit(
             X, y_student,
-            batch_size=32,
+            batch_size=min(32, len(X) // 4),  # Adaptive batch size for small datasets
             epochs=epochs,
             validation_split=0.2,
             callbacks=callbacks,
