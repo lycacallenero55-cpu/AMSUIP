@@ -711,6 +711,12 @@ async def identify_signature_owner(
                 second_cos = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
+                        # Restrict to trained students only
+                        try:
+                            if trained_ids and int(sid) not in trained_ids:
+                                continue
+                        except Exception:
+                            pass
                         centroid = np.array(centroid)
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
@@ -1384,6 +1390,12 @@ async def verify_signature(
                 best_score = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
+                        # Restrict to trained students only
+                        try:
+                            if trained_ids and int(sid) not in trained_ids:
+                                continue
+                        except Exception:
+                            pass
                         centroid = np.array(centroid)
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
