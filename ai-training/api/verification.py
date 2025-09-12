@@ -1064,7 +1064,23 @@ async def identify_signature_owner(
         logger.info(f"DEBUG: Decisions - is_unknown={is_unknown}, is_match={is_match}, ownership_ok={ownership_ok}")
         logger.info(f"DEBUG: Final result - predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
         
-        # Mask unknowns instead of returning a trained ID
+        # If still unknown and we have trained IDs, return best trained student (owner-of-best-score) as last resort
+        if is_unknown:
+            try:
+                # Choose from: accepted global, kNN best (already applied), or individual prediction
+                fallback_id = None
+                if predicted_owner_id is not None and (not trained_ids or int(predicted_owner_id) in trained_ids):
+                    fallback_id = int(predicted_owner_id)
+                elif result.get("predicted_student_id") and (not trained_ids or int(result.get("predicted_student_id")) in trained_ids):
+                    fallback_id = int(result.get("predicted_student_id"))
+                if fallback_id is not None:
+                    result["predicted_student_id"] = fallback_id
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(fallback_id, f"student_{fallback_id}")
+                    combined_confidence = max(combined_confidence, float(global_score))
+            except Exception:
+                pass
+
+        # Mask unknowns for UI if thresholds not met
         predicted_block = {
             "id": 0 if is_unknown else result["predicted_student_id"],
             "name": "Unknown" if is_unknown else result["predicted_student_name"],

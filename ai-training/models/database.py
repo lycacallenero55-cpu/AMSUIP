@@ -269,10 +269,28 @@ class DatabaseManager:
             # Fetch the latest N trained models and filter on the client side by training_metrics.model_type
             response = self.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
             rows = response.data or []
-            for r in rows:
+            # Prefer full verification models with a distinct classification head
+            def is_full_model(r: dict) -> bool:
                 metrics = r.get("training_metrics", {}) or {}
                 model_type = str(metrics.get("model_type", ""))
-                if model_type in ("ai_signature_verification", "ai_signature_verification_gpu", "ai_signature_verification_individual"):
+                if model_type not in ("ai_signature_verification", "ai_signature_verification_gpu"):
+                    return False
+                cls = (r.get("model_path") or "").strip()
+                emb = (r.get("embedding_model_path") or "").strip()
+                return bool(cls) and (cls != emb)
+
+            def is_any_ai_model(r: dict) -> bool:
+                metrics = r.get("training_metrics", {}) or {}
+                model_type = str(metrics.get("model_type", ""))
+                return model_type in ("ai_signature_verification", "ai_signature_verification_gpu", "ai_signature_verification_individual")
+
+            # First pass: full models with proper classification
+            for r in rows:
+                if is_full_model(r):
+                    return r
+            # Second pass: any AI model
+            for r in rows:
+                if is_any_ai_model(r):
                     return r
             return None
         except Exception as e:
