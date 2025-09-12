@@ -35,6 +35,7 @@ export interface AsyncTrainingResponse {
   job_id: string;
   message: string;
   stream_url: string;
+  training_type?: string;
 }
 
 export interface TrainingJob {

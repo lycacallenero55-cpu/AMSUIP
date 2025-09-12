@@ -1173,6 +1173,7 @@ const SignatureAI = () => {
                       >
                         <span>Prevent duplicate uploads</span>
                         <Switch
+                          size="sm"
                           checked={preventDuplicates}
                           onCheckedChange={handlePreventDuplicatesToggle}
                           onClick={(e) => e.stopPropagation()}
