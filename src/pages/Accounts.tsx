@@ -302,16 +302,16 @@ const Accounts = () => {
             <div className="border-t border-b border-gray-200 overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
-                    <tr className="text-xs text-gray-500 h-8">
-                      <th scope="col" className="px-3 py-2 text-left font-medium">User</th>
-                      <th scope="col" className="px-3 py-2 text-left font-medium">Email</th>
-                      <th scope="col" className="px-3 py-2 text-left font-medium">Role</th>
-                      <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
-                      <th scope="col" className="px-3 py-2 text-left font-medium">Created</th>
-                      <th scope="col" className="px-3 py-2 text-left font-medium">Actions</th>
+                    <tr className="text-xs text-black h-8">
+                      <th scope="col" className="px-3 py-2 text-left font-bold">User</th>
+                      <th scope="col" className="px-3 py-2 text-left font-bold">Email</th>
+                      <th scope="col" className="px-3 py-2 text-left font-bold">Role</th>
+                      <th scope="col" className="px-3 py-2 text-left font-bold">Status</th>
+                      <th scope="col" className="px-3 py-2 text-left font-bold">Created</th>
+                      <th scope="col" className="px-3 py-2 text-left font-bold">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
+                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
                     {isLoading ? (
                       <tr className="h-8">
                         <td colSpan={6} className="px-3 py-1 text-center">

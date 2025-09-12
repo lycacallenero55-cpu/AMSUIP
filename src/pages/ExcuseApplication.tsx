@@ -556,16 +556,16 @@ const ExcuseApplicationContent = () => {
         <div className="border-t border-b border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
-              <tr className="text-xs text-gray-500 h-8">
-                <th scope="col" className="px-3 py-2 text-left font-medium">Name</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">ID</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">Date of Session</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">Documentation</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium"></th>
+              <tr className="text-xs text-black h-8">
+                <th scope="col" className="px-3 py-2 text-left font-bold">Name</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold">ID</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold">Date of Session</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold">Documentation</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold">Status</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold"></th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
               {loading ? (
                 <tr className="h-8">
                   <td colSpan={6} className="px-3 py-1 text-center">

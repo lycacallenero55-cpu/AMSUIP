@@ -340,12 +340,12 @@ const DesktopNavigation = () => {
                   // Unified dimensions in both states to prevent distortion
                   "h-8 justify-start px-2 w-full rounded-sm overflow-hidden",
                   isActive 
-                    ? "bg-gray-200 text-black"
-                    : "hover:bg-gray-100 hover:text-foreground"
+                    ? "bg-gray-200 text-black font-bold"
+                    : "hover:bg-gray-100 hover:text-foreground font-normal"
                 )}
               >
                 <Icon className="flex-shrink-0 w-4 h-4" />
-                <span className="ml-2 font-medium whitespace-nowrap min-w-0 flex-1 text-sm">
+                <span className="ml-2 whitespace-nowrap min-w-0 flex-1 text-sm">
                   {item.label}
                 </span>
               </div>
@@ -553,8 +553,8 @@ const MobileDrawer = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
                   className={cn(
                     "w-full justify-start gap-3 h-10 text-sm transition-all duration-200 group relative overflow-hidden",
                     isActive 
-                      ? "bg-gray-200 text-black" 
-                      : "hover:bg-gray-100 hover:text-foreground"
+                      ? "bg-gray-200 text-black font-bold" 
+                      : "hover:bg-gray-100 hover:text-foreground font-normal"
                   )}
                 >
                   <Icon className="w-4.5 h-4.5" />

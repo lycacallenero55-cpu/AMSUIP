@@ -236,13 +236,13 @@ const AllowedTermsContent = () => {
         <div className="border-t border-b border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
-              <tr className="text-xs text-gray-500 h-8">
-                <th scope="col" className="px-3 py-2 text-left font-medium">Academic Year</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">Semester</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium"></th>
+              <tr className="text-xs text-black h-8">
+                <th scope="col" className="px-3 py-2 text-left font-bold">Academic Year</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold">Semester</th>
+                <th scope="col" className="px-3 py-2 text-left font-bold"></th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
               {loading ? (
                 <tr className="h-8">
                   <td colSpan={3} className="px-3 py-1 text-center">
