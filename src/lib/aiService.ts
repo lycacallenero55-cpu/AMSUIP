@@ -182,7 +182,8 @@ export class AIService {
     const res = await fetch(url.toString());
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'List failed');
-    return data.items as Array<{ student_id:number; signatures: Array<{ label:'genuine'|'forged'; s3_url:string }> }>;
+    // Support summarized counts: { student_id, genuine_count, forged_count }
+    return data.items as Array<{ student_id:number; genuine_count?: number; forged_count?: number; signatures?: Array<{ label:'genuine'|'forged'; s3_url:string }> }>;
   }
 
   /**
