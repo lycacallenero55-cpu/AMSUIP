@@ -763,10 +763,7 @@ async def identify_signature_owner(
         # Individual model inference to get overall confidence
         try:
             # Check if we have any loaded models
-            has_any_model = (
-                signature_ai_manager.embedding_model is not None or
-                signature_ai_manager.classification_head is not None
-            )
+            has_any_model = signature_ai_manager.embedding_model is not None
             
             if not has_any_model:
                 logger.error("No models loaded for verification")

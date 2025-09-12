@@ -554,7 +554,20 @@ class SignatureEmbeddingModel:
                 logger.warning(f"Could not determine classification head output shape: {e}")
                 pass
         if not has_classification:
-            raise ValueError("No identification head loaded. Please load a trained classification model.")
+            # Fallback: allow embedding-only flow; return unknown prediction with zero confidence
+            processed_signature = self._preprocess_signature(test_signature)
+            X_test = np.expand_dims(processed_signature, axis=0)
+            embedding = self.embedding_model.predict(X_test, verbose=0)[0]
+            return {
+                'predicted_student_id': 0,
+                'predicted_student_name': 'Unknown',
+                'student_confidence': 0.0,
+                'is_genuine': False,
+                'authenticity_score': 0.0,
+                'overall_confidence': 0.0,
+                'is_unknown': True,
+                'embedding': embedding.tolist()
+            }
         
         # Preprocess test signature
         processed_signature = self._preprocess_signature(test_signature)
