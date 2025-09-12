@@ -1,6 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional, List
-import hashlib
 
 from models.database import db_manager
 from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key, object_exists
@@ -32,19 +31,10 @@ async def upload_signature(
     if label not in ("genuine", "forged"):
         raise HTTPException(status_code=400, detail="label must be 'genuine' or 'forged'")
     data = await file.read()
-    # hash for duplicate detection
-    content_hash = hashlib.sha256(data).hexdigest()
-    existing = await db_manager.find_signature_by_hash(content_hash)
-    if existing:
-        raise HTTPException(status_code=409, detail="Duplicate image detected. This signature was already uploaded.")
     try:
         key, url = upload_bytes(student_id, label, file.filename or "signature.png", data, file.content_type)
-        # store with hash
-        try:
-            record = await db_manager.add_signature_with_hash(student_id, label, key, url, content_hash)
-        except Exception:
-            # fallback if column not present yet
-            record = await db_manager.add_student_signature(student_id, label, key, url)
+        # Always store the signature - no duplicate prevention
+        record = await db_manager.add_student_signature(student_id, label, key, url)
         return {"success": True, "record": record}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")

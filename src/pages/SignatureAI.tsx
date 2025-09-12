@@ -30,7 +30,6 @@ import {
   MoreVertical
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
-import { Switch } from '@/components/ui/switch';
 import { aiService, AI_CONFIG } from '@/lib/aiService';
 import { fetchStudents } from '@/lib/supabaseService';
 import type { Student, StudentTrainingCard as StudentTrainingCardType, TrainingFile } from '@/types';
@@ -241,38 +240,7 @@ const SignatureAI = () => {
   // Unsaved changes handling
   const navigate = useNavigate();
   
-  // Page-scoped set of uploaded image hashes to prevent duplicates within this page
-  const [uploadedImageHashes, setUploadedImageHashes] = useState<Set<string>>(new Set());
-  
-  // Toggle for duplicate image prevention
-  const [preventDuplicates, setPreventDuplicates] = useState<boolean>(true);
-  
-  // Function to handle toggle change
-  const handlePreventDuplicatesToggle = (checked: boolean) => {
-    setPreventDuplicates(checked);
-    // If turning off prevention, clear all hashes to allow re-uploading
-    if (!checked) {
-      setUploadedImageHashes(new Set());
-      toast({
-        title: 'Duplicate prevention disabled',
-        description: 'You can now re-upload the same images.',
-      });
-    } else {
-      toast({
-        title: 'Duplicate prevention enabled',
-        description: 'Duplicate images will be blocked from upload.',
-      });
-    }
-  };
-
-  // Compute a stable content hash for a File using SHA-256
-  const computeFileHash = async (file: File): Promise<string> => {
-    const buffer = await file.arrayBuffer();
-    const digest = await crypto.subtle.digest('SHA-256', buffer);
-    const hashArray = Array.from(new Uint8Array(digest));
-    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-    return hashHex;
-  };
+  // Removed duplicate prevention - allow re-uploading any images
   const location = useLocation();
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   
@@ -608,48 +576,15 @@ const SignatureAI = () => {
     const safeFiles = validateFiles(files);
     if (safeFiles.length === 0) return;
 
-    // Compute hashes and filter duplicates within this page (if enabled)
-    const fileEntries = await Promise.all(safeFiles.map(async (file) => {
-      const hash = await computeFileHash(file);
-      return { file, hash };
-    }));
-
-    const uniqueEntries = preventDuplicates 
-      ? fileEntries.filter(({ hash }) => !uploadedImageHashes.has(hash))
-      : fileEntries;
-
-    if (preventDuplicates && uniqueEntries.length === 0) {
-      toast({
-        title: 'Duplicate images blocked',
-        description: 'This image has already been uploaded on this page.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    // Warn if some were filtered out (only when prevention is enabled)
-    if (preventDuplicates && uniqueEntries.length < fileEntries.length) {
-      toast({
-        title: 'Some duplicates were ignored',
-        description: 'This image has already been uploaded on this page.',
-        variant: 'destructive',
-      });
-    }
-
     // Upload to backend → S3 and use returned URLs for persistent previews
     const card = studentCards.find(c => c.id === cardId);
     if (!card?.student) return;
     const uploaded: TrainingFile[] = [];
-    for (const { file } of uniqueEntries) {
+    for (const file of safeFiles) {
       try {
         const rec = await aiService.uploadSignature(card.student.id, setType, file);
         uploaded.push({ file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label });
       } catch (e: any) {
-        // Duplicate handling (HTTP 409)
-        if (e instanceof Error && e.message.includes('Duplicate')) {
-          toast({ title: 'Duplicate image', description: 'This image was already uploaded.', variant: 'destructive' });
-          continue;
-        }
         // fallback to local preview if upload fails
         try {
           const fallback = file.type.startsWith('image/') && file.type !== 'image/tiff' && !file.name.toLowerCase().endsWith('.tif') && !file.name.toLowerCase().endsWith('.tiff')
@@ -660,15 +595,6 @@ const SignatureAI = () => {
           // ignore
         }
       }
-    }
-
-    // Add to page-level hash set (only when prevention is enabled)
-    if (preventDuplicates) {
-      setUploadedImageHashes(prev => {
-        const next = new Set(prev);
-        uniqueEntries.forEach(({ hash }) => next.add(hash));
-        return next;
-      });
     }
 
     // Update the target card's files
@@ -701,14 +627,6 @@ const SignatureAI = () => {
           URL.revokeObjectURL(removed.preview);
         }
         list.splice(index, 1);
-        // Remove hash from page-level set (only when prevention is enabled)
-        if (preventDuplicates) {
-          removed?.file.arrayBuffer().then((buf) => crypto.subtle.digest('SHA-256', buf)).then((digest) => {
-            const hashArray = Array.from(new Uint8Array(digest));
-            const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-            setUploadedImageHashes(prev => { const next = new Set(prev); next.delete(hashHex); return next; });
-          }).catch(() => { /* noop */ });
-        }
         return setType === 'genuine' ? { ...card, genuineFiles: list } : { ...card, forgedFiles: list };
       }
       return card;
@@ -722,28 +640,6 @@ const SignatureAI = () => {
         // Revoke all object URLs to prevent memory leaks
         card.genuineFiles.forEach(file => URL.revokeObjectURL(file.preview));
         card.forgedFiles.forEach(file => URL.revokeObjectURL(file.preview));
-        // Remove hashes for these files from the page-level set (only when prevention is enabled)
-        if (preventDuplicates) {
-          const removeHashes = async () => {
-            const all = [...card.genuineFiles, ...card.forgedFiles];
-            for (const tf of all) {
-              try {
-                const buf = await tf.file.arrayBuffer();
-                const digest = await crypto.subtle.digest('SHA-256', buf);
-                const hashArray = Array.from(new Uint8Array(digest));
-                const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-                setUploadedImageHashes(prev => {
-                  const next = new Set(prev);
-                  next.delete(hashHex);
-                  return next;
-                });
-              } catch {
-                // ignore
-              }
-            }
-          };
-          removeHashes();
-        }
         return { ...card, genuineFiles: [], forgedFiles: [] };
       }
       return card;
@@ -1164,21 +1060,6 @@ const SignatureAI = () => {
                   {!isViewingModels ? (
                     <>
                       <DropdownMenuItem disabled={isLocked} onClick={() => { if (!isLocked) addStudentCard(); }}>Add Student</DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={(e) => {
-                          e.preventDefault();
-                          handlePreventDuplicatesToggle(!preventDuplicates);
-                        }}
-                        className="flex items-center justify-between gap-2 cursor-pointer"
-                      >
-                        <span>Prevent duplicate uploads</span>
-                        <Switch
-                          size="sm"
-                          checked={preventDuplicates}
-                          onCheckedChange={handlePreventDuplicatesToggle}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem disabled={isLocked} onClick={async () => {
                         if (isLocked) return;
@@ -1513,9 +1394,6 @@ const SignatureAI = () => {
                 <div className="text-center text-sm text-muted-foreground">
                   {studentCards.filter(c => c.student).length} students • {getTotalTrainingData().genuine + getTotalTrainingData().forged} samples ready
                   {/* Hybrid behavior is implicit; no extra label */}
-                </div>
-                <div className="text-center text-xs text-muted-foreground">
-                  {preventDuplicates ? '🛡️ Duplicate prevention enabled' : '⚠️ Duplicate prevention disabled'}
                 </div>
               </div>
             </div>

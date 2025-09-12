@@ -193,27 +193,6 @@ class DatabaseManager:
             logger.error(f"Error listing all signatures: {e}")
             return []
 
-    async def find_signature_by_hash(self, content_hash: str):
-        try:
-            response = self.client.table("student_signatures").select("*").eq("content_hash", content_hash).limit(1).execute()
-            return response.data[0] if response.data else None
-        except Exception as e:
-            logger.error(f"Error finding signature by hash: {e}")
-            return None
-
-    async def add_signature_with_hash(self, student_id: int, label: str, s3_key: str, s3_url: str, content_hash: str):
-        try:
-            response = self.client.table("student_signatures").insert({
-                "student_id": student_id,
-                "label": label,
-                "s3_key": s3_key,
-                "s3_url": s3_url,
-                "content_hash": content_hash,
-            }).execute()
-            return response.data[0] if response.data else None
-        except Exception as e:
-            logger.error(f"Error adding signature with hash: {e}")
-            raise
 
     async def delete_signature(self, record_id: int):
         try:
