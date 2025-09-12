@@ -34,7 +34,8 @@ import {
   Upload,
   User,
   ChevronsUp,
-  ChevronsDown
+  ChevronsDown,
+  ChevronsUpDown
 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
