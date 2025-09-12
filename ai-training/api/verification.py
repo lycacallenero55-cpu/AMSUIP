@@ -240,7 +240,7 @@ async def identify_signature_owner(
             logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
+                'classification': latest_ai_model.get("model_path"),  # May be embedding-only in current mode
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
@@ -744,8 +744,7 @@ async def identify_signature_owner(
             # Check if we have any loaded models
             has_any_model = (
                 signature_ai_manager.embedding_model is not None or
-                signature_ai_manager.classification_head is not None or
-                signature_ai_manager.authenticity_head is not None
+                signature_ai_manager.classification_head is not None
             )
             
             if not has_any_model:

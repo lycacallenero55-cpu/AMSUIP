@@ -175,24 +175,10 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     }
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
-    local_manager = SignatureEmbeddingModel(max_students=1)
-    # Prepare data and train classification-only for owner identification
-    X, y_student, _y_auth = local_manager.prepare_training_data(training_data)
+    local_manager = SignatureEmbeddingModel(max_students=150)
+    # For individual helper, save embedding model only (no single-class classification)
+    _X, _y_student, _y_auth = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
-    local_manager.create_classification_head()
-    # Minimal callbacks
-    callbacks = [
-        keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
-        keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1),
-    ]
-    classification_history = local_manager.classification_head.fit(
-        X, y_student,
-        batch_size=min(16, len(X)) or 1,
-        epochs=max(10, min(25, settings.MODEL_EPOCHS)),
-        validation_split=0.2,
-        callbacks=callbacks,
-        verbose=1
-    )
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
@@ -208,8 +194,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         s3_urls = {}
         s3_keys = {}
         for model_type, file_info in uploaded_files.items():
-            s3_urls[model_type] = file_info['url']
-            s3_keys[model_type] = file_info['key']
+            if model_type == 'embedding':
+                s3_urls[model_type] = file_info['url']
+                s3_keys[model_type] = file_info['key']
             
         logger.info(f"✅ Individual model {model_uuid} saved with optimized S3 saving")
         
@@ -241,7 +228,6 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
         model_files = [
             (f"{base_path}_embedding.keras", "embedding"),
-            (f"{base_path}_classification.keras", "classification"),
         ]
         s3_urls = {}
         s3_keys = {}
@@ -259,22 +245,22 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     payload = {
         "student_id": int(student["id"]),
         # Store classification model as primary path for student identification
-        "model_path": s3_urls.get("classification", "") or s3_urls.get("embedding", ""),
+        "model_path": s3_urls.get("embedding", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "s3_key": s3_keys.get("classification", ""),
+        "s3_key": s3_keys.get("embedding", ""),
         "model_uuid": model_uuid,
         "status": "completed",
         "sample_count": len(genuine_arrays) + len(forged_arrays),
         "genuine_count": len(genuine_arrays),
         "forged_count": len(forged_arrays),
         "training_date": datetime.utcnow().isoformat(),
-        "accuracy": float(classification_history.history.get('accuracy', [0])[-1]) if classification_history else None,
+        "accuracy": None,
         "training_metrics": {
             'model_type': 'ai_signature_verification_individual',
             'architecture': 'signature_embedding_network',
-            'epochs_trained': len(classification_history.history.get('accuracy', [])) if classification_history else None,
-            'final_accuracy': float(classification_history.history.get('accuracy', [0])[-1]) if classification_history else None,
-            'val_accuracy': float(classification_history.history.get('val_accuracy', [0])[-1]) if classification_history else None,
+            'epochs_trained': None,
+            'final_accuracy': None,
+            'val_accuracy': None,
             'embedding_dimension': local_manager.embedding_dim,
         }
     }
