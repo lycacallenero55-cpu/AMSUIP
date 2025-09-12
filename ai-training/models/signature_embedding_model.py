@@ -534,6 +534,28 @@ class SignatureEmbeddingModel:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
         has_authenticity = self.authenticity_head is not None
+
+        # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
+        if has_classification:
+            try:
+                # Get the actual output shape by running a test prediction
+                test_input = np.random.random((1, self.image_size, self.image_size, 3))
+                test_output = self.classification_head.predict(test_input, verbose=0)
+                output_shape = test_output.shape
+                
+                if len(output_shape) == 2 and output_shape[1] == 1:
+                    # This is actually an authenticity model
+                    if not has_authenticity:
+                        self.authenticity_head = self.classification_head
+                        has_authenticity = True
+                    self.classification_head = None
+                    has_classification = False
+                    logger.info("Classification head is 1-unit; treating it as authenticity head instead of classifier")
+                else:
+                    logger.info(f"Classification head has {output_shape[1]} outputs - treating as classifier")
+            except Exception as e:
+                logger.warning(f"Could not determine classification head output shape: {e}")
+                pass
         if not (has_classification or has_authenticity):
             raise ValueError("No verification heads loaded. Please load a trained model first.")
         
@@ -550,11 +572,9 @@ class SignatureEmbeddingModel:
             student_probs = self.classification_head.predict(X_test, verbose=0)[0]
             predicted_student_id = int(np.argmax(student_probs))
             student_confidence = float(np.max(student_probs))
-            
-            # DEBUG: Log prediction details
-            logger.info(f"Classification prediction: argmax={predicted_student_id}, confidence={student_confidence:.4f}")
-            logger.info(f"Available mappings: {self.id_to_student}")
-            logger.info(f"Student probabilities: {student_probs}")
+            logger.info(f"Classification prediction: class {predicted_student_id}, confidence {student_confidence:.3f}")
+        else:
+            logger.warning("No classification head available - cannot predict student")
             
             # CRITICAL FIX: Ensure we only predict students that exist in our training data
             if not self.id_to_student or predicted_student_id not in self.id_to_student:
@@ -608,10 +628,10 @@ class SignatureEmbeddingModel:
         else:
             overall_confidence = student_confidence
         
-        # Determine if signature is unknown - Balanced thresholds for better accuracy
+        # Determine if signature is unknown - More lenient thresholds for better accuracy
         is_unknown = (
-            (has_classification and student_confidence < 0.4) or  # More lenient for individual model
-            overall_confidence < 0.5 or  # More lenient overall
+            (has_classification and student_confidence < 0.3) or  # Even more lenient for individual model
+            overall_confidence < 0.4 or  # More lenient overall
             predicted_student_id == 0  # If no valid student ID found
         )
         

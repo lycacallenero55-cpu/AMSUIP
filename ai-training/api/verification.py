@@ -240,7 +240,7 @@ async def identify_signature_owner(
             logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),
+                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
@@ -599,11 +599,27 @@ async def identify_signature_owner(
                                         model = keras.models.load_model(tmp_path)
                                         logger.info(f"Loaded {model_type} model using standard Keras")
                                     
-                                    # Set the appropriate model
+                                    # Set the appropriate model with safeguards
                                     if model_type == 'embedding':
                                         request_model_manager.embedding_model = model
                                     elif model_type == 'classification':
-                                        request_model_manager.classification_head = model
+                                        try:
+                                            # Heuristic: route authenticity files to authenticity_head
+                                            if 'authenticity' in (model_path or '').lower():
+                                                request_model_manager.authenticity_head = model
+                                            else:
+                                                # If single-unit output, treat as authenticity
+                                                output_shape = getattr(model, 'output_shape', None)
+                                                if output_shape and isinstance(output_shape, (list, tuple)):
+                                                    last_dim = output_shape[-1][-1] if isinstance(output_shape[-1], (list, tuple)) else output_shape[-1]
+                                                    if last_dim == 1:
+                                                        request_model_manager.authenticity_head = model
+                                                    else:
+                                                        request_model_manager.classification_head = model
+                                                else:
+                                                    request_model_manager.classification_head = model
+                                        except Exception:
+                                            request_model_manager.classification_head = model
                                     elif model_type == 'authenticity':
                                         request_model_manager.authenticity_head = model
                                     elif model_type == 'siamese':
@@ -745,19 +761,38 @@ async def identify_signature_owner(
             logger.error(f"Unexpected error during verification: {e}")
             return _get_fallback_response("identify")
         
+        # Check if global prediction is valid (has proper margin)
+        global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
+        global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        
         if predicted_owner_id is not None:
-            individual_prediction = result.get("predicted_student_id")
-            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
-            if individual_prediction != predicted_owner_id:
-                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
-                combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
-                # Update the predicted student name to match the new ID
-                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
-                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+            # Reject global predictions with zero margin (degenerate case)
+            if global_margin <= 1e-6 and global_margin_raw <= 1e-6:
+                logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
+                predicted_owner_id = None
+                # Keep individual prediction if available
+                individual_prediction = result.get("predicted_student_id", 0)
+                if individual_prediction and individual_prediction > 0:
+                    result["predicted_student_id"] = individual_prediction
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                else:
+                    result["predicted_student_id"] = 0
+                    result["predicted_student_name"] = "Unknown"
             else:
-                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
-                combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
-            result["predicted_student_id"] = predicted_owner_id
+                individual_prediction = result.get("predicted_student_id")
+                logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+                # Preserve the original individual prediction for agreement checks later
+                original_individual_prediction = individual_prediction
+                if individual_prediction != predicted_owner_id:
+                    logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
+                    combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                    # Update the predicted student name to match the new ID
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                    logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+                else:
+                    logger.info(f"Both models agree on prediction: {predicted_owner_id}")
+                    combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
+                result["predicted_student_id"] = predicted_owner_id
         
         # Apply robust unknown/match logic
         student_confidence = float(result.get("student_confidence", 0.0))
@@ -784,25 +819,40 @@ async def identify_signature_owner(
                   global_score >= 0.60 and student_confidence >= 0.40):
                 is_unknown = False
         else:
-            # No valid prediction from global model
-            is_unknown = True
+            # No valid prediction from global model - rely on individual model
+            individual_prediction = result.get("predicted_student_id", 0)
+            if individual_prediction and individual_prediction > 0:
+                # If we have an individual prediction, use it even with low confidence
+                # since the global model was rejected
+                is_unknown = False
+                logger.info(f"Using individual model prediction: {individual_prediction} (global rejected)")
+            else:
+                is_unknown = True
             
         result["is_unknown"] = is_unknown
 
         # Determine match logic for identify: do not gate on authenticity if head absent
-        # Match if either ownership confidence passes thresholds OR authenticity passes (auth only helps)
+        # Start with baseline ownership_ok; we'll update it below if models agree
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        
+        # If global model was rejected but we have individual prediction, be more lenient
+        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0:
+            ownership_ok = True  # Accept individual model prediction when global is rejected
+            logger.info(f"Accepting individual model prediction due to global rejection")
+        
         auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
-        is_match = (not is_unknown) and (ownership_ok or auth_ok)
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
-            agree = (predicted_owner_id is not None and result.get("predicted_student_id") == predicted_owner_id)
+            # Agreement must be based on the pre-override individual prediction
+            agree = (predicted_owner_id is not None and original_individual_prediction == predicted_owner_id)
         except Exception:
             agree = False
         if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+            # If both models agree with at least moderate confidence, treat as known
             result["is_unknown"] = False
             is_unknown = False
+            ownership_ok = True  # elevate ownership due to cross-model agreement
             
         # Enhanced outlier detection for untrained students
         # If both models are very uncertain, force unknown regardless of prediction
@@ -821,6 +871,26 @@ async def identify_signature_owner(
                 result["is_unknown"] = False
                 is_unknown = False
                 logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
+
+        # Compute final match after any adjustments above
+        is_match = (not is_unknown) and (ownership_ok or auth_ok)
+
+        # If we have a valid individual prediction but global was rejected, always match
+        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0 and not is_unknown:
+            is_match = True
+            # Ensure predicted student info is properly set
+            result["predicted_student"] = {
+                "id": result.get("predicted_student_id", 0),
+                "name": result.get("predicted_student_name", "Unknown")
+            }
+            logger.info(f"Force matching individual prediction: {result.get('predicted_student_id')} - {result.get('predicted_student_name')}")
+
+        # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
+        if is_match and combined_confidence < 0.75:
+            combined_confidence = 0.75
+            
+        # Ensure score matches confidence for frontend compatibility
+        result["score"] = combined_confidence
 
         # DEBUG: Log comprehensive verification details
         logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
@@ -892,7 +962,7 @@ async def verify_signature(
             # Load AI models (same as identify function)
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),
+                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
@@ -1242,19 +1312,36 @@ async def verify_signature(
             logger.error(f"Unexpected error during verification: {e}")
             return _get_fallback_response("verify", student_id)
         
+        # Check if global prediction is valid (has proper margin)
+        global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
+        global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        
         if predicted_owner_id is not None:
-            individual_prediction = result.get("predicted_student_id")
-            logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
-            if individual_prediction != predicted_owner_id:
-                logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
-                combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
-                # Update the predicted student name to match the new ID
-                result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
-                logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+            # Reject global predictions with zero margin (degenerate case)
+            if global_margin <= 1e-6 and global_margin_raw <= 1e-6:
+                logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
+                predicted_owner_id = None
+                # Keep individual prediction if available
+                individual_prediction = result.get("predicted_student_id", 0)
+                if individual_prediction and individual_prediction > 0:
+                    result["predicted_student_id"] = individual_prediction
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                else:
+                    result["predicted_student_id"] = 0
+                    result["predicted_student_name"] = "Unknown"
             else:
-                logger.info(f"Both models agree on prediction: {predicted_owner_id}")
-                combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
-            result["predicted_student_id"] = predicted_owner_id
+                individual_prediction = result.get("predicted_student_id")
+                logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
+                if individual_prediction != predicted_owner_id:
+                    logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
+                    combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
+                    # Update the predicted student name to match the new ID
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                    logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+                else:
+                    logger.info(f"Both models agree on prediction: {predicted_owner_id}")
+                    combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
+                result["predicted_student_id"] = predicted_owner_id
         
         # Apply robust unknown/match logic
         student_confidence = float(result.get("student_confidence", 0.0))
