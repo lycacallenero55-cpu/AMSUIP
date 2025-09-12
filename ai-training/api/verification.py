@@ -785,7 +785,7 @@ async def identify_signature_owner(
         if predicted_owner_id is not None:
             # Handle zero-margin degeneracy: accept if absolute global score is high enough
             if global_margin <= 1e-6 and global_margin_raw <= 1e-6:
-                if hybrid.get("global_score", 0.0) >= 0.85:
+                if hybrid.get("global_score", 0.0) >= 0.95:
                     # Accept the top-1 centroid even with zero margin
                     logger.info(f"Accepting global prediction (high score with zero margin): {predicted_owner_id}")
                     result["predicted_student_id"] = predicted_owner_id
@@ -854,14 +854,14 @@ async def identify_signature_owner(
             
         result["is_unknown"] = is_unknown
 
-        # Determine match logic for identify: do not gate on authenticity if head absent
-        # Start with baseline ownership_ok; we'll update it below if models agree
-        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        # Determine match logic for identify: stricter gating to avoid wrong matches
+        # Require either decent classifier confidence OR very high global score with non-trivial separation
+        ownership_ok = (
+            student_confidence >= 0.60 or
+            (global_score >= 0.90 and (global_margin >= 0.02 or global_margin_raw >= 0.02))
+        )
         
-        # If global model was rejected but we have individual prediction, be more lenient
-        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0:
-            ownership_ok = True  # Accept individual model prediction when global is rejected
-            logger.info(f"Accepting individual model prediction due to global rejection")
+        # Do not auto-accept individual prediction if global was rejected (avoid false positives)
         
         # Ignore authenticity gating
         auth_ok = False
