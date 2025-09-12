@@ -240,9 +240,6 @@ const Accounts = () => {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-lg font-bold tracking-tight">ACCOUNT MANAGEMENT</h1>
-            <p className="text-sm text-muted-foreground">
-              Manage user accounts and access permissions
-            </p>
           </div>
 
         </div>

@@ -393,9 +393,6 @@ const Students = () => {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-1">
             <div>
               <h1 className="text-2xl font-bold text-education-navy">STUDENTS</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage and monitor student records
-              </p>
             </div>
           </div>
         </div>

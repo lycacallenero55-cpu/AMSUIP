@@ -486,9 +486,6 @@ const ExcuseApplicationContent = () => {
       <div className="mb-3">
         <div>
           <h1 className="text-2xl font-bold text-education-navy">EXCUSE APPLICATIONS</h1>
-          <p className="text-sm text-muted-foreground">
-            Review and manage student excuse applications for absences
-          </p>
         </div>
       </div>
       
@@ -502,7 +499,7 @@ const ExcuseApplicationContent = () => {
             className="h-8"
             onClick={() => setIsFormOpen(true)}
           >
-            <Plus className="w-4 h-4 mr-2" />
+            <Plus className="w-4 h-4 mr-1" />
             New Application
           </Button>
         </div>
