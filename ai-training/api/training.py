@@ -176,17 +176,17 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=1)
-    # Prepare data once and train authenticity-only to avoid softmax(num_classes=1) issues
-    X, _y_student, y_auth = local_manager.prepare_training_data(training_data)
+    # Prepare data and train classification-only for owner identification
+    X, y_student, _y_auth = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
-    local_manager.create_authenticity_head()
-    # Minimal, robust callbacks for small per-student datasets
+    local_manager.create_classification_head()
+    # Minimal callbacks
     callbacks = [
         keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
         keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1),
     ]
-    authenticity_history = local_manager.authenticity_head.fit(
-        X, y_auth,
+    classification_history = local_manager.classification_head.fit(
+        X, y_student,
         batch_size=min(16, len(X)) or 1,
         epochs=max(10, min(25, settings.MODEL_EPOCHS)),
         validation_split=0.2,
@@ -242,7 +242,6 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         model_files = [
             (f"{base_path}_embedding.keras", "embedding"),
             (f"{base_path}_classification.keras", "classification"),
-            (f"{base_path}_authenticity.keras", "authenticity"),
         ]
         s3_urls = {}
         s3_keys = {}
@@ -260,9 +259,8 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     payload = {
         "student_id": int(student["id"]),
         # Store classification model as primary path for student identification
-        "model_path": s3_urls.get("classification", ""),
+        "model_path": s3_urls.get("classification", "") or s3_urls.get("embedding", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "authenticity_model_path": s3_urls.get("authenticity", ""),
         "s3_key": s3_keys.get("classification", ""),
         "model_uuid": model_uuid,
         "status": "completed",
@@ -270,13 +268,13 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         "genuine_count": len(genuine_arrays),
         "forged_count": len(forged_arrays),
         "training_date": datetime.utcnow().isoformat(),
-        "accuracy": float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
+        "accuracy": float(classification_history.history.get('accuracy', [0])[-1]) if classification_history else None,
         "training_metrics": {
             'model_type': 'ai_signature_verification_individual',
             'architecture': 'signature_embedding_network',
-            'epochs_trained': len(authenticity_history.history.get('accuracy', [])) if authenticity_history else None,
-            'final_accuracy': float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
-            'val_accuracy': float(authenticity_history.history.get('val_accuracy', [0])[-1]) if authenticity_history else None,
+            'epochs_trained': len(classification_history.history.get('accuracy', [])) if classification_history else None,
+            'final_accuracy': float(classification_history.history.get('accuracy', [0])[-1]) if classification_history else None,
+            'val_accuracy': float(classification_history.history.get('val_accuracy', [0])[-1]) if classification_history else None,
             'embedding_dimension': local_manager.embedding_dim,
         }
     }
@@ -441,14 +439,12 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         # Create model record with comprehensive metrics
         # Prefer classification accuracy; fallback to authenticity, then siamese
         _cls_acc = float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None
-        _auth_acc = float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None
         _sia_acc = float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None
-        top_level_accuracy = next((a for a in [_cls_acc, _auth_acc, _sia_acc] if a is not None), None)
+        top_level_accuracy = next((a for a in [_cls_acc, _sia_acc] if a is not None), None)
         model_record = await db_manager.create_trained_model({
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
             "embedding_model_path": s3_urls.get("embedding", ""),
-            "authenticity_model_path": s3_urls.get("authenticity", ""),
             "s3_key": s3_keys.get("classification", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
@@ -460,14 +456,12 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 'model_type': 'ai_signature_verification',
                 'architecture': 'signature_embedding_network',
                 'student_recognition_accuracy': _cls_acc,
-                'authenticity_accuracy': _auth_acc,
                 'siamese_accuracy': _sia_acc,
                 'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
                 'embedding_dimension': signature_ai_manager.embedding_dim,
                 'model_parameters': sum([
                     signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
                     signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
-                    signature_ai_manager.authenticity_head.count_params() if signature_ai_manager.authenticity_head else 0,
                     signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
                 ])
             }
@@ -863,7 +857,6 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 "student_id": int(student["id"]),
                 "model_path": gpu_result['model_urls'].get('classification', ''),
                 "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
-                "authenticity_model_path": gpu_result['model_urls'].get('authenticity', ''),
                 "status": "completed",
                 "sample_count": len(genuine_images) + len(forged_images),
                 "genuine_count": len(genuine_images),
