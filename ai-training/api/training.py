@@ -675,8 +675,8 @@ async def start_gpu_training(
 @router.post("/start-async")
 async def start_async_training(
     student_id: str = Form(...),
-    genuine_files: List[UploadFile] = File(...),
-    forged_files: List[UploadFile] = File(...)
+    genuine_files: List[UploadFile] | None = File(None),
+    forged_files: List[UploadFile] | None = File(None)
 ):
     try:
         # Handle multiple students (comma-separated) or single student
@@ -694,28 +694,60 @@ async def start_async_training(
             if not student:
                 raise HTTPException(status_code=404, detail="Student not found")
 
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             job = job_queue.create_job(int(student["id"]), "training")
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # Allow auto-fetch when files are not uploaded
+            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+                rows = await db_manager.list_student_signatures(int(student["id"]))
+                if not rows:
+                    raise HTTPException(status_code=400, detail="No stored signatures available for this student")
+                import requests
+                genuine_data = []
+                forged_data = []
+                for r in rows:
+                    url = r.get("s3_url"); label = (r.get("label") or "").lower()
+                    key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                    content: bytes | None = None
+                    if key:
+                        try:
+                            content = download_bytes(key)
+                        except Exception:
+                            content = None
+                    if content is None and url:
+                        try:
+                            resp = requests.get(url, timeout=8); resp.raise_for_status(); content = resp.content
+                        except Exception:
+                            continue
+                    if not content:
+                        continue
+                    if label == "genuine": genuine_data.append(content)
+                    else: forged_data.append(content)
+                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
+                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
         
         else:
             # Multiple students - use global training
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             # Create a job for global training
             job = job_queue.create_job(0, "global_training")  # 0 indicates global training
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # Support auto-fetch when files omitted (defer per-student fetch to run_global_async_training)
+            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+                genuine_data = []
+                forged_data = []
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                if len(forged_files) < settings.MIN_FORGED_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
             
