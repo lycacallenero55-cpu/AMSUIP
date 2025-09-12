@@ -167,8 +167,10 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         return arr
     genuine_norm = [_normalize(a) for a in genuine_arrays]
     forged_norm = [_normalize(a) for a in forged_arrays]
+    # Use student name for consistent mapping
+    student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
     training_data = {
-        f"student_{student['id']}": {
+        student_name: {
             'genuine': genuine_norm,
             'forged': forged_norm
         }
@@ -331,9 +333,10 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         if job:
             job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
 
-        # Prepare training data with augmentation
+        # Prepare training data with augmentation - use student name for consistent mapping
+        student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
         training_data = {
-            f"student_{student['id']}": {
+            student_name: {
                 'genuine': genuine_images,
                 'forged': forged_images
             }
@@ -989,7 +992,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         for s in students:
             sid = int(s["id"])  # type: ignore[index]
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-            training_data[f"student_{sid}"] = {
+            # Use student name for consistent mapping
+            student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
+            training_data[student_name] = {
                 "genuine_images": bucket["genuine_images"],
                 "forged_images": bucket["forged_images"],
             }
@@ -1101,7 +1106,9 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         for s in students:
             sid = int(s["id"])  # type: ignore[index]
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-            training_data[f"student_{sid}"] = {
+            # Use student name for consistent mapping
+            student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
+            training_data[student_name] = {
                 'genuine_images': bucket['genuine_images'],
                 'forged_images': bucket['forged_images']
             }

@@ -634,20 +634,11 @@ class SignatureEmbeddingModel:
         authenticity_score = 0.0
         is_genuine = False
         
-        # Get student name and actual student ID
+        # Get student name - predicted_student_id is the class index (0, 1, 2, 3, 4, 5, 6, 7)
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
         
-        # If we predicted a class index (0, 1), try to find the corresponding actual student ID
+        # The predicted_student_id is already the correct class index, no mapping needed
         actual_student_id = predicted_student_id
-        if predicted_student_id in [0, 1] and len(self.id_to_student) > 2:
-            # Look for actual student IDs in the mappings
-            actual_ids = [k for k in self.id_to_student.keys() if k not in [0, 1]]
-            if actual_ids and predicted_student_id < len(actual_ids):
-                actual_student_id = actual_ids[predicted_student_id]
-                logger.info(f"Mapped class {predicted_student_id} to actual student ID {actual_student_id}")
-                # Update the predicted student name to match the new ID
-                predicted_student_name = self.id_to_student.get(actual_student_id, f"Unknown_{actual_student_id}")
-                logger.info(f"Updated predicted student name to: {predicted_student_name}")
         
         # Calculate overall confidence
         if has_classification and has_authenticity:
