@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Loader2, ChevronDown } from "lucide-react";
+import { Search, Loader2, ChevronsUp, ChevronsDown } from "lucide-react";
 import type React from "react";
 import { toast } from "sonner";
 import StudentImport from "@/components/StudentImport";
@@ -59,6 +59,11 @@ const Students = () => {
 
   const [uniquePrograms, setUniquePrograms] = useState<string[]>([]);
   const [uniqueYears, setUniqueYears] = useState<string[]>([]);
+
+  // Sorting state
+  type StudentSortKey = 'name' | 'student_id' | 'program' | 'year_section';
+  const [sortKey, setSortKey] = useState<StudentSortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Performance tracking
   const [isSearching, setIsSearching] = useState(false);
@@ -322,6 +327,48 @@ const Students = () => {
     fetchStudents('', '', '', 1, pagination.pageSize);
   };
 
+  // Sorting helpers
+  const handleSort = (key: StudentSortKey) => {
+    if (sortKey === key) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedStudents = useMemo(() => {
+    const copy = [...students];
+    copy.sort((a, b) => {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      const nameA = `${a.surname} ${a.firstname}`.toLowerCase();
+      const nameB = `${b.surname} ${b.firstname}`.toLowerCase();
+      switch (sortKey) {
+        case 'name':
+          return nameA.localeCompare(nameB) * dir;
+        case 'student_id':
+          // Numeric compare if both numeric, else lexicographic
+          const numA = Number(a.student_id);
+          const numB = Number(b.student_id);
+          if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
+            return (numA - numB) * dir;
+          }
+          return a.student_id.localeCompare(b.student_id) * dir;
+        case 'program':
+          return a.program.localeCompare(b.program) * dir;
+        case 'year_section':
+          // Compare year then section
+          const ya = (a.year || '').toString();
+          const yb = (b.year || '').toString();
+          if (ya !== yb) return ya.localeCompare(yb) * dir;
+          return (a.section || '').localeCompare(b.section || '') * dir;
+        default:
+          return 0;
+      }
+    });
+    return copy;
+  }, [students, sortKey, sortDir]);
+
   // Initialize component
   useEffect(() => {
     fetchFilterOptions();
@@ -465,10 +512,54 @@ const Students = () => {
           <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr className="text-xs text-black h-8">
-                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Student</th>
-                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">ID</th>
-                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Program</th>
-                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Year & Section</th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                    <div className="flex items-center gap-1">
+                      Student
+                      <button type="button" onClick={() => handleSort('name')} className="p-0.5 text-gray-500 hover:text-black">
+                        {sortKey === 'name' ? (
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                        )}
+                      </button>
+                    </div>
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                    <div className="flex items-center gap-1">
+                      ID
+                      <button type="button" onClick={() => handleSort('student_id')} className="p-0.5 text-gray-500 hover:text-black">
+                        {sortKey === 'student_id' ? (
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                        )}
+                      </button>
+                    </div>
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                    <div className="flex items-center gap-1">
+                      Program
+                      <button type="button" onClick={() => handleSort('program')} className="p-0.5 text-gray-500 hover:text-black">
+                        {sortKey === 'program' ? (
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                        )}
+                      </button>
+                    </div>
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                    <div className="flex items-center gap-1">
+                      Year & Section
+                      <button type="button" onClick={() => handleSort('year_section')} className="p-0.5 text-gray-500 hover:text-black">
+                        {sortKey === 'year_section' ? (
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                        )}
+                      </button>
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
@@ -500,7 +591,7 @@ const Students = () => {
                   </td>
                 </tr>
                 ) : (
-                  students.map((student) => (
+                  sortedStudents.map((student) => (
                     <tr key={student.id} className="hover:bg-gray-50 h-8">
                       <td className="px-3 py-1 whitespace-nowrap">
                         <div>
