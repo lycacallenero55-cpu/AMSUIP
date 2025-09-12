@@ -1225,7 +1225,7 @@ const Schedule = () => {
         <div className="px-6 py-4">
           <div className="mb-3">
             <div>
-              <h1 className="text-2xl font-bold text-education-navy">SCHEDULE</h1>
+              <h1 className="text-2xl font-bold text-education-navy">SESSIONS</h1>
             </div>
           </div>
           
