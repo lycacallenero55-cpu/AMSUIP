@@ -162,9 +162,10 @@ class SignatureEmbeddingModel:
         x = layers.BatchNormalization(name='class_bn2')(x)
         x = layers.Dropout(0.2, name='class_dropout2')(x)
         
-        # Student classification output
+        # Student classification output - use actual number of students, not max
+        num_students = len(self.student_to_id) if self.student_to_id else self.max_students
         student_output = layers.Dense(
-            self.max_students, 
+            num_students, 
             activation='softmax', 
             name='student_classification'
         )(x)
@@ -377,7 +378,9 @@ class SignatureEmbeddingModel:
                 authenticity_labels.append(0)  # Forged
         
         X = np.array(all_images, dtype=np.float32)
-        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=self.max_students)
+        # Use actual number of students for categorical encoding
+        num_students = len(self.student_to_id)
+        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
         y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
         logger.info(f"Prepared {len(all_images)} images across {len(self.student_to_id)} students")
@@ -406,6 +409,56 @@ class SignatureEmbeddingModel:
         
         return image.numpy()
     
+    def train_classification_only(self, training_data: Dict, epochs: int = 20) -> Dict:
+        """
+        Train only the classification head for faster identification training
+        """
+        logger.info("Starting classification-only training for faster identification...")
+        
+        # Prepare data
+        X, y_student, y_authenticity = self.prepare_training_data(training_data)
+        
+        # Create only the classification model
+        self.create_classification_head()
+        
+        # Optimized callbacks for faster training
+        callbacks = [
+            keras.callbacks.EarlyStopping(
+                monitor='val_accuracy',
+                patience=5,
+                restore_best_weights=True,
+                verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=3,
+                min_lr=1e-6,
+                verbose=1
+            )
+        ]
+        
+        # Train classification model only
+        logger.info("Training student classification model...")
+        classification_history = self.classification_head.fit(
+            X, y_student,
+            batch_size=32,
+            epochs=epochs,
+            validation_split=0.2,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        logger.info("Classification training completed successfully!")
+        
+        return {
+            'classification_history': classification_history.history,
+            'student_mappings': {
+                'student_to_id': self.student_to_id,
+                'id_to_student': self.id_to_student
+            }
+        }
+
     def train_models(self, training_data: Dict, epochs: int = 100) -> Dict:
         """
         Train all models with advanced training strategies
@@ -420,30 +473,19 @@ class SignatureEmbeddingModel:
         self.create_authenticity_head()
         self.create_siamese_network()
         
-        # Advanced callbacks
+        # Optimized callbacks for faster training
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=15,
+                patience=5,  # Reduced patience for faster training
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=8,
-                min_lr=1e-7,
-                verbose=1
-            ),
-            CosineRestartScheduler(
-                T_0=20,
-                T_mult=2,
-                eta_min=1e-7
-            ),
-            keras.callbacks.ModelCheckpoint(
-                'best_signature_model.keras',
-                monitor='val_accuracy',
-                save_best_only=True,
+                patience=3,  # Reduced patience
+                min_lr=1e-6,
                 verbose=1
             )
         ]

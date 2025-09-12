@@ -343,8 +343,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
 
         t0 = time.time()
         
-        # Train with the new AI system
-        result_models = signature_ai_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
+        # Train with classification-only for faster identification
+        result_models = signature_ai_manager.train_classification_only(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
             job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
@@ -399,12 +399,10 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             # Save all models
             signature_ai_manager.save_models(base_path)
 
-            # Upload models to S3
+            # Upload models to S3 (only classification and embedding for faster training)
             model_files = [
                 (f"{base_path}_embedding.keras", "embedding"),
-                (f"{base_path}_classification.keras", "classification"),
-                (f"{base_path}_authenticity.keras", "authenticity"),
-                (f"{base_path}_siamese.keras", "siamese")
+                (f"{base_path}_classification.keras", "classification")
             ]
             
             s3_urls = {}
