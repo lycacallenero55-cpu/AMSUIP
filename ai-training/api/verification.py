@@ -787,6 +787,7 @@ async def identify_signature_owner(
         # Check if global prediction is valid (has proper margin)
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        accepted_zero_margin_high = False
         
         if predicted_owner_id is not None:
             # Handle zero-margin degeneracy: accept if absolute global score is high enough
@@ -797,6 +798,7 @@ async def identify_signature_owner(
                     result["predicted_student_id"] = predicted_owner_id
                     result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
                     combined_confidence = float(hybrid.get("global_score", 0.0))
+                    accepted_zero_margin_high = True
                 else:
                     logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
                     predicted_owner_id = None
@@ -832,6 +834,38 @@ async def identify_signature_owner(
         is_unknown = True
         trained_ids = await _get_trained_student_ids()
         
+        # If we already accepted a high-score zero-margin global prediction, finalize early
+        if accepted_zero_margin_high and predicted_owner_id is not None and (not trained_ids or int(predicted_owner_id) in trained_ids):
+            result["is_unknown"] = False
+            is_unknown = False
+            ownership_ok = True
+            is_match = True
+            result["score"] = combined_confidence
+            predicted_block = {
+                "id": int(predicted_owner_id),
+                "name": signature_ai_manager.id_to_student.get(int(predicted_owner_id), f"Unknown_{predicted_owner_id}"),
+            }
+            response_obj = {
+                "predicted_student": predicted_block,
+                "is_match": True,
+                "confidence": float(combined_confidence),
+                "score": float(combined_confidence),
+                "global_score": hybrid.get("global_score"),
+                "global_margin": hybrid.get("global_margin"),
+                "student_confidence": result["student_confidence"],
+                "authenticity_score": result["authenticity_score"],
+                "is_unknown": False,
+                "model_type": "ai_signature_verification",
+                "ai_architecture": "signature_embedding_network",
+                "success": True
+            }
+            # Back-compat
+            response_obj["predicted_student_id"] = int(predicted_owner_id)
+            response_obj["predicted_student_name"] = predicted_block["name"]
+            response_obj["is_genuine"] = True
+            logger.info(f"Finalized early due to accepted high-score zero-margin global match: {predicted_owner_id}")
+            return response_obj
+
         # Check if we have a valid prediction first
         if predicted_owner_id is not None and predicted_owner_id > 0:
             # Accept if global is confident AND has good separation
@@ -911,7 +945,7 @@ async def identify_signature_owner(
 
         # k-NN fallback over trained students' genuine embeddings when still unknown or classifier absent
         try:
-            need_knn = is_unknown or (signature_ai_manager.classification_head is None)
+            need_knn = (not accepted_zero_margin_high) and (is_unknown or (signature_ai_manager.classification_head is None))
             if need_knn:
                 import numpy as np
                 from collections import defaultdict
