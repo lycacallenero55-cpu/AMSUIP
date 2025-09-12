@@ -12,7 +12,6 @@ import {
   GraduationCap, 
   User, 
   LogOut, 
-  CalendarDays,
   Menu
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -245,11 +244,16 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           {/* Academic Year and Semester */}
           {academicYear && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CalendarDays className="w-4 h-4" />
+              <span>Current A.Y.:</span>
               <span>{academicYear.year}</span>
               <span>•</span>
               <span>{academicYear.semester}</span>
             </div>
+          )}
+
+          {/* Vertical Separator */}
+          {academicYear && (
+            <div className="h-4 w-px bg-gray-300"></div>
           )}
 
           {/* Panel Label */}

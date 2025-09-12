@@ -464,14 +464,14 @@ const Students = () => {
           <div className="border-t border-b border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
-                <tr className="text-xs text-gray-500 h-8">
-                  <th scope="col" className="px-3 py-2 text-left font-medium">Student</th>
-                  <th scope="col" className="px-3 py-2 text-left font-medium">ID</th>
-                  <th scope="col" className="px-3 py-2 text-left font-medium">Program</th>
-                  <th scope="col" className="px-3 py-2 text-left font-medium">Year & Section</th>
+                <tr className="text-xs text-black h-8">
+                  <th scope="col" className="px-3 py-2 text-left font-bold">Student</th>
+                  <th scope="col" className="px-3 py-2 text-left font-bold">ID</th>
+                  <th scope="col" className="px-3 py-2 text-left font-bold">Program</th>
+                  <th scope="col" className="px-3 py-2 text-left font-bold">Year & Section</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
+              <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
                 {loading ? (
                 <tr className="h-8">
                   <td colSpan={4} className="px-3 py-1 text-center">
