@@ -243,6 +243,9 @@ const Accounts = () => {
           </div>
 
         </div>
+        
+        {/* Big space between page title and card */}
+        <div className="mb-8"></div>
 
         {/* Show accounts table only for admins */}
         {currentUserProfile?.role === 'admin' ? (
