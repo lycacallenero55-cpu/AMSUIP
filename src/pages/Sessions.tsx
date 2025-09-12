@@ -20,6 +20,7 @@ import {
 
 // UI Components
 import Layout from "@/components/Layout";
+import PageWrapper from "@/components/PageWrapper";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -243,8 +244,28 @@ const Schedule = () => {
   const [programFilter, setProgramFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
   
+  // Pagination state
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    pageSize: 10,
+    totalItems: 0
+  });
+  const [displayPageSize, setDisplayPageSize] = useState(10);
+  const [totalSessionsCount, setTotalSessionsCount] = useState(0);
+  
   // Derived state - week dates for the current view
   const weekDates = useMemo(() => getWeekDates(currentDate), [currentDate]);
+  
+  // Handle page size change
+  const handlePageSizeChange = (value: string) => {
+    const newPageSize = value === 'all' ? totalSessionsCount : parseInt(value);
+    setPagination(prev => ({
+      ...prev,
+      pageSize: newPageSize,
+      currentPage: 1
+    }));
+    setDisplayPageSize(newPageSize);
+  };
   
   // Reset form when editing session changes
   useEffect(() => {
@@ -252,6 +273,13 @@ const Schedule = () => {
       setIsModalOpen(true);
     }
   }, [editingSession, setIsModalOpen]);
+  
+  // Update displayPageSize when totalSessionsCount changes and "ALL" is selected
+  useEffect(() => {
+    if (displayPageSize === totalSessionsCount && totalSessionsCount > 0) {
+      setDisplayPageSize(totalSessionsCount);
+    }
+  }, [totalSessionsCount, displayPageSize]);
 
   // Format date for display using the browser's local timezone
   const formattedCurrentDate = useMemo(() => {
@@ -397,6 +425,7 @@ const Schedule = () => {
       });
       
       setSessions(formattedSessions);
+      setTotalSessionsCount(formattedSessions.length);
     } catch (err) {
       console.error('Failed to load sessions:', err);
       setError('Failed to load sessions. Please try again later.');
@@ -555,6 +584,7 @@ const Schedule = () => {
       });
       
       setSessions(formattedSessions);
+      setTotalSessionsCount(formattedSessions.length);
     } catch (err) {
       console.error('Failed to load sessions:', err);
       setError('Failed to load sessions. Please try again later.');
@@ -683,6 +713,13 @@ const Schedule = () => {
     
     return sessions.filter(filterSession);
   }, [sessions, filterSession, searchQuery, typeFilter, programFilter, dateFilter]);
+  
+  // Paginated sessions
+  const paginatedSessions = useMemo(() => {
+    const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
+    const endIndex = startIndex + pagination.pageSize;
+    return filteredSessions.slice(startIndex, endIndex);
+  }, [filteredSessions, pagination.currentPage, pagination.pageSize]);
 
   // Calculate session statistics
   const { sessionStats, weeklySessionCounts } = useMemo(() => {
@@ -1184,113 +1221,71 @@ const Schedule = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <div className="px-6 py-4 space-y-4">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <h1 className="text-lg font-bold text-education-navy">SCHEDULE</h1>
-            <p className="text-sm text-muted-foreground">Manage and view scheduled sessions</p>
+      <PageWrapper skeletonType="table">
+        <div className="px-6 py-4">
+          <div className="mb-3">
+            <div>
+              <h1 className="text-2xl font-bold text-education-navy">SCHEDULE</h1>
+            </div>
           </div>
-          <Button 
-            onClick={() => setIsModalOpen(true)}
-            size="sm"
-            className="bg-gradient-primary text-white hover:bg-gradient-primary/90 shadow-glow hover:shadow-elegant transition-all duration-300 text-sm h-9"
-          >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Add Session
-          </Button>
-        </div>
-
-        {/* Search and Filter */}
-        <Card className="bg-gradient-card border-0 shadow-card mb-6">
-          <CardContent className="p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-muted-foreground w-3.5 h-3.5" />
-                <Input 
-                  placeholder="Search sessions..." 
-                  className="pl-8 h-9 text-sm"
+          
+          {/* Big space between page title and card */}
+          <div className="mb-16"></div>
+          
+          {/* Sessions Section */}
+          <div className="bg-white rounded-lg shadow-sm p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-semibold text-education-navy">List of Sessions {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}</h3>
+              <Button
+                variant="default"
+                size="sm"
+                className="h-8"
+                onClick={() => setIsModalOpen(true)}
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                Add Session
+              </Button>
+            </div>
+            
+            {/* Big space below List of Sessions label */}
+            <div className="mb-8"></div>
+            
+            {/* Controls */}
+            <div className="flex items-center justify-between mb-4 p-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">Showed:</span>
+                <Select value={displayPageSize === totalSessionsCount ? 'all' : displayPageSize.toString()} onValueChange={handlePageSizeChange}>
+                  <SelectTrigger className="w-20 h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="250">250</SelectItem>
+                    <SelectItem value="all">ALL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">Search:</span>
+                <Input
+                  placeholder="Search sessions..."
+                  className="w-64 h-8 text-sm"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="h-9 text-xs">
-                  <SelectValue placeholder="All Types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">All Types</SelectItem>
-                  <SelectItem value="class" className="text-xs">Classes</SelectItem>
-                  <SelectItem value="event" className="text-xs">Events</SelectItem>
-                  <SelectItem value="other" className="text-xs">Activities</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={programFilter}
-                onValueChange={setProgramFilter}
-              >
-                <SelectTrigger className="h-9 text-xs w-full">
-                  <SelectValue placeholder="All Programs" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">All Programs</SelectItem>
-                  {programs.map((program) => (
-                    <SelectItem key={program} value={program} className="text-xs">
-                      {program}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={dateFilter} onValueChange={setDateFilter}>
-                <SelectTrigger className="h-9 text-xs">
-                  <SelectValue placeholder="Date Range" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">All Sessions</SelectItem>
-                  <SelectItem value="today" className="text-xs">Today</SelectItem>
-                  <SelectItem value="week" className="text-xs">This Week</SelectItem>
-                  <SelectItem value="month" className="text-xs">This Month</SelectItem>
-                  <SelectItem value="upcoming" className="text-xs">Upcoming</SelectItem>
-                  <SelectItem value="past" className="text-xs">Past Sessions</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
-            <div className="text-sm text-gray-500 mt-2">
-              Showing {filteredSessions.length} of {sessions.length} sessions
-              {(searchQuery || typeFilter !== 'all' || programFilter !== 'all' || dateFilter !== 'all') && (
-                <span>
-                  {' '}matching current filters
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="ml-2 h-auto p-0 text-blue-600 hover:bg-accent/30 hover:text-blue-700 hover:underline transition-colors duration-200 rounded-sm px-1.5 py-0.5"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setTypeFilter('all');
-                      setProgramFilter('all');
-                      setDateFilter('all');
-                    }}
-                  >
-                    Clear all
-                  </Button>
-                </span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* Sessions List */}
-        <div className="space-y-2">
-    
-          
-          <div className="grid gap-2">
-            {isLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 animate-spin text-education-blue mr-2" />
-                <span className="text-sm text-muted-foreground">Loading sessions...</span>
-              </div>
-            ) : filteredSessions.length > 0 ? (
-              [...filteredSessions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((session) => (
+            {/* Sessions List */}
+            <div className="space-y-2">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-education-blue mr-2" />
+                  <span className="text-sm text-muted-foreground">Loading sessions...</span>
+                </div>
+              ) : paginatedSessions.length > 0 ? (
+                [...paginatedSessions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((session) => (
                 <Card key={session.id} className="bg-gradient-card border-0 shadow-card hover:shadow-elegant transition-all duration-300">
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between">
@@ -1389,54 +1384,11 @@ const Schedule = () => {
                   </Button>
                 </CardContent>
               </Card>
-            )}
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Summary Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <Card className="bg-gradient-card border-0 shadow-card hover:shadow-md transition-shadow">
-            <CardContent className="p-6 text-center">
-              <div className="text-2xl font-bold text-education-navy">
-                {sessions.length}
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {sessions.length === 1 ? 'Total Session' : 'Total Sessions'}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-gradient-card border-0 shadow-card hover:shadow-md transition-shadow">
-            <CardContent className="p-6 text-center">
-              <div className="text-2xl font-bold text-primary">
-                {sessions.filter(s => s.type === 'class').length}
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {sessions.filter(s => s.type === 'class').length === 1 ? 'Class' : 'Total Classes'}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-gradient-card border-0 shadow-card hover:shadow-md transition-shadow">
-            <CardContent className="p-6 text-center">
-              <div className="text-2xl font-bold text-accent">
-                {sessions.filter(s => s.type === 'event').length}
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {sessions.filter(s => s.type === 'event').length === 1 ? 'Event' : 'Total Events'}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-gradient-card border-0 shadow-card hover:shadow-md transition-shadow">
-            <CardContent className="p-6 text-center">
-              <div className="text-2xl font-bold text-education-green">
-                {sessions.filter(s => s.type === 'other').length}
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {sessions.filter(s => s.type === 'other').length === 1 ? 'Activity' : 'Total Activities'}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      </PageWrapper>
     </Layout>
   );
 };
