@@ -398,7 +398,7 @@ const Students = () => {
         </div>
         
         {/* Big space between page title and card */}
-        <div className="mb-10"></div>
+        <div className="mb-16"></div>
         
         {/* Search and Students Section */}
         <div className="bg-white rounded-lg shadow-sm p-4">
