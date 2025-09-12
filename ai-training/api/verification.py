@@ -240,7 +240,7 @@ async def identify_signature_owner(
             logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),
+                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
@@ -888,6 +888,9 @@ async def identify_signature_owner(
         # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
         if is_match and combined_confidence < 0.75:
             combined_confidence = 0.75
+            
+        # Ensure score matches confidence for frontend compatibility
+        result["score"] = combined_confidence
 
         # DEBUG: Log comprehensive verification details
         logger.info(f"DEBUG: Verification details - predicted_owner_id={predicted_owner_id}, individual_prediction={result.get('predicted_student_id')}")
@@ -959,7 +962,7 @@ async def verify_signature(
             # Load AI models (same as identify function)
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),
+                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }

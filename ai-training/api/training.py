@@ -241,6 +241,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
         model_files = [
             (f"{base_path}_embedding.keras", "embedding"),
+            (f"{base_path}_classification.keras", "classification"),
             (f"{base_path}_authenticity.keras", "authenticity"),
         ]
         s3_urls = {}
@@ -258,10 +259,11 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     # Record in DB (with optional global_model_id linkage)
     payload = {
         "student_id": int(student["id"]),
-        # For per-student models, store authenticity head as primary path
-        "model_path": s3_urls.get("authenticity", ""),
+        # Store classification model as primary path for student identification
+        "model_path": s3_urls.get("classification", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "s3_key": s3_keys.get("authenticity", ""),
+        "authenticity_model_path": s3_urls.get("authenticity", ""),
+        "s3_key": s3_keys.get("classification", ""),
         "model_uuid": model_uuid,
         "status": "completed",
         "sample_count": len(genuine_arrays) + len(forged_arrays),
@@ -446,6 +448,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
             "embedding_model_path": s3_urls.get("embedding", ""),
+            "authenticity_model_path": s3_urls.get("authenticity", ""),
             "s3_key": s3_keys.get("classification", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
@@ -860,6 +863,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 "student_id": int(student["id"]),
                 "model_path": gpu_result['model_urls'].get('classification', ''),
                 "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
+                "authenticity_model_path": gpu_result['model_urls'].get('authenticity', ''),
                 "status": "completed",
                 "sample_count": len(genuine_images) + len(forged_images),
                 "genuine_count": len(genuine_images),
