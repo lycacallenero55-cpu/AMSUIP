@@ -1,14 +1,14 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Calendar, CalendarDays, Plus, Search, Trash2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Calendar, Plus, Search, Trash2, Edit, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabase";
 import Layout from "@/components/Layout";
+import PageWrapper from "@/components/PageWrapper";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
  type AllowedTerm = {
@@ -20,11 +20,18 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
   created_at: string;
 };
 
-const AllowedTerms = () => {
+const AllowedTermsContent = () => {
   const { toast } = useToast();
   const [terms, setTerms] = useState<AllowedTerm[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [pagination, setPagination] = useState({
+    currentPage: 1,
+    pageSize: 10,
+    total: 0
+  });
+  const [displayPageSize, setDisplayPageSize] = useState(10);
+  const [totalTermsCount, setTotalTermsCount] = useState(0);
 
   const [formData, setFormData] = useState<{
     academic_year: string;
@@ -33,6 +40,7 @@ const AllowedTerms = () => {
     end_date: string;
   }>({ academic_year: '', semester: '', start_date: '', end_date: '' });
   const [isFormOpen, setIsFormOpen] = useState<boolean>(false);
+  const [editingTerm, setEditingTerm] = useState<AllowedTerm | null>(null);
 
   useEffect(() => {
     fetchAllowedTerms();
@@ -41,12 +49,14 @@ const AllowedTerms = () => {
   const fetchAllowedTerms = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      const { data, error, count } = await supabase
         .from('allowed_terms')
-        .select('*')
+        .select('*', { count: 'exact' })
         .order('created_at', { ascending: false });
       if (error) throw error;
       setTerms(data || []);
+      setTotalTermsCount(count || 0);
+      setPagination(prev => ({ ...prev, total: count || 0 }));
     } catch (error) {
       console.error('Error fetching allowed terms:', error);
       toast({ title: 'Error', description: 'Failed to fetch allowed terms', variant: 'destructive' });
@@ -55,6 +65,19 @@ const AllowedTerms = () => {
     }
   };
 
+  const handlePageSizeChange = (newPageSize: number) => {
+    const minPageSize = 10;
+    const actualPageSize = Math.max(minPageSize, newPageSize);
+    setPagination(prev => ({ ...prev, pageSize: actualPageSize, currentPage: 1 }));
+    setDisplayPageSize(actualPageSize);
+  };
+
+  useEffect(() => {
+    if (displayPageSize >= 999999) {
+      setDisplayPageSize(totalTermsCount);
+    }
+  }, [totalTermsCount, displayPageSize]);
+
   const handleCreate = async () => {
     try {
       if (!formData.academic_year || !formData.semester || !formData.start_date || !formData.end_date) {
@@ -62,24 +85,52 @@ const AllowedTerms = () => {
         return;
       }
 
-      const { error } = await supabase.from('allowed_terms').insert([
-        {
-          academic_year: formData.academic_year.trim(),
-          semester: formData.semester.trim(),
-          start_date: formData.start_date,
-          end_date: formData.end_date,
-        },
-      ]);
-      if (error) throw error;
+      if (editingTerm) {
+        // Update existing term
+        const { error } = await supabase
+          .from('allowed_terms')
+          .update({
+            academic_year: formData.academic_year.trim(),
+            semester: formData.semester.trim(),
+            start_date: formData.start_date,
+            end_date: formData.end_date,
+          })
+          .eq('id', editingTerm.id);
+        if (error) throw error;
+        toast({ title: 'Success', description: 'Allowed term updated successfully.' });
+      } else {
+        // Create new term
+        const { error } = await supabase.from('allowed_terms').insert([
+          {
+            academic_year: formData.academic_year.trim(),
+            semester: formData.semester.trim(),
+            start_date: formData.start_date,
+            end_date: formData.end_date,
+          },
+        ]);
+        if (error) throw error;
+        toast({ title: 'Success', description: 'Allowed term added successfully.' });
+      }
 
-      toast({ title: 'Success', description: 'Allowed term added successfully.' });
       setFormData({ academic_year: '', semester: '', start_date: '', end_date: '' });
+      setEditingTerm(null);
       setIsFormOpen(false);
       fetchAllowedTerms();
     } catch (error) {
-      console.error('Error creating allowed term:', error);
-      toast({ title: 'Error', description: 'Failed to add allowed term', variant: 'destructive' });
+      console.error('Error saving allowed term:', error);
+      toast({ title: 'Error', description: 'Failed to save allowed term', variant: 'destructive' });
     }
+  };
+
+  const handleEdit = (term: AllowedTerm) => {
+    setEditingTerm(term);
+    setFormData({
+      academic_year: term.academic_year,
+      semester: term.semester,
+      start_date: term.start_date,
+      end_date: term.end_date,
+    });
+    setIsFormOpen(true);
   };
 
   const handleDelete = async (id: string) => {
@@ -102,150 +153,221 @@ const AllowedTerms = () => {
     return hay.includes(searchTerm.toLowerCase());
   });
 
+  const paginatedTerms = pagination.pageSize >= 999999 
+    ? filteredTerms 
+    : filteredTerms.slice(0, pagination.pageSize);
+
   return (
-    <Layout>
-      <div className="flex-1 space-y-4 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold tracking-tight">ALLOWED TERMS</h2>
-            <p className="text-sm text-muted-foreground">Add and manage allowed academic terms</p>
-          </div>
+    <div className="px-6 py-4">
+      <div className="mb-3">
+        <div>
+          <h1 className="text-2xl font-bold text-education-navy">ALLOWED TERMS</h1>
+        </div>
+      </div>
+      
+      {/* Allowed Terms Section */}
+      <div className="bg-white rounded-lg shadow-sm p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-education-navy">List of Allowed Terms</h3>
           <Button 
-            className="bg-gradient-primary shadow-glow h-9"
-            onClick={() => setIsFormOpen(true)}
+            variant="default"
+            size="sm"
+            className="h-8"
+            onClick={() => {
+              setEditingTerm(null);
+              setFormData({ academic_year: '', semester: '', start_date: '', end_date: '' });
+              setIsFormOpen(true);
+            }}
           >
-            <Plus className="mr-2 h-4 w-4" /> Add Term
+            <Plus className="w-4 h-4 mr-1" />
+            Add Term
           </Button>
         </div>
-
-        {/* Add Term Modal */}
-        <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>New Allowed Term</DialogTitle>
-              <DialogDescription>Provide academic year, semester, and date range.</DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ay">Academic Year</Label>
-                <Input
-                  id="ay"
-                  placeholder="e.g., 2024-2025"
-                  value={formData.academic_year}
-                  onChange={(e) => setFormData((p) => ({ ...p, academic_year: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="sem">Semester</Label>
-                <Input
-                  id="sem"
-                  placeholder="e.g., 1st Semester"
-                  value={formData.semester}
-                  onChange={(e) => setFormData((p) => ({ ...p, semester: e.target.value }))}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="start">Start Date</Label>
-                  <Input
-                    id="start"
-                    type="date"
-                    value={formData.start_date}
-                    onChange={(e) => setFormData((p) => ({ ...p, start_date: e.target.value }))}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="end">End Date</Label>
-                  <Input
-                    id="end"
-                    type="date"
-                    value={formData.end_date}
-                    onChange={(e) => setFormData((p) => ({ ...p, end_date: e.target.value }))}
-                  />
-                </div>
-              </div>
+        
+        {/* Big space below List of Allowed Terms label */}
+        <div className="mb-8"></div>
+        
+        {/* Top controls row */}
+        <div className="flex items-center justify-between gap-4 p-0 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Showed:</span>
+            <Select
+              value={displayPageSize >= 999999 ? "all" : displayPageSize.toString()}
+              onValueChange={(value) => {
+                if (value === "all") {
+                  handlePageSizeChange(999999);
+                } else {
+                  handlePageSizeChange(parseInt(value));
+                }
+              }}
+            >
+              <SelectTrigger className="h-8 w-24">
+                <SelectValue>
+                  {displayPageSize.toString()}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="250">250</SelectItem>
+                <SelectItem value="all">ALL</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Search:</span>
+            <div className="relative min-w-[240px] max-w-[340px]">
+              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+              <Input
+                placeholder="Search terms..."
+                className="pl-7 pr-7 h-8 w-full text-sm bg-background border-border focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                type="search"
+              />
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
-              <Button 
-                onClick={handleCreate}
-                disabled={!formData.academic_year || !formData.semester || !formData.start_date || !formData.end_date}
-              >
-                Save
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* Search */}
-        <div className="flex items-center space-x-4">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Search allowed terms..."
-              className="pl-8"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
           </div>
         </div>
 
-        {/* Terms List */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <CalendarDays className="h-5 w-5" />
-                  Allowed Terms
-                </CardTitle>
-                <CardDescription>All defined academic year + semester terms</CardDescription>
+        {/* Table View */}
+        <div className="border-t border-b border-gray-200 overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr className="text-xs text-gray-500 h-8">
+                <th scope="col" className="px-3 py-2 text-left font-medium">Academic Year</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Semester</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium"></th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200 text-sm">
+              {loading ? (
+                <tr className="h-8">
+                  <td colSpan={3} className="px-3 py-1 text-center">
+                    <div className="flex justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">Loading terms...</p>
+                  </td>
+                </tr>
+              ) : paginatedTerms.length === 0 ? (
+                <tr className="h-8">
+                  <td colSpan={3} className="px-3 py-1 text-center text-sm text-gray-500">
+                    {terms.length === 0 
+                      ? 'No allowed terms found. Add your first term!'
+                      : 'No terms match the current search. Try adjusting your search.'}
+                  </td>
+                </tr>
+              ) : (
+                paginatedTerms.map((term) => (
+                  <tr key={term.id} className="hover:bg-gray-50 h-8">
+                    <td className="px-3 py-1 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">{term.academic_year}</div>
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      {term.semester}
+                    </td>
+                    <td className="px-3 py-1 whitespace-nowrap text-right">
+                      <div className="flex gap-1 justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => handleEdit(term)}
+                        >
+                          <Edit className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => handleDelete(term.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Add/Edit Term Modal */}
+      <Dialog open={isFormOpen} onOpenChange={(open) => {
+        setIsFormOpen(open);
+        if (!open) {
+          setEditingTerm(null);
+          setFormData({ academic_year: '', semester: '', start_date: '', end_date: '' });
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingTerm ? 'Edit Allowed Term' : 'New Allowed Term'}</DialogTitle>
+            <DialogDescription>Provide academic year, semester, and date range.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="ay">Academic Year</Label>
+              <Input
+                id="ay"
+                placeholder="e.g., 2024-2025"
+                value={formData.academic_year}
+                onChange={(e) => setFormData((p) => ({ ...p, academic_year: e.target.value }))}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="sem">Semester</Label>
+              <Input
+                id="sem"
+                placeholder="e.g., 1st Semester"
+                value={formData.semester}
+                onChange={(e) => setFormData((p) => ({ ...p, semester: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="start">Start Date</Label>
+                <Input
+                  id="start"
+                  type="date"
+                  value={formData.start_date}
+                  onChange={(e) => setFormData((p) => ({ ...p, start_date: e.target.value }))}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="end">End Date</Label>
+                <Input
+                  id="end"
+                  type="date"
+                  value={formData.end_date}
+                  onChange={(e) => setFormData((p) => ({ ...p, end_date: e.target.value }))}
+                />
               </div>
             </div>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
-              </div>
-            ) : filteredTerms.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Academic Year</TableHead>
-                    <TableHead>Semester</TableHead>
-                    <TableHead>Start</TableHead>
-                    <TableHead>End</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredTerms.map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell className="font-medium">{t.academic_year}</TableCell>
-                      <TableCell>{t.semester}</TableCell>
-                      <TableCell>{formatDate(t.start_date)}</TableCell>
-                      <TableCell>{formatDate(t.end_date)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(t.id)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <div className="text-center py-12">
-                <Calendar className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">No allowed terms found</h3>
-                <p className="text-sm text-muted-foreground">Add your first allowed term using the form above.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsFormOpen(false)}>Cancel</Button>
+            <Button 
+              onClick={handleCreate}
+              disabled={!formData.academic_year || !formData.semester || !formData.start_date || !formData.end_date}
+            >
+              {editingTerm ? 'Update' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+const AllowedTerms = () => {
+  return (
+    <Layout>
+      <PageWrapper skeletonType="table">
+        <AllowedTermsContent />
+      </PageWrapper>
     </Layout>
   );
 };
