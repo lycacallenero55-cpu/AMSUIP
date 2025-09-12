@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Calendar, Plus, Search, Trash2, Edit, Loader2 } from "lucide-react";
+import { Calendar, Plus, Search, Trash2, Edit, Loader2, ChevronsUp, ChevronsDown } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabase";
@@ -23,6 +23,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 const AllowedTermsContent = () => {
   const { toast } = useToast();
   const [terms, setTerms] = useState<AllowedTerm[]>([]);
+  // Sorting
+  type TermsSortKey = 'year' | 'semester';
+  const [sortKey, setSortKey] = useState<TermsSortKey>('year');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [pagination, setPagination] = useState({
@@ -153,9 +157,18 @@ const AllowedTermsContent = () => {
     return hay.includes(searchTerm.toLowerCase());
   });
 
-  const paginatedTerms = pagination.pageSize >= 999999 
-    ? filteredTerms 
-    : filteredTerms.slice(0, pagination.pageSize);
+  const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
+  const endIndex = startIndex + pagination.pageSize;
+  const sortedTerms = [...filteredTerms].sort((a, b) => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    if (sortKey === 'year') return a.academic_year.localeCompare(b.academic_year) * dir;
+    return a.semester.localeCompare(b.semester) * dir;
+  });
+  const paginatedTerms = sortedTerms.slice(startIndex, endIndex);
+  const handleSort = (key: TermsSortKey) => {
+    if (sortKey === key) setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
 
   return (
     <div className="px-6 py-4">
@@ -237,9 +250,21 @@ const AllowedTermsContent = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr className="text-xs text-black h-8">
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Academic Year</th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Semester</th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">Academic Year
+                    <button type="button" onClick={() => handleSort('year')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'year' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">Semester
+                    <button type="button" onClick={() => handleSort('semester')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'semester' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th> {/* Empty for actions */}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">

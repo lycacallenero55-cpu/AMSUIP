@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronsUp, ChevronsDown } from "lucide-react";
 
 import { 
   Search, 
@@ -65,6 +65,10 @@ const Accounts = () => {
   const [displayPageSize, setDisplayPageSize] = useState(10);
   const [totalAccountsCount, setTotalAccountsCount] = useState(0);
   const { user } = useAuth();
+  // Sorting
+  type AccountSortKey = 'user' | 'email' | 'role' | 'status' | 'created';
+  const [sortKey, setSortKey] = useState<AccountSortKey>('user');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   
 
 
@@ -223,6 +227,34 @@ const Accounts = () => {
     return matchesSearch && matchesRole && matchesStatus;
   });
 
+  const sortedProfiles = [...filteredProfiles].sort((a, b) => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const nameA = `${a.first_name || ''} ${a.last_name || ''}`.trim().toLowerCase();
+    const nameB = `${b.first_name || ''} ${b.last_name || ''}`.trim().toLowerCase();
+    switch (sortKey) {
+      case 'user':
+        return nameA.localeCompare(nameB) * dir || a.email.localeCompare(b.email) * dir;
+      case 'email':
+        return a.email.localeCompare(b.email) * dir;
+      case 'role':
+        return (a.role || '').toString().localeCompare((b.role || '').toString()) * dir;
+      case 'status':
+        return (a.status || '').toString().localeCompare((b.status || '').toString()) * dir;
+      case 'created':
+        return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir;
+      default:
+        return 0;
+    }
+  });
+
+  const handleSort = (key: AccountSortKey) => {
+    if (sortKey === key) setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
   if (isLoading) {
     return (
       <Layout>
@@ -303,11 +335,46 @@ const Accounts = () => {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr className="text-xs text-black h-8">
-                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">User</th>
-                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Email</th>
-                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Role</th>
-                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Status</th>
-                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Created</th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                        <div className="flex items-center gap-1">
+                          User
+                          <button type="button" onClick={() => handleSort('user')} className="p-0.5 text-gray-500 hover:text-black">
+                            {sortKey === 'user' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />) : <ChevronsUp className="w-3.5 h-3.5 opacity-40" />}
+                          </button>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                        <div className="flex items-center gap-1">
+                          Email
+                          <button type="button" onClick={() => handleSort('email')} className="p-0.5 text-gray-500 hover:text-black">
+                            {sortKey === 'email' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />) : <ChevronsUp className="w-3.5 h-3.5 opacity-40" />}
+                          </button>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                        <div className="flex items-center gap-1">
+                          Role
+                          <button type="button" onClick={() => handleSort('role')} className="p-0.5 text-gray-500 hover:text-black">
+                            {sortKey === 'role' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />) : <ChevronsUp className="w-3.5 h-3.5 opacity-40" />}
+                          </button>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                        <div className="flex items-center gap-1">
+                          Status
+                          <button type="button" onClick={() => handleSort('status')} className="p-0.5 text-gray-500 hover:text-black">
+                            {sortKey === 'status' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />) : <ChevronsUp className="w-3.5 h-3.5 opacity-40" />}
+                          </button>
+                        </div>
+                      </th>
+                      <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                        <div className="flex items-center gap-1">
+                          Created
+                          <button type="button" onClick={() => handleSort('created')} className="p-0.5 text-gray-500 hover:text-black">
+                            {sortKey === 'created' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />) : <ChevronsUp className="w-3.5 h-3.5 opacity-40" />}
+                          </button>
+                        </div>
+                      </th>
                       <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Actions</th>
                     </tr>
                   </thead>
@@ -328,7 +395,7 @@ const Accounts = () => {
                         </td>
                       </tr>
                     ) : (
-                      filteredProfiles.map((profile) => (
+                      sortedProfiles.map((profile) => (
                         <tr key={profile.id} className="hover:bg-gray-50 h-8">
                           <td className="px-3 py-1 whitespace-nowrap">
                             <div className="font-medium">

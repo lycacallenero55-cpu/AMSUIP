@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,28 @@ import { UnsavedChangesDialog } from "@/components/UnsavedChangesDialog";
 import { Loader2 } from "lucide-react";
 import PageWrapper from "@/components/PageWrapper";
 
-import { FileText, Clock, AlertCircle, CheckCircle2, Plus, Search, Filter, Eye, Check, X, ChevronsUpDown, CalendarIcon, Edit, ZoomIn, ZoomOut, Trash2 } from "lucide-react";
+import { 
+  Calendar as CalendarIcon,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Download,
+  Edit,
+  Eye,
+  EyeOff,
+  FileImage,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  User,
+  ChevronsUp,
+  ChevronsDown
+} from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
@@ -87,6 +108,10 @@ const ExcuseApplicationContent = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [displayPageSize, setDisplayPageSize] = useState(10);
+  // Sorting
+  type ExcuseSortKey = 'name' | 'id' | 'date' | 'status';
+  const [sortKey, setSortKey] = useState<ExcuseSortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [totalExcusesCount, setTotalExcusesCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -472,14 +497,43 @@ const ExcuseApplicationContent = () => {
   };
 
   // Filter excuses based on search term
-  const filteredExcuses = excuses.filter(excuse => {
-    const matchesSearch = 
-      `${excuse.students?.firstname} ${excuse.students?.surname}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      excuse.students?.student_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      excuse.students?.program?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    return matchesSearch;
-  });
+  const filteredExcuses = useMemo(() => {
+    if (!excuses?.length) return [];
+    const searchLower = searchTerm.trim().toLowerCase();
+    let filtered = excuses.filter((excuse) => {
+      if (!searchLower) return true;
+      const name = `${excuse.students?.firstname || ''} ${excuse.students?.surname || ''}`.toLowerCase();
+      const id = excuse.students?.student_id?.toLowerCase() || '';
+      return name.includes(searchLower) || id.includes(searchLower);
+    });
+    // Sort
+    const dir = sortDir === 'asc' ? 1 : -1;
+    filtered.sort((a, b) => {
+      const nameA = `${a.students?.firstname || ''} ${a.students?.surname || ''}`.trim().toLowerCase();
+      const nameB = `${b.students?.firstname || ''} ${b.students?.surname || ''}`.trim().toLowerCase();
+      switch (sortKey) {
+        case 'name':
+          return nameA.localeCompare(nameB) * dir;
+        case 'id':
+          const ida = a.students?.student_id || '';
+          const idb = b.students?.student_id || '';
+          const na = Number(ida), nb = Number(idb);
+          if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir;
+          return ida.localeCompare(idb) * dir;
+        case 'date':
+          return (new Date(a.absence_date).getTime() - new Date(b.absence_date).getTime()) * dir;
+        case 'status':
+          return (a.status || '').localeCompare(b.status || '') * dir;
+        default:
+          return 0;
+      }
+    });
+    return filtered;
+  }, [excuses, searchTerm, sortKey, sortDir]);
+  const handleSort = (key: ExcuseSortKey) => {
+    if (sortKey === key) setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
 
   return (
     <div className="px-6 py-4">
@@ -557,11 +611,35 @@ const ExcuseApplicationContent = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr className="text-xs text-black h-8">
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Name</th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">ID</th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Date of Session</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">Name
+                    <button type="button" onClick={() => handleSort('name')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'name' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">ID
+                    <button type="button" onClick={() => handleSort('id')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'id' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">Date of Session
+                    <button type="button" onClick={() => handleSort('date')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'date' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Documentation</th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Status</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
+                  <div className="flex items-center gap-1">Status
+                    <button type="button" onClick={() => handleSort('status')} className="p-0.5 text-gray-500 hover:text-black">
+                      {sortKey === 'status' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                    </button>
+                  </div>
+                </th>
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
               </tr>
             </thead>
