@@ -67,6 +67,8 @@ const ExcuseApplicationContent = () => {
   const [loading, setLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isViewOpen, setIsViewOpen] = useState(false);
+  const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string>('');
   const [selectedExcuse, setSelectedExcuse] = useState<ExcuseApplication | null>(null);
   const [formData, setFormData] = useState<ExcuseFormData>({
     student_id: '',
@@ -439,6 +441,36 @@ const ExcuseApplicationContent = () => {
     );
   };
 
+  // Status Badge Component (for view dialog)
+  const getStatusBadge = (status: ExcuseStatus) => {
+    const baseClasses = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium";
+    
+    switch (status) {
+      case 'approved':
+        return (
+          <span className={`${baseClasses} bg-green-100 text-green-800`}>
+            <CheckCircle2 className="w-3 h-3 mr-1" />
+            Approved
+          </span>
+        );
+      case 'rejected':
+        return (
+          <span className={`${baseClasses} bg-red-100 text-red-800`}>
+            <AlertCircle className="w-3 h-3 mr-1" />
+            Rejected
+          </span>
+        );
+      case 'pending':
+      default:
+        return (
+          <span className={`${baseClasses} bg-yellow-100 text-yellow-800`}>
+            <Clock className="w-3 h-3 mr-1" />
+            Pending
+          </span>
+        );
+    }
+  };
+
   // Filter excuses based on search term
   const filteredExcuses = excuses.filter(excuse => {
     const matchesSearch = 
@@ -572,9 +604,8 @@ const ExcuseApplicationContent = () => {
                         <div 
                           className="w-12 h-8 bg-gray-100 rounded border cursor-pointer overflow-hidden"
                           onClick={() => {
-                            setSelectedExcuse(excuse);
-                            setViewMode('view');
-                            setIsViewOpen(true);
+                            setPreviewImageUrl(excuse.documentation_url!);
+                            setIsImagePreviewOpen(true);
                           }}
                         >
                           <img 
@@ -809,9 +840,9 @@ const ExcuseApplicationContent = () => {
             <DialogTitle>Excuse Application Details</DialogTitle>
           </DialogHeader>
           {selectedExcuse && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden">
-              {/* Left side - Application details */}
-              <div className="lg:col-span-1 bg-muted/30 p-6 rounded-lg border space-y-6">
+            <div className="flex flex-col flex-1 overflow-hidden">
+              {/* Top section - Application details */}
+              <div className="bg-muted/30 p-6 rounded-lg border space-y-6 mb-6">
                 {/* Header Section */}
                 <div className="border-b border-border pb-4">
                   <h3 className="text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
@@ -955,8 +986,8 @@ const ExcuseApplicationContent = () => {
                 )}
               </div>
 
-              {/* Right side - Image with zoom controls */}
-              <div className="lg:col-span-2 flex flex-col space-y-4">
+              {/* Bottom section - Image with zoom controls */}
+              <div className="flex flex-col space-y-4 flex-1 overflow-hidden">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium">Excuse Letter</Label>
                   {selectedExcuse.documentation_url && (
@@ -990,7 +1021,7 @@ const ExcuseApplicationContent = () => {
                 
                 {selectedExcuse.documentation_url ? (
                   <div 
-                    className="border rounded-lg overflow-hidden flex-1 bg-gray-50 relative cursor-grab active:cursor-grabbing"
+                    className="border rounded-lg overflow-hidden flex-1 bg-gray-50 relative cursor-grab active:cursor-grabbing min-h-[400px]"
                     onMouseDown={handleImageMouseDown}
                     onMouseMove={handleImageMouseMove}
                     onMouseUp={handleImageMouseUp}
@@ -1008,11 +1039,34 @@ const ExcuseApplicationContent = () => {
                     />
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-400">No excuse letter attached</p>
+                  <div className="flex-1 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center min-h-[400px]">
+                    <p className="text-sm text-gray-400">No excuse letter attached</p>
+                  </div>
                 )}
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Image Preview Dialog */}
+      <Dialog open={isImagePreviewOpen} onOpenChange={setIsImagePreviewOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] p-0">
+          <div className="relative">
+            <img 
+              src={previewImageUrl} 
+              alt="Excuse letter full preview" 
+              className="w-full h-auto max-h-[85vh] object-contain"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="absolute top-4 right-4 bg-white/90 hover:bg-white"
+              onClick={() => setIsImagePreviewOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
