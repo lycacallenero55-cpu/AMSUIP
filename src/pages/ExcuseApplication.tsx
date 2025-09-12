@@ -497,8 +497,9 @@ const ExcuseApplicationContent = () => {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-semibold text-education-navy">List of Excuse Applications</h3>
           <Button 
-            variant="outline"
-            className="border-blue-600 text-blue-600 hover:bg-blue-50 h-8"
+            variant="default"
+            size="sm"
+            className="h-8"
             onClick={() => setIsFormOpen(true)}
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -561,7 +562,7 @@ const ExcuseApplicationContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-medium">Date of Session</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Documentation</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">Actions</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium"></th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200 text-sm">
