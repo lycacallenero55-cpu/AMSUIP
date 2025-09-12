@@ -784,11 +784,8 @@ async def identify_signature_owner(
                 # Preserve the original individual prediction for agreement checks later
                 original_individual_prediction = individual_prediction
                 if individual_prediction != predicted_owner_id:
-                    logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
-                    combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
-                    # Update the predicted student name to match the new ID
-                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
-                    logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+                    logger.info(f"Disagreement between models; not forcing override.")
+                    # Keep individual prediction and confidence
                 else:
                     logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                     combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
@@ -878,19 +875,9 @@ async def identify_signature_owner(
         # Identification-only: match if ownership criteria met and not unknown
         is_match = (not is_unknown) and ownership_ok
 
-        # If we have a valid individual prediction but global was rejected, always match
-        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0 and not is_unknown:
-            is_match = True
-            # Ensure predicted student info is properly set
-            result["predicted_student"] = {
-                "id": result.get("predicted_student_id", 0),
-                "name": result.get("predicted_student_name", "Unknown")
-            }
-            logger.info(f"Force matching individual prediction: {result.get('predicted_student_id')} - {result.get('predicted_student_name')}")
+        # Remove forced-match shortcut; rely on ownership_ok thresholds only
 
-        # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
-        if is_match and combined_confidence < 0.75:
-            combined_confidence = 0.75
+        # Do not clamp confidence upward
             
         # Ensure score matches confidence for frontend compatibility
         result["score"] = combined_confidence

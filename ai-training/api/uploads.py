@@ -114,24 +114,36 @@ async def delete_signature(record_id: int, s3_key: Optional[str] = None):
 @router.get("/students-with-images")
 async def students_with_images(summary: bool = False):
     try:
-        items = await db_manager.list_students_with_images()
         if summary:
-            # Lightweight response: only students with current signatures and counts
+            # Query counts directly from Supabase for fresh data
+            try:
+                resp = db_manager.client.table("student_signatures").select("student_id,label") .execute()
+                rows = resp.data or []
+            except Exception:
+                rows = []
+            counts = {}
+            for r in rows:
+                sid = r.get("student_id")
+                label = (r.get("label") or "").lower()
+                if sid is None:
+                    continue
+                bucket = counts.setdefault(int(sid), {"genuine": 0, "forged": 0})
+                if label == "genuine":
+                    bucket["genuine"] += 1
+                elif label == "forged":
+                    bucket["forged"] += 1
             summarized = []
-            for it in items:
-                sigs = it.get("signatures", []) or []
-                if not sigs:
-                    continue
-                g = sum(1 for s in sigs if (s.get("label") or "").lower() == "genuine")
-                f = sum(1 for s in sigs if (s.get("label") or "").lower() == "forged")
-                if (g + f) <= 0:
-                    continue
-                summarized.append({
-                    "student_id": it.get("student_id") or it.get("id"),
-                    "genuine_count": g,
-                    "forged_count": f,
-                })
+            for sid, c in counts.items():
+                total = int(c.get("genuine", 0)) + int(c.get("forged", 0))
+                if total > 0:
+                    summarized.append({
+                        "student_id": sid,
+                        "genuine_count": int(c.get("genuine", 0)),
+                        "forged_count": int(c.get("forged", 0)),
+                    })
             return {"items": summarized}
+        # Non-summary: original detailed validation path
+        items = await db_manager.list_students_with_images()
         else:
             for it in items:
                 valid = []
