@@ -115,7 +115,24 @@ async def delete_signature(record_id: int, s3_key: Optional[str] = None):
 async def students_with_images(summary: bool = False):
     try:
         items = await db_manager.list_students_with_images()
-        if not summary:
+        if summary:
+            # Lightweight response: only students with current signatures and counts
+            summarized = []
+            for it in items:
+                sigs = it.get("signatures", []) or []
+                if not sigs:
+                    continue
+                g = sum(1 for s in sigs if (s.get("label") or "").lower() == "genuine")
+                f = sum(1 for s in sigs if (s.get("label") or "").lower() == "forged")
+                if (g + f) <= 0:
+                    continue
+                summarized.append({
+                    "student_id": it.get("student_id") or it.get("id"),
+                    "genuine_count": g,
+                    "forged_count": f,
+                })
+            return {"items": summarized}
+        else:
             for it in items:
                 valid = []
                 for s in it.get("signatures", []):

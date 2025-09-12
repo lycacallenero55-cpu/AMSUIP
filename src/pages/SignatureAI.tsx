@@ -1066,18 +1066,17 @@ const SignatureAI = () => {
                         try {
                           const items = await aiService.listStudentsWithImages(true);
                           const byId = new Map(allStudents.map(s => [s.id, s]));
-                          // Only include students that still have at least 1 signature
-                          const toAdd = items
-                            .filter(it => (it.signatures?.length || 0) > 0)
-                            .map(it => ({ student: byId.get(it.student_id), count: it.signatures.length }))
-                            .filter((x) => Boolean(x.student)) as Array<{ student: Student; count: number }>;
+                          // items are summarized: { student_id, genuine_count, forged_count }
+                          const toAdd = (items as any[])
+                            .map(it => ({ student: byId.get(it.student_id), genuine_count: it.genuine_count || 0, forged_count: it.forged_count || 0 }))
+                            .filter((x) => Boolean(x.student) && ((x.genuine_count + x.forged_count) > 0)) as Array<{ student: Student; genuine_count: number; forged_count: number }>;
                           // Add cards for these students
                           let addedIds: number[] = [];
                           setStudentCards(prev => {
                             const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
                             const newCards = toAdd
                               .filter(x => !existingIds.has(x.student.id))
-                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: undefined, forgedCount: undefined }));
+                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: x.genuine_count, forgedCount: x.forged_count }));
                             addedIds = newCards.map(c => (c.student as any).id);
                             const merged = [...prev, ...newCards];
                             // Remove placeholder empty card if real students exist
@@ -1100,9 +1099,9 @@ const SignatureAI = () => {
                               // Prime placeholders so users see counts immediately
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  const gPlaceholders = genuines.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  const fPlaceholders = forgeds.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders, genuineCount: genuines.length, forgedCount: forgeds.length };
+                                  const gPlaceholders = Array.from({ length: c.genuineCount ?? genuines.length }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  const fPlaceholders = Array.from({ length: c.forgedCount ?? forgeds.length }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders };
                                 }
                                 return c;
                               }));
