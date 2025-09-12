@@ -490,7 +490,7 @@ async def start_training(
 
         genuine_data: List[bytes] = []
         forged_data: List[bytes] = []
-        if genuine_files and forged_files:
+        if genuine_files:  # Only need genuine files for owner identification
             # Use uploaded files
             if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                 raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
@@ -570,7 +570,7 @@ async def start_gpu_training(
 
             job = job_queue.create_job(int(student["id"]), "gpu_training")
             # If no files uploaded, auto-fetch from storage
-            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
                 rows = await db_manager.list_student_signatures(int(student["id"]))
                 if not rows:
                     raise HTTPException(status_code=400, detail="No stored signatures available for this student")
@@ -629,7 +629,7 @@ async def start_gpu_training(
             # Multiple students - use global training
             job = job_queue.create_job(0, "global_gpu_training")
             # For global GPU, allow auto-fetch when files are not provided
-            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
                 genuine_data = []
                 forged_data = []
             else:
@@ -688,7 +688,7 @@ async def start_async_training(
 
             job = job_queue.create_job(int(student["id"]), "training")
             # Allow auto-fetch when files are not uploaded
-            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
                 rows = await db_manager.list_student_signatures(int(student["id"]))
                 if not rows:
                     raise HTTPException(status_code=400, detail="No stored signatures available for this student")
@@ -729,7 +729,7 @@ async def start_async_training(
             # Create a job for global training
             job = job_queue.create_job(0, "global_training")  # 0 indicates global training
             # Support auto-fetch when files omitted (defer per-student fetch to run_global_async_training)
-            if not genuine_files or not forged_files or len(genuine_files) == 0 or len(forged_files) == 0:
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
                 genuine_data = []
                 forged_data = []
             else:
