@@ -371,12 +371,8 @@ class SignatureEmbeddingModel:
                 student_labels.append(student_id)
                 authenticity_labels.append(1)  # Genuine
             
-            # Process forged signatures
-            for img in signatures['forged']:
-                processed_img = self._preprocess_signature(img)
-                all_images.append(processed_img)
-                student_labels.append(student_id)
-                authenticity_labels.append(0)  # Forged
+            # Skip forged signatures - not used for owner identification training
+            # (Forgery detection is disabled, so we only train on genuine signatures)
         
         X = np.array(all_images, dtype=np.float32)
         # Use actual number of students for categorical encoding
