@@ -542,7 +542,7 @@ async def start_training(
                 else:
                     forged_data.append(data)
             if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
+                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
 
         result = await train_signature_model(student, genuine_data, forged_data)
         return result
@@ -606,7 +606,7 @@ async def start_gpu_training(
                     if label == "genuine": genuine_data.append(content)
                     else: forged_data.append(content)
                 if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
-                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
+                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
@@ -724,7 +724,7 @@ async def start_async_training(
                     if label == "genuine": genuine_data.append(content)
                     else: forged_data.append(content)
                 if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
-                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
+                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
