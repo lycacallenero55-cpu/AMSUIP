@@ -471,7 +471,7 @@ const Students = () => {
                   <th scope="col" className="px-3 py-2 text-left font-medium">Year & Section</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 text-sm">
+              <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
                 {loading ? (
                 <tr className="h-8">
                   <td colSpan={4} className="px-3 py-1 text-center">
@@ -504,18 +504,18 @@ const Students = () => {
                     <tr key={student.id} className="hover:bg-gray-50 h-8">
                       <td className="px-3 py-1 whitespace-nowrap">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">
+                          <div className="font-medium">
                             {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap">
                         {student.student_id}
                       </td>
-                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap">
                         <span className="truncate max-w-[120px] inline-block">{student.program}</span>
                       </td>
-                      <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                      <td className="px-3 py-1 whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           <span>{student.year}</span>
                           <span className="text-gray-300">•</span>

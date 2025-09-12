@@ -311,7 +311,7 @@ const Accounts = () => {
                       <th scope="col" className="px-3 py-2 text-left font-medium">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200 text-sm">
+                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
                     {isLoading ? (
                       <tr className="h-8">
                         <td colSpan={6} className="px-3 py-1 text-center">
@@ -331,22 +331,22 @@ const Accounts = () => {
                       filteredProfiles.map((profile) => (
                         <tr key={profile.id} className="hover:bg-gray-50 h-8">
                           <td className="px-3 py-1 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">
+                            <div className="font-medium">
                               {profile.first_name && profile.last_name 
                                 ? `${profile.first_name} ${profile.last_name}`
                                 : profile.email.split('@')[0]}
                             </div>
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                          <td className="px-3 py-1 whitespace-nowrap">
                             {profile.email}
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                          <td className="px-3 py-1 whitespace-nowrap">
                             <RoleDisplay role={profile.role} />
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                          <td className="px-3 py-1 whitespace-nowrap">
                             <StatusDisplay status={profile.status} />
                           </td>
-                          <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                          <td className="px-3 py-1 whitespace-nowrap">
                             {format(new Date(profile.created_at), 'MMM d, yyyy')}
                           </td>
                           <td className="px-3 py-1 whitespace-nowrap text-right">
