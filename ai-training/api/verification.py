@@ -179,18 +179,29 @@ async def _fetch_genuine_arrays_for_student(student_id: int, max_images: int = 5
         logger.warning(f"Failed to fetch genuine arrays for student {student_id}: {e}")
         return []
 
-async def _list_candidate_student_ids(limit: int = 50) -> list[int]:
-    """List candidate students that have images (limited)."""
+async def _list_candidate_student_ids(limit: int = 50, allowed_ids: set[int] | None = None) -> list[int]:
+    """List candidate students that have images (limited), filtered by allowed_ids if provided."""
     try:
         items = await db_manager.list_students_with_images()
         ids: list[int] = []
         for it in items:
             sid = it.get("student_id") or it.get("id")
             if isinstance(sid, int):
-                ids.append(sid)
+                if allowed_ids is None or int(sid) in allowed_ids:
+                    ids.append(sid)
             if len(ids) >= limit:
                 break
         return ids
+async def _get_trained_student_ids() -> set[int]:
+    try:
+        models = await db_manager.get_trained_models()
+        if not models:
+            return set()
+        return {int(m.get("student_id")) for m in models if m.get("status") == "completed" and m.get("student_id") is not None}
+    except Exception as e:
+        logger.warning(f"Failed to get trained student ids: {e}")
+        return set()
+
     except Exception as e:
         logger.warning(f"Failed to list candidate students: {e}")
         return []
@@ -295,7 +306,16 @@ async def identify_signature_owner(
                                 if model_type == 'embedding':
                                     request_model_manager.embedding_model = model
                                 elif model_type == 'classification':
-                                    request_model_manager.classification_head = model
+                                    # Guard against embedding being loaded as classifier
+                                    from numpy import zeros
+                                    try:
+                                        out = model.predict(zeros((1, request_model_manager.image_size, request_model_manager.image_size, 3)), verbose=0)
+                                        if len(out.shape) == 2 and (out.shape[1] <= 1 or out.shape[1] == request_model_manager.embedding_dim):
+                                            logger.info("Skipping invalid classification head (1-unit or embedding-sized output)")
+                                        else:
+                                            request_model_manager.classification_head = model
+                                    except Exception:
+                                        request_model_manager.classification_head = model
                                 elif model_type == 'authenticity':
                                     request_model_manager.authenticity_head = model
                                 elif model_type == 'siamese':
@@ -646,10 +666,11 @@ async def identify_signature_owner(
         # Preprocess test signature with advanced preprocessing
         processed_signature = preprocessor.preprocess_signature(test_image)
         
-        # Global-first selection: pick owner using global model, then refine with individual model
+        # Global-first selection (restricted to trained students)
         hybrid = {}
         predicted_owner_id = None
         try:
+            trained_ids = await _get_trained_student_ids()
             latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
             if latest_global and latest_global.get("model_path"):
                 gsm = GlobalSignatureVerificationModel()
@@ -706,8 +727,8 @@ async def identify_signature_owner(
                             second_best = score01
                             second_cos = cosine
                 else:
-                    # Fallback: compute quick centroids online
-                    candidate_ids = await _list_candidate_student_ids(limit=50)
+                    # Fallback: compute quick centroids online (only consider trained IDs if present)
+                    candidate_ids = await _list_candidate_student_ids(limit=50, allowed_ids=trained_ids if trained_ids else None)
                     for sid in candidate_ids:
                         arrays = await _fetch_genuine_arrays_for_student(int(sid), max_images=3)
                         if not arrays:
@@ -799,6 +820,7 @@ async def identify_signature_owner(
         has_auth = False
         # Improved unknown thresholding with better outlier detection (owner identification focus)
         is_unknown = True
+        trained_ids = await _get_trained_student_ids()
         
         # Check if we have a valid prediction first
         if predicted_owner_id is not None and predicted_owner_id > 0:
@@ -870,8 +892,11 @@ async def identify_signature_owner(
                 is_unknown = False
                 logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
 
-        # Compute final match after any adjustments above
-        # Identification-only: match if ownership criteria met and not unknown
+        # Mask predictions to trained set only
+        if result.get("predicted_student_id") and trained_ids and int(result.get("predicted_student_id")) not in trained_ids:
+            is_unknown = True
+            ownership_ok = False
+        # Final match
         is_match = (not is_unknown) and ownership_ok
 
         # Remove forced-match shortcut; rely on ownership_ok thresholds only
