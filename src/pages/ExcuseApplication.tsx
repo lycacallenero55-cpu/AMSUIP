@@ -837,7 +837,7 @@ const ExcuseApplicationContent = () => {
       }}>
         <DialogContent className="max-w-4xl w-full h-[85vh] flex flex-col">
           <DialogHeader className="flex-shrink-0">
-            <DialogTitle>Excuse Application Details - UPDATED</DialogTitle>
+            <DialogTitle>Excuse Application Details</DialogTitle>
           </DialogHeader>
           {selectedExcuse && (
             <div className="flex flex-col flex-1 overflow-hidden">
