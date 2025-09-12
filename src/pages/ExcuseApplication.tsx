@@ -565,7 +565,7 @@ const ExcuseApplicationContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-medium"></th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-sm">
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
               {loading ? (
                 <tr className="h-8">
                   <td colSpan={6} className="px-3 py-1 text-center">
@@ -587,14 +587,14 @@ const ExcuseApplicationContent = () => {
                 filteredExcuses.map((excuse) => (
                   <tr key={excuse.id} className="hover:bg-gray-50 h-8">
                     <td className="px-3 py-1 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
+                      <div className="font-medium">
                         {excuse.students?.firstname} {excuse.students?.surname}
                       </div>
                     </td>
-                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                    <td className="px-3 py-1 whitespace-nowrap">
                       {excuse.students?.student_id}
                     </td>
-                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                    <td className="px-3 py-1 whitespace-nowrap">
                       {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
                     </td>
                     <td className="px-3 py-1 whitespace-nowrap">
@@ -616,7 +616,7 @@ const ExcuseApplicationContent = () => {
                         <span className="text-sm text-gray-400">No attachment</span>
                       )}
                     </td>
-                    <td className="px-3 py-1 whitespace-nowrap text-gray-500 text-sm">
+                    <td className="px-3 py-1 whitespace-nowrap">
                       {getStatusDisplay(excuse.status)}
                     </td>
                     <td className="px-3 py-1 whitespace-nowrap text-right">
