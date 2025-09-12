@@ -783,18 +783,25 @@ async def identify_signature_owner(
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
         
         if predicted_owner_id is not None:
-            # Reject global predictions with zero margin (degenerate case)
+            # Handle zero-margin degeneracy: accept if absolute global score is high enough
             if global_margin <= 1e-6 and global_margin_raw <= 1e-6:
-                logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
-                predicted_owner_id = None
-                # Keep individual prediction if available
-                individual_prediction = result.get("predicted_student_id", 0)
-                if individual_prediction and individual_prediction > 0:
-                    result["predicted_student_id"] = individual_prediction
-                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                if hybrid.get("global_score", 0.0) >= 0.85:
+                    # Accept the top-1 centroid even with zero margin
+                    logger.info(f"Accepting global prediction (high score with zero margin): {predicted_owner_id}")
+                    result["predicted_student_id"] = predicted_owner_id
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                    combined_confidence = float(hybrid.get("global_score", 0.0))
                 else:
-                    result["predicted_student_id"] = 0
-                    result["predicted_student_name"] = "Unknown"
+                    logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
+                    predicted_owner_id = None
+                    # Keep individual prediction if available
+                    individual_prediction = result.get("predicted_student_id", 0)
+                    if individual_prediction and individual_prediction > 0:
+                        result["predicted_student_id"] = individual_prediction
+                        result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                    else:
+                        result["predicted_student_id"] = 0
+                        result["predicted_student_name"] = "Unknown"
             else:
                 individual_prediction = result.get("predicted_student_id")
                 logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
