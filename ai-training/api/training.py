@@ -317,18 +317,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 progress = 10.0 + (i + 1) / len(genuine_data) * 20.0
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
 
-        if job:
-            job_queue.update_job_progress(job.job_id, 30.0, "Processing forged signatures...")
-
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            # Apply advanced signature preprocessing
-            processed_image = preprocessor.preprocess_signature(image)
-            forged_images.append(processed_image)
-            
-            if job:
-                progress = 30.0 + (i + 1) / len(forged_data) * 20.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged signatures... {i+1}/{len(forged_data)}")
+        # Skip forged signature processing - not used for owner identification training
+        # (Forgery detection is disabled, so we only process genuine signatures)
 
         if job:
             job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
@@ -875,12 +865,8 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
 
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
-            if job:
-                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+        # Skip forged signature processing - not used for owner identification training
+        # (Forgery detection is disabled, so we only process genuine signatures)
 
         # Prepare training data
         training_data = {
