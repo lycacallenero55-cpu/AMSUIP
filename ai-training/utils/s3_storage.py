@@ -194,3 +194,20 @@ def object_exists(s3_key: str) -> bool:
     except Exception:
         return False
 
+
+def count_objects_with_prefix(prefix: str) -> int:
+    """Count S3 objects under a given prefix using ListObjectsV2 pagination."""
+    paginator = _s3.get_paginator("list_objects_v2")
+    total = 0
+    for page in paginator.paginate(Bucket=settings.S3_BUCKET, Prefix=prefix):
+        total += int(page.get("KeyCount", 0))
+    return total
+
+
+def count_student_signatures(student_id: int | str) -> tuple[int, int]:
+    """Return (genuine_count, forged_count) from S3 by listing prefixes."""
+    sid = str(student_id)
+    genuine = count_objects_with_prefix(f"{sid}/genuine/")
+    forged = count_objects_with_prefix(f"{sid}/forged/")
+    return genuine, forged
+
