@@ -7,13 +7,16 @@ import {
   DropdownMenuSeparator, 
   DropdownMenuTrigger 
 } from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { 
   GraduationCap, 
   User, 
   LogOut, 
   Menu
 } from "lucide-react";
+import { UserCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { useSidebar } from "@/contexts/SidebarContext";
@@ -78,6 +81,9 @@ const Header = ({ isMobile = false }: HeaderProps) => {
     semester: string;
   } | null>(null);
   const isInitialMount = useRef(true);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState<{ first_name: string; last_name: string; email: string }>({ first_name: '', last_name: '', email: '' });
 
   useEffect(() => {
     const fetchRole = async () => {
@@ -195,7 +201,37 @@ const Header = ({ isMobile = false }: HeaderProps) => {
   };
 
   const handleProfileClick = () => {
-    navigate('/profile');
+    // Prefill form from loaded profile
+    setProfileForm({
+      first_name: userProfile?.first_name || '',
+      last_name: userProfile?.last_name || '',
+      email: userProfile?.email || user?.email || ''
+    });
+    setIsProfileOpen(true);
+  };
+
+  const handleProfileSave = async () => {
+    try {
+      if (!user) return;
+      // Update either admin or users table depending on where the profile came from
+      if (userRole === 'admin') {
+        const { error } = await supabase
+          .from('admin')
+          .update({ first_name: profileForm.first_name, last_name: profileForm.last_name })
+          .eq('id', user.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('users')
+          .update({ first_name: profileForm.first_name, last_name: profileForm.last_name })
+          .eq('id', user.id);
+        if (error) throw error;
+      }
+      setUserProfile((prev: any) => ({ ...prev, first_name: profileForm.first_name, last_name: profileForm.last_name, email: profileForm.email }));
+      setIsProfileOpen(false);
+    } catch (e) {
+      console.error('Failed to save profile:', e);
+    }
   };
 
   if (isMobile) {
@@ -264,12 +300,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           {/* User Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
-                <Avatar className="h-8 w-8">
-                  <AvatarFallback className="bg-gradient-primary text-primary-foreground text-sm">
-                    {getUserDisplayName().split(' ').map(n => n[0]).join('').toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
+              <Button variant="ghost" className="relative h-8 w-8 rounded-full p-0 flex items-center justify-center">
+                <UserCircle className="h-6 w-6" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
@@ -284,7 +316,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
                 <span>Profile</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout}>
+              <DropdownMenuItem onClick={() => setIsLogoutConfirmOpen(true)}>
                 <LogOut className="mr-2 h-4 w-4" />
                 <span>Log out</span>
               </DropdownMenuItem>
@@ -292,6 +324,46 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           </DropdownMenu>
         </div>
       </div>
+      {/* Profile Dialog */}
+      <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+        <DialogContent className="max-w-lg w-full">
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-2">
+              <Label htmlFor="first_name">First Name</Label>
+              <Input id="first_name" value={profileForm.first_name} onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <Label htmlFor="last_name">Last Name</Label>
+              <Input id="last_name" value={profileForm.last_name} onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" value={profileForm.email} disabled />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsProfileOpen(false)}>Cancel</Button>
+            <Button onClick={handleProfileSave}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Logout Confirmation Dialog */}
+      <Dialog open={isLogoutConfirmOpen} onOpenChange={setIsLogoutConfirmOpen}>
+        <DialogContent className="max-w-sm w-full">
+          <DialogHeader>
+            <DialogTitle>Confirm Logout</DialogTitle>
+          </DialogHeader>
+          <p>Are you sure you want to log out?</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsLogoutConfirmOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleLogout}>Log Out</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 };
