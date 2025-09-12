@@ -237,9 +237,9 @@ const AllowedTermsContent = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr className="text-xs text-black h-8">
-                <th scope="col" className="px-3 py-2 text-left font-bold">Academic Year</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold">Semester</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold"></th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Academic Year</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Semester</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">

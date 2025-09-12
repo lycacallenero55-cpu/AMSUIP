@@ -557,12 +557,12 @@ const ExcuseApplicationContent = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr className="text-xs text-black h-8">
-                <th scope="col" className="px-3 py-2 text-left font-bold">Name</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold">ID</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold">Date of Session</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold">Documentation</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold">Status</th>
-                <th scope="col" className="px-3 py-2 text-left font-bold"></th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Name</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">ID</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Date of Session</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Documentation</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Status</th>
+                <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
