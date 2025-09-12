@@ -112,18 +112,19 @@ async def delete_signature(record_id: int, s3_key: Optional[str] = None):
 
 
 @router.get("/students-with-images")
-async def students_with_images():
+async def students_with_images(summary: bool = False):
     try:
         items = await db_manager.list_students_with_images()
-        for it in items:
-            valid = []
-            for s in it.get("signatures", []):
-                key = _derive_s3_key_from_url(s.get("s3_url", "")) or s.get("s3_key")
-                if key and object_exists(key):
-                    if settings.S3_USE_PRESIGNED_GET:
-                        s["s3_url"] = create_presigned_get(key)
-                    valid.append(s)
-            it["signatures"] = valid
+        if not summary:
+            for it in items:
+                valid = []
+                for s in it.get("signatures", []):
+                    key = _derive_s3_key_from_url(s.get("s3_url", "")) or s.get("s3_key")
+                    if key and object_exists(key):
+                        if settings.S3_USE_PRESIGNED_GET:
+                            s["s3_url"] = create_presigned_get(key)
+                        valid.append(s)
+                it["signatures"] = valid
         return {"items": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List students failed: {str(e)}")

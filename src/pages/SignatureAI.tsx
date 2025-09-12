@@ -1064,7 +1064,7 @@ const SignatureAI = () => {
                       <DropdownMenuItem disabled={isLocked} onClick={async () => {
                         if (isLocked) return;
                         try {
-                          const items = await aiService.listStudentsWithImages();
+                          const items = await aiService.listStudentsWithImages(true);
                           const byId = new Map(allStudents.map(s => [s.id, s]));
                           // Only include students that still have at least 1 signature
                           const toAdd = items

@@ -176,8 +176,10 @@ export class AIService {
     return true;
   }
 
-  async listStudentsWithImages() {
-    const res = await fetch(`${this.baseUrl}/api/uploads/students-with-images`);
+  async listStudentsWithImages(summary: boolean = true) {
+    const url = new URL(`${this.baseUrl}/api/uploads/students-with-images`);
+    if (summary) url.searchParams.set('summary', 'true');
+    const res = await fetch(url.toString());
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'List failed');
     return data.items as Array<{ student_id:number; signatures: Array<{ label:'genuine'|'forged'; s3_url:string }> }>;
