@@ -799,8 +799,9 @@ async def identify_signature_owner(
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
-        has_auth = signature_ai_manager.authenticity_head is not None
-        # Improved unknown thresholding with better outlier detection
+        # Ignore authenticity head for now to prioritize identification
+        has_auth = False
+        # Improved unknown thresholding with better outlier detection (owner identification focus)
         is_unknown = True
         
         # Check if we have a valid prediction first
@@ -840,7 +841,8 @@ async def identify_signature_owner(
             ownership_ok = True  # Accept individual model prediction when global is rejected
             logger.info(f"Accepting individual model prediction due to global rejection")
         
-        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
+        # Ignore authenticity gating
+        auth_ok = False
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
@@ -873,7 +875,8 @@ async def identify_signature_owner(
                 logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
 
         # Compute final match after any adjustments above
-        is_match = (not is_unknown) and (ownership_ok or auth_ok)
+        # Identification-only: match if ownership criteria met and not unknown
+        is_match = (not is_unknown) and ownership_ok
 
         # If we have a valid individual prediction but global was rejected, always match
         if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0 and not is_unknown:
@@ -1346,7 +1349,9 @@ async def verify_signature(
         # Apply robust unknown/match logic
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
-        has_auth = signature_ai_manager.authenticity_head is not None
+        # Ignore authenticity head for now to prioritize identification
+        has_auth = False
+        # Identification-first unknown logic
         is_unknown = (student_confidence < 0.60 and global_score < 0.65)
         result["is_unknown"] = is_unknown
 
@@ -1354,8 +1359,9 @@ async def verify_signature(
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
-        auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
-        is_match = is_correct_student and (not is_unknown) and (ownership_ok or auth_ok)
+        # Ignore authenticity gating
+        auth_ok = False
+        is_match = is_correct_student and (not is_unknown) and ownership_ok
 
         # Mask unknowns in response
         predicted_block = {

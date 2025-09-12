@@ -43,10 +43,10 @@ class Settings:
 
     # Verification Settings
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.7
-    USE_ADAPTIVE_THRESHOLD: bool = True
+    USE_ADAPTIVE_THRESHOLD: bool = False
     
-        # Anti-Spoofing
-    ENABLE_ANTISPOOFING: bool = True
+        # Anti-Spoofing (disabled to prioritize identification flow)
+    ENABLE_ANTISPOOFING: bool = False
     SPOOFING_THRESHOLD: float = 0.6
     
     # Model Versioning
