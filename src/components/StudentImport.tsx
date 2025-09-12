@@ -309,7 +309,10 @@ data = result.data as StudentRecord[];
       setOpen(isOpen);
     }}>
       <DialogTrigger asChild>
-        <Button variant="outline">
+        <Button 
+          variant="outline"
+          className="border-blue-600 text-blue-600 hover:bg-blue-50"
+        >
           <Download className="w-4 h-4 mr-2" />
           Import
         </Button>
