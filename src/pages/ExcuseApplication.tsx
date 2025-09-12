@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from "@/components/ui/label";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { UnsavedChangesDialog } from "@/components/UnsavedChangesDialog";
-import { Loader2 } from "lucide-react";
 import PageWrapper from "@/components/PageWrapper";
 
 import { 
@@ -26,7 +25,6 @@ import {
   Eye,
   EyeOff,
   FileImage,
-  Loader2,
   MoreHorizontal,
   Plus,
   Search,
@@ -35,7 +33,13 @@ import {
   User,
   ChevronsUp,
   ChevronsDown,
-  ChevronsUpDown
+  ChevronsUpDown,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  ZoomIn,
+  ZoomOut,
+  Loader2
 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -644,17 +648,8 @@ const ExcuseApplicationContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
-              {loading ? (
-                <tr className="h-8">
-                  <td colSpan={6} className="px-3 py-1 text-center">
-                    <div className="flex justify-center">
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">Loading applications...</p>
-                  </td>
-                </tr>
-              ) : filteredExcuses.length === 0 ? (
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+              {loading ? null : filteredExcuses.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
                     {excuses.length === 0 
@@ -663,89 +658,96 @@ const ExcuseApplicationContent = () => {
                   </td>
                 </tr>
               ) : (
-                filteredExcuses.map((excuse) => (
-                  <tr key={excuse.id} className="hover:bg-gray-50 h-8">
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      <div className="font-medium">
-                        {excuse.students?.firstname} {excuse.students?.surname}
-                      </div>
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      {excuse.students?.student_id}
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      {excuse.documentation_url ? (
-                        <div 
-                          className="w-12 h-8 bg-gray-100 rounded border cursor-pointer overflow-hidden"
-                          onClick={() => {
-                            setPreviewImageUrl(excuse.documentation_url!);
-                            setIsImagePreviewOpen(true);
-                          }}
-                        >
-                          <img 
-                            src={excuse.documentation_url} 
-                            alt="Excuse letter preview" 
-                            className="w-full h-full object-cover hover:opacity-80 transition-opacity"
-                          />
+                <>
+                  {filteredExcuses.map((excuse) => (
+                    <tr key={excuse.id} className="hover:bg-gray-50 h-8">
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        <div className="font-medium">
+                          {excuse.students?.firstname} {excuse.students?.surname}
                         </div>
-                      ) : (
-                        <span className="text-sm text-gray-400">No attachment</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap">
-                      {getStatusDisplay(excuse.status)}
-                    </td>
-                    <td className="px-3 py-1 whitespace-nowrap text-right">
-                      <div className="flex gap-1 justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            setSelectedExcuse(excuse);
-                            setViewMode('view');
-                            setIsViewOpen(true);
-                          }}
-                        >
-                          <Eye className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            setSelectedExcuse(excuse);
-                            setViewMode('edit');
-                            setIsEditMode(true);
-                            setFormData({
-                              student_id: excuse.student_id?.toString() || '',
-                              session_id: excuse.session_id?.toString() || '',
-                              absence_date: excuse.absence_date || '',
-                              documentation_url: excuse.documentation_url || ''
-                            });
-                            setIsFormOpen(true);
-                          }}
-                        >
-                          <Edit className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            setDeleteTarget(excuse.id);
-                            setShowDeleteConfirm(true);
-                          }}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        {excuse.students?.student_id}
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        {format(new Date(excuse.absence_date), 'MMM d, yyyy')}
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        {excuse.documentation_url ? (
+                          <div 
+                            className="w-12 h-8 bg-gray-100 rounded border cursor-pointer overflow-hidden"
+                            onClick={() => {
+                              setPreviewImageUrl(excuse.documentation_url!);
+                              setIsImagePreviewOpen(true);
+                            }}
+                          >
+                            <img 
+                              src={excuse.documentation_url} 
+                              alt="Excuse letter preview" 
+                              className="w-full h-full object-cover hover:opacity-80 transition-opacity"
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-400">No attachment</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap">
+                        {getStatusDisplay(excuse.status)}
+                      </td>
+                      <td className="px-3 py-1 whitespace-nowrap text-right">
+                        <div className="flex gap-1 justify-end">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => {
+                              setSelectedExcuse(excuse);
+                              setViewMode('view');
+                              setIsViewOpen(true);
+                            }}
+                          >
+                            <Eye className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => {
+                              setSelectedExcuse(excuse);
+                              setViewMode('edit');
+                              setIsEditMode(true);
+                              setFormData({
+                                student_id: excuse.student_id?.toString() || '',
+                                session_id: excuse.session_id?.toString() || '',
+                                absence_date: excuse.absence_date || '',
+                                documentation_url: excuse.documentation_url || ''
+                              });
+                              setIsFormOpen(true);
+                            }}
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => {
+                              setDeleteTarget(excuse.id);
+                              setShowDeleteConfirm(true);
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredExcuses.length < 10 && Array.from({ length: 10 - filteredExcuses.length }).map((_, idx) => (
+                    <tr key={`filler-${idx}`} className="h-8">
+                      <td colSpan={6} className="px-3 py-1">&nbsp;</td>
+                    </tr>
+                  ))}
+                </>
               )}
             </tbody>
           </table>

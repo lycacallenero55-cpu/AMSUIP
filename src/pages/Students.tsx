@@ -562,17 +562,8 @@ const Students = () => {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 text-xs text-black">
-                {loading ? (
-                <tr className="h-8">
-                  <td colSpan={4} className="px-3 py-1 text-center">
-                    <div className="flex justify-center">
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">Loading students...</p>
-                  </td>
-                </tr>
-                ) : students.length === 0 ? (
+              <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+                {loading ? null : students.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={4} className="px-3 py-1 text-center text-sm text-gray-500">
                     {pagination.totalCount === 0 
@@ -591,30 +582,37 @@ const Students = () => {
                   </td>
                 </tr>
                 ) : (
-                  sortedStudents.map((student) => (
-                    <tr key={student.id} className="hover:bg-gray-50 h-8">
-                      <td className="px-3 py-1 whitespace-nowrap">
-                        <div>
-                          <div className="font-medium">
-                            {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
+                  <>
+                    {sortedStudents.map((student) => (
+                      <tr key={student.id} className="hover:bg-gray-50 h-8">
+                        <td className="px-3 py-1 whitespace-nowrap">
+                          <div>
+                            <div className="font-medium">
+                              {student.surname}, {student.firstname}{student.middlename ? ' ' + student.middlename.charAt(0) + '.' : ''}
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-1 whitespace-nowrap">
-                        {student.student_id}
-                      </td>
-                      <td className="px-3 py-1 whitespace-nowrap">
-                        <span className="truncate max-w-[120px] inline-block">{student.program}</span>
-                      </td>
-                      <td className="px-3 py-1 whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          <span>{student.year}</span>
-                          <span className="text-gray-300">•</span>
-                          <span> {student.section || 'N/A'}</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="px-3 py-1 whitespace-nowrap">
+                          {student.student_id}
+                        </td>
+                        <td className="px-3 py-1 whitespace-nowrap">
+                          <span className="truncate max-w-[120px] inline-block">{student.program}</span>
+                        </td>
+                        <td className="px-3 py-1 whitespace-nowrap">
+                          <div className="flex items-center gap-1">
+                            <span>{student.year}</span>
+                            <span className="text-gray-300">•</span>
+                            <span> {student.section || 'N/A'}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {sortedStudents.length < 10 && Array.from({ length: 10 - sortedStudents.length }).map((_, idx) => (
+                      <tr key={`filler-${idx}`} className="h-8">
+                        <td colSpan={4} className="px-3 py-1">&nbsp;</td>
+                      </tr>
+                    ))}
+                  </>
                 )}
               </tbody>
             </table>
