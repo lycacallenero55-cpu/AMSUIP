@@ -172,8 +172,8 @@ def train_on_gpu(training_data_key, job_id, student_id):
             'forged': forged_images
         }}
     
-    # Train models
-    result = ai_model.train_models(processed_data, epochs=50)
+    # Train classification-only model for owner identification
+    result = ai_model.train_classification_only(processed_data, epochs=50)
     
     # Save models
     model_path = f'/tmp/models_{job_id}'

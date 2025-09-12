@@ -140,11 +140,8 @@ class GlobalSignatureVerificationModel:
                     all_pairs.append([genuine_images[i], genuine_images[j]])
                     all_labels.append(1)  # Similar
             
-            # Generate negative pairs (genuine-forged)
-            for i in range(min(len(genuine_images), len(forged_images))):
-                for j in range(min(2, len(forged_images))):
-                    all_pairs.append([genuine_images[i], forged_images[j]])
-                    all_labels.append(0)  # Different
+            # Skip negative pairs with forged signatures - not used for owner identification
+            # (Forgery detection is disabled, so we only use genuine signatures)
             
             # Generate cross-student negative pairs
             for other_student_id, other_data in all_student_data.items():
