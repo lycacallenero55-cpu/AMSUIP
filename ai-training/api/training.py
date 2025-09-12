@@ -176,9 +176,10 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=150)
-    # For individual helper, save embedding model only (no single-class classification)
+    # Create proper classification head for identification
     _X, _y_student, _y_auth = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
+    local_manager.create_classification_head()
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
@@ -194,7 +195,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         s3_urls = {}
         s3_keys = {}
         for model_type, file_info in uploaded_files.items():
-            if model_type == 'embedding':
+            if model_type in ['embedding', 'classification']:
                 s3_urls[model_type] = file_info['url']
                 s3_keys[model_type] = file_info['key']
             
@@ -214,8 +215,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             s3_urls = {}
             s3_keys = {}
             for model_type, file_info in uploaded_files.items():
-                s3_urls[model_type] = file_info['url']
-                s3_keys[model_type] = file_info['key']
+                if model_type in ['embedding', 'classification']:
+                    s3_urls[model_type] = file_info['url']
+                    s3_keys[model_type] = file_info['key']
                 
             logger.info(f"✅ Individual model {model_uuid} saved with direct S3 saving")
             
@@ -228,6 +230,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
         model_files = [
             (f"{base_path}_embedding.keras", "embedding"),
+            (f"{base_path}_classification.keras", "classification"),
         ]
         s3_urls = {}
         s3_keys = {}
@@ -245,9 +248,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     payload = {
         "student_id": int(student["id"]),
         # Store classification model as primary path for student identification
-        "model_path": s3_urls.get("embedding", ""),
+        "model_path": s3_urls.get("classification", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "s3_key": s3_keys.get("embedding", ""),
+        "s3_key": s3_keys.get("classification", ""),
         "model_uuid": model_uuid,
         "status": "completed",
         "sample_count": len(genuine_arrays) + len(forged_arrays),
