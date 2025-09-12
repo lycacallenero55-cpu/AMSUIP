@@ -188,6 +188,7 @@ export interface TrainingFile {
   id?: number; // signature record id (DB)
   s3Key?: string;
   label?: 'genuine' | 'forged';
+  placeholder?: boolean;
 }
 
 export interface StudentTrainingCard {
@@ -196,6 +197,9 @@ export interface StudentTrainingCard {
   genuineFiles: TrainingFile[];
   forgedFiles: TrainingFile[];
   isExpanded: boolean;
+  genuineCount?: number;
+  forgedCount?: number;
+  isFetchingImages?: boolean;
 }
 
 // Utility types

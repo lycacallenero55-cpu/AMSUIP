@@ -679,10 +679,10 @@ const SignatureAI = () => {
       const studentIds: string[] = [];
       
       studentCards.forEach(card => {
-        if (card.student && hasUploadedImages(card)) {
+        if (card.student && ((card.genuineCount ?? card.genuineFiles.length) + (card.forgedCount ?? card.forgedFiles.length)) > 0) {
           studentIds.push(card.student.student_id);
-          allGenuineFiles.push(...card.genuineFiles.map(f => f.file));
-          allForgedFiles.push(...card.forgedFiles.map(f => f.file));
+          allGenuineFiles.push(...card.genuineFiles.filter(f => !f.placeholder).map(f => f.file));
+          allForgedFiles.push(...card.forgedFiles.filter(f => !f.placeholder).map(f => f.file));
         }
       });
 
@@ -1066,16 +1066,18 @@ const SignatureAI = () => {
                         try {
                           const items = await aiService.listStudentsWithImages();
                           const byId = new Map(allStudents.map(s => [s.id, s]));
+                          // Only include students that still have at least 1 signature
                           const toAdd = items
-                            .map(it => byId.get(it.student_id))
-                            .filter((s): s is Student => Boolean(s));
+                            .filter(it => (it.signatures?.length || 0) > 0)
+                            .map(it => ({ student: byId.get(it.student_id), count: it.signatures.length }))
+                            .filter((x) => Boolean(x.student)) as Array<{ student: Student; count: number }>;
                           // Add cards for these students
                           let addedIds: number[] = [];
                           setStudentCards(prev => {
                             const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
                             const newCards = toAdd
-                              .filter(s => !existingIds.has(s.id))
-                              .map(s => ({ id: `${Date.now()}-${s.id}`, student: s, genuineFiles: [], forgedFiles: [], isExpanded: true }));
+                              .filter(x => !existingIds.has(x.student.id))
+                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: undefined, forgedCount: undefined }));
                             addedIds = newCards.map(c => (c.student as any).id);
                             const merged = [...prev, ...newCards];
                             // Remove placeholder empty card if real students exist
@@ -1085,19 +1087,54 @@ const SignatureAI = () => {
                           // For each added student, load their images and populate previews
                           for (const sid of addedIds) {
                             try {
-                              const persisted = await aiService.listSignatures(sid);
+                              // Set counts immediately and show placeholders
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  const mapRec = (rec: any) => ({ file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label });
-                                  return {
-                                    ...c,
-                                    genuineFiles: persisted.filter(x => x.label === 'genuine').map(mapRec),
-                                    forgedFiles: persisted.filter(x => x.label === 'forged').map(mapRec),
-                                  };
+                                  return { ...c, genuineCount: 0, forgedCount: 0, isFetchingImages: true };
                                 }
                                 return c;
                               }));
-                            } catch {}
+                              const persisted = await aiService.listSignatures(sid);
+                              const genuines = persisted.filter(x => x.label === 'genuine');
+                              const forgeds = persisted.filter(x => x.label === 'forged');
+                              // Prime placeholders so users see counts immediately
+                              setStudentCards(prev => prev.map(c => {
+                                if (c.student && c.student.id === sid) {
+                                  const gPlaceholders = genuines.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  const fPlaceholders = forgeds.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders, genuineCount: genuines.length, forgedCount: forgeds.length };
+                                }
+                                return c;
+                              }));
+                              // Stream in images incrementally
+                              for (const rec of persisted) {
+                                try {
+                                  const mapped = { file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label } as any;
+                                  setStudentCards(prev => prev.map(c => {
+                                    if (c.student && c.student.id === sid) {
+                                      if (rec.label === 'genuine') {
+                                        // replace first placeholder or append
+                                        const next = [...c.genuineFiles];
+                                        const idx = next.findIndex(x => (x as any).placeholder);
+                                        if (idx >= 0) next[idx] = mapped; else next.push(mapped);
+                                        return { ...c, genuineFiles: next };
+                                      } else {
+                                        const next = [...c.forgedFiles];
+                                        const idx = next.findIndex(x => (x as any).placeholder);
+                                        if (idx >= 0) next[idx] = mapped; else next.push(mapped);
+                                        return { ...c, forgedFiles: next };
+                                      }
+                                    }
+                                    return c;
+                                  }));
+                                } catch {}
+                              }
+                              // Mark fetching complete
+                              setStudentCards(prev => prev.map(c => (c.student && c.student.id === sid) ? { ...c, isFetchingImages: false } : c));
+                            } catch {
+                              // Ensure removed students (no images) are filtered out on any failure
+                              setStudentCards(prev => prev.filter(c => !(c.student && c.student.id === sid)));
+                            }
                           }
                         } catch (e) {
                           toast({ title: 'Error', description: 'Failed to load students with images', variant: 'destructive' });
@@ -1920,12 +1957,18 @@ const SignatureAI = () => {
                                     { kind: 'training', setType: trainingImagesSet, cardId: card.id }
                                   )}
                                 >
-                                  <img
-                                    src={item.preview}
-                                    alt={item.label ? `${item.label} sample ${index + 1}` : `Sample ${index + 1}`}
-                                    className="absolute inset-0 w-full h-full object-cover hover:opacity-80 transition-opacity"
-                                    loading="lazy"
-                                  />
+                                  {item.placeholder ? (
+                                    <div className="absolute inset-0 w-full h-full flex items-center justify-center bg-gray-100 text-[10px] text-muted-foreground text-center p-1">
+                                      Fetching {trainingImagesSet==='genuine' ? (card.genuineCount ?? card.genuineFiles.length) : (card.forgedCount ?? card.forgedFiles.length)} signatures, please wait...
+                                    </div>
+                                  ) : (
+                                    <img
+                                      src={item.preview}
+                                      alt={item.label ? `${item.label} sample ${index + 1}` : `Sample ${index + 1}`}
+                                      className="absolute inset-0 w-full h-full object-cover hover:opacity-80 transition-opacity"
+                                      loading="lazy"
+                                    />
+                                  )}
                                   <button
                                     type="button"
                                     className="absolute top-1 right-1 bg-black/50 hover:bg-black/70 text-white rounded p-1 opacity-0 group-hover/itm:opacity-100 transition-opacity"

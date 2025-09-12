@@ -2,6 +2,13 @@
 
 AI-powered signature verification training backend using TensorFlow and Supabase.
 
+## Important: Current Mode (Identification-First)
+
+- The system is currently configured to prioritize identifying the most likely owner of a submitted signature.
+- Forgery/anti-spoofing checks are disabled for now to focus engineering time on ownership detection accuracy.
+- Verification results will return the predicted student and a confidence score based on a fusion of global embeddings and per-student classification.
+- Image uploads are permanently stored in AWS S3, and re-uploads of the same image are allowed (no duplicate blocking).
+
 ## Features
 
 - **Signature Verification Training**: Train Siamese neural networks for signature verification
@@ -9,6 +16,14 @@ AI-powered signature verification training backend using TensorFlow and Supabase
 - **Supabase Integration**: Store models and metadata in Supabase
 - **RESTful API**: FastAPI-based API for easy integration
 - **Image Processing**: Automatic image validation and preprocessing
+
+### Identification Focus Details
+
+- Owner identification uses a hybrid approach:
+  - Global model embeddings to compare the submitted signature against learned student centroids
+  - Per-student classification head (when available) to predict the best matching class
+  - Fusion of both signals to determine the most likely owner and confidence
+- Unknown gating is conservative but does not use authenticity checks while the feature is disabled.
 
 ## Setup
 
@@ -50,8 +65,18 @@ python main.py
 - `GET /api/training/models` - Get all trained models
 
 ### Verification
-- `POST /api/verification/verify` - Verify a signature
-- `GET /api/verification/models/{student_id}` - Get available models
+- `POST /api/verification/identify` - Identify the most likely owner of a signature (primary endpoint in current mode)
+  - Request form-data: `test_file` (image)
+  - Response includes: `predicted_student { id, name }`, `confidence`, `score`, `is_unknown`
+- `POST /api/verification/verify` - Verify a signature against a specific student (optional)
+  - Request form-data: `test_file` (image), optional `student_id`
+  - Response includes: `predicted_student`, `is_match`, `confidence`, `is_unknown`
+
+### Uploads & Storage
+- `POST /api/uploads/signature` - Upload a signature image for a student
+  - Form fields: `student_id`, `label` (`genuine`|`forged`), `file`
+  - Behavior: uploads are stored permanently in S3; duplicate images are allowed
+- `GET /api/uploads/list?student_id=...` - List persisted signatures for previews
 
 ## Usage
 
@@ -96,3 +121,16 @@ Edit `.env` file to configure:
 - Supabase account
 - Minimum 4GB RAM
 - CPU with AVX support (recommended)
+
+## Configuration Notes
+
+- Identification-first mode is controlled via environment variables in `.env` (defaults shown):
+  - `ENABLE_ANTISPOOFING=false`
+  - `USE_ADAPTIVE_THRESHOLD=false`
+- S3 storage must be configured; example keys:
+  - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, `S3_PUBLIC_BASE_URL`, `S3_USE_PRESIGNED_GET=true`
+
+## Roadmap
+
+- Re-enable and refine forgery/anti-spoofing once identification accuracy is solid and time permits.
+- Improve centroid caching and model warm-loading for faster first request.
