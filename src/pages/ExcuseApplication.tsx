@@ -484,22 +484,11 @@ const ExcuseApplicationContent = () => {
   return (
     <div className="px-6 py-4">
       <div className="mb-3">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-1">
-          <div>
-            <h1 className="text-2xl font-bold text-education-navy">EXCUSE APPLICATIONS</h1>
-            <p className="text-sm text-muted-foreground">
-              Review and manage student excuse applications for absences
-            </p>
-          </div>
-          <div className="mt-2 md:mt-0">
-            <Button 
-              className="bg-gradient-primary shadow-glow h-9"
-              onClick={() => setIsFormOpen(true)}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New Application
-            </Button>
-          </div>
+        <div>
+          <h1 className="text-2xl font-bold text-education-navy">EXCUSE APPLICATIONS</h1>
+          <p className="text-sm text-muted-foreground">
+            Review and manage student excuse applications for absences
+          </p>
         </div>
       </div>
       
@@ -507,6 +496,14 @@ const ExcuseApplicationContent = () => {
       <div className="bg-white rounded-lg shadow-sm p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-semibold text-education-navy">List of Excuse Applications</h3>
+          <Button 
+            variant="outline"
+            className="border-blue-600 text-blue-600 hover:bg-blue-50 h-8"
+            onClick={() => setIsFormOpen(true)}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            New Application
+          </Button>
         </div>
         
         {/* Big space below List of Excuse Applications label */}
