@@ -821,7 +821,9 @@ async def identify_signature_owner(
         else:
             # No valid prediction from global model - rely on individual model
             individual_prediction = result.get("predicted_student_id", 0)
-            if individual_prediction and individual_prediction > 0 and student_confidence >= 0.30:
+            if individual_prediction and individual_prediction > 0:
+                # If we have an individual prediction, use it even with low confidence
+                # since the global model was rejected
                 is_unknown = False
                 logger.info(f"Using individual model prediction: {individual_prediction} (global rejected)")
             else:
@@ -832,6 +834,12 @@ async def identify_signature_owner(
         # Determine match logic for identify: do not gate on authenticity if head absent
         # Start with baseline ownership_ok; we'll update it below if models agree
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        
+        # If global model was rejected but we have individual prediction, be more lenient
+        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0:
+            ownership_ok = True  # Accept individual model prediction when global is rejected
+            logger.info(f"Accepting individual model prediction due to global rejection")
+        
         auth_ok = bool(result.get("is_genuine", False)) if has_auth else False
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
