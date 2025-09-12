@@ -390,7 +390,9 @@ const SignatureAI = () => {
   };
 
   const canTrainModel = () => {
-    return studentCards.some(card => card.student !== null && hasUploadedImages(card));
+    return studentCards.some(card => card.student !== null && (
+      (card.genuineCount ?? 0) + (card.forgedCount ?? 0) > 0 || hasUploadedImages(card)
+    ));
   };
 
   const getTotalTrainingData = () => {
@@ -1086,21 +1088,23 @@ const SignatureAI = () => {
                           // For each added student, load their images and populate previews
                           for (const sid of addedIds) {
                             try {
-                              // Set counts immediately and show placeholders (do not fetch images now)
+                              // Ensure counts are preserved and show placeholders based on counts (do not fetch images now)
+                              const summary = (items as any[]).find((it:any) => it.student_id === sid) as any;
+                              const gCount = (summary?.genuine_count ?? 0);
+                              const fCount = (summary?.forged_count ?? 0);
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  return { ...c, genuineCount: 0, forgedCount: 0, isFetchingImages: true };
+                                  return { ...c, genuineCount: gCount, forgedCount: fCount, isFetchingImages: true };
                                 }
                                 return c;
                               }));
-                              const summary = (items as any[]).find((it:any) => it.student_id === sid) as any;
-                              const genuines = Array.from({ length: (summary?.genuine_count || 0) });
-                              const forgeds = Array.from({ length: (summary?.forged_count || 0) });
+                              const genuines = Array.from({ length: gCount });
+                              const forgeds = Array.from({ length: fCount });
                               // Prime placeholders so users see counts immediately
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  const gPlaceholders = Array.from({ length: c.genuineCount ?? genuines.length }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  const fPlaceholders = Array.from({ length: c.forgedCount ?? forgeds.length }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  const gPlaceholders = Array.from({ length: c.genuineCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  const fPlaceholders = Array.from({ length: c.forgedCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
                                   return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders };
                                 }
                                 return c;
