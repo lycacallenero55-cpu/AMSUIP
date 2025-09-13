@@ -1068,56 +1068,66 @@ const SignatureAI = () => {
                         try {
                           const items = await aiService.listStudentsWithImages(true);
                           const byId = new Map(allStudents.map(s => [s.id, s]));
-                          // Always display students with Supabase records; counts reflect summary
-                          const toAdd = (items as any[])
-                            .map(it => ({ student: byId.get(it.student_id), genuine_count: it.genuine_count || 0, forged_count: it.forged_count || 0 }))
-                            .filter((x) => Boolean(x.student)) as Array<{ student: Student; genuine_count: number; forged_count: number }>;
+                          
+                          // Filter out students with missing S3 images
+                          const validItems = [];
+                          for (const item of items) {
+                            if (item.student_id && byId.has(item.student_id)) {
+                              // Check if student has actual images (not just DB records)
+                              const student = byId.get(item.student_id);
+                              if (student && (item.genuine_count > 0 || item.forged_count > 0)) {
+                                validItems.push({
+                                  student: student,
+                                  genuine_count: item.genuine_count || 0,
+                                  forged_count: item.forged_count || 0
+                                });
+                              }
+                            }
+                          }
+                          
+                          if (validItems.length === 0) {
+                            toast({ 
+                              title: 'No Students Found', 
+                              description: 'No students with valid signature images found. Please upload signatures first.',
+                              variant: 'destructive' 
+                            });
+                            return;
+                          }
+                          
                           // Add cards for these students
                           let addedIds: number[] = [];
                           setStudentCards(prev => {
                             const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
-                            const newCards = toAdd
+                            const newCards = validItems
                               .filter(x => !existingIds.has(x.student.id))
-                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: x.genuine_count, forgedCount: x.forged_count }));
+                              .map(x => ({ 
+                                id: `${Date.now()}-${x.student.id}`, 
+                                student: x.student, 
+                                genuineFiles: [], 
+                                forgedFiles: [], 
+                                isExpanded: true, 
+                                genuineCount: x.genuine_count, 
+                                forgedCount: x.forged_count 
+                              }));
                             addedIds = newCards.map(c => (c.student as any).id);
                             const merged = [...prev, ...newCards];
                             // Remove placeholder empty card if real students exist
                             const hasReal = merged.some(c => !!c.student);
                             return hasReal ? merged.filter(c => c.student) : merged;
                           });
-                          // For each added student, load their images and populate previews
-                          for (const sid of addedIds) {
-                            try {
-                              // Ensure counts are preserved and show placeholders based on counts (do not fetch images now)
-                              const summary = (items as any[]).find((it:any) => it.student_id === sid) as any;
-                              const gCount = (summary?.genuine_count ?? 0);
-                              const fCount = (summary?.forged_count ?? 0);
-                              setStudentCards(prev => prev.map(c => {
-                                if (c.student && c.student.id === sid) {
-                                  return { ...c, genuineCount: gCount, forgedCount: fCount, isFetchingImages: true };
-                                }
-                                return c;
-                              }));
-                              const genuines = Array.from({ length: gCount });
-                              const forgeds = Array.from({ length: fCount });
-                              // Prime placeholders so users see counts immediately
-                              setStudentCards(prev => prev.map(c => {
-                                if (c.student && c.student.id === sid) {
-                                  const gPlaceholders = Array.from({ length: c.genuineCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  const fPlaceholders = Array.from({ length: c.forgedCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders };
-                                }
-                                return c;
-                              }));
-                              // Defer actual image fetching to training phase
-                              setStudentCards(prev => prev.map(c => (c.student && c.student.id === sid) ? { ...c, isFetchingImages: true } : c));
-                            } catch {
-                              // Ensure removed students (no images) are filtered out on any failure
-                              setStudentCards(prev => prev.filter(c => !(c.student && c.student.id === sid)));
-                            }
-                          }
+                          
+                          toast({ 
+                            title: 'Students Loaded', 
+                            description: `Loaded ${validItems.length} students with signature images` 
+                          });
+                          
                         } catch (e) {
-                          toast({ title: 'Error', description: 'Failed to load students with images', variant: 'destructive' });
+                          console.error('Error loading students with images:', e);
+                          toast({ 
+                            title: 'Error', 
+                            description: 'Failed to load students with images. Please check your connection and try again.',
+                            variant: 'destructive' 
+                          });
                         }
                       }}>Load students with images</DropdownMenuItem>
                       <DropdownMenuItem disabled={isLocked} onClick={async () => {
