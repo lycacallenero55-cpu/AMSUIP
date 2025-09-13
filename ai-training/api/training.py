@@ -247,40 +247,57 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
                 cleanup_local_file(file_path)
         cleanup_local_file(f"{base_path}_mappings.json")
 
-    # Record in DB (with optional global_model_id linkage)
-    payload = {
-        "student_id": int(student["id"]),
-        # Store classification model as primary path for student identification
-        "model_path": s3_urls.get("classification", ""),
-        "embedding_model_path": s3_urls.get("embedding", ""),
-        "s3_key": s3_keys.get("classification", ""),
-        "model_uuid": model_uuid,
-        "status": "completed",
-        "sample_count": len(genuine_arrays) + len(forged_arrays),
-        "genuine_count": len(genuine_arrays),
-        "forged_count": len(forged_arrays),
-        "training_date": datetime.utcnow().isoformat(),
-        "accuracy": None,
-        "training_metrics": {
-            'model_type': 'ai_signature_verification_individual',
-            'architecture': 'signature_embedding_network',
-            'epochs_trained': None,
-            'final_accuracy': None,
-            'val_accuracy': None,
-            'embedding_dimension': local_manager.embedding_dim,
-        }
-    }
-    if global_model_id is not None:
-        payload["global_model_id"] = int(global_model_id)
-    try:
-        model_record = await db_manager.create_trained_model(payload)
-    except Exception as e:
-        # If the column global_model_id doesn't exist yet, retry without it
-        if "global_model_id" in payload:
-            payload.pop("global_model_id", None)
+        # Atomic DB write - only create record after successful S3 upload
+        try:
+            # Verify S3 uploads were successful
+            for model_type, file_info in uploaded_files.items():
+                if 'key' in file_info:
+                    from utils.s3_storage import object_exists
+                    if not object_exists(file_info['key']):
+                        raise Exception(f"S3 upload verification failed for {model_type}")
+            
+            # Record in DB (with optional global_model_id linkage)
+            payload = {
+                "student_id": int(student["id"]),
+                # Store classification model as primary path for student identification
+                "model_path": s3_urls.get("classification", ""),
+                "embedding_model_path": s3_urls.get("embedding", ""),
+                "s3_key": s3_keys.get("classification", ""),
+                "model_uuid": model_uuid,
+                "status": "completed",
+                "sample_count": len(genuine_arrays) + len(forged_arrays),
+                "genuine_count": len(genuine_arrays),
+                "forged_count": len(forged_arrays),
+                "training_date": datetime.utcnow().isoformat(),
+                "accuracy": None,
+                "training_metrics": {
+                    'model_type': 'ai_signature_verification_individual',
+                    'architecture': 'signature_embedding_network',
+                    'epochs_trained': None,
+                    'final_accuracy': None,
+                    'val_accuracy': None,
+                    'embedding_dimension': local_manager.embedding_dim,
+                }
+            }
+            if global_model_id is not None:
+                payload["global_model_id"] = int(global_model_id)
+            
             model_record = await db_manager.create_trained_model(payload)
-        else:
-            raise
+            logger.info(f"✅ Atomic DB write successful for student {student['id']}")
+            
+        except Exception as e:
+            logger.error(f"❌ Atomic DB write failed for student {student['id']}: {e}")
+            # If the column global_model_id doesn't exist yet, retry without it
+            if "global_model_id" in payload:
+                payload.pop("global_model_id", None)
+                try:
+                    model_record = await db_manager.create_trained_model(payload)
+                    logger.info(f"✅ Atomic DB write successful (retry) for student {student['id']}")
+                except Exception as retry_error:
+                    logger.error(f"❌ Atomic DB write retry failed for student {student['id']}: {retry_error}")
+                    raise
+            else:
+                raise
 
     # Reduce pauses by clearing TF session and triggering GC
     try:
