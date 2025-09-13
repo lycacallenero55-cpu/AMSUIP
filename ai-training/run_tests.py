@@ -1,92 +1,71 @@
 #!/usr/bin/env python3
 """
-Test runner for AI training system
+Test Runner for Signature AI System
+Runs all tests in sequence
 """
-import os
-import sys
+
+import asyncio
 import subprocess
-import argparse
+import sys
 from pathlib import Path
 
-def run_tests(test_type="all", verbose=False, coverage=False):
-    """Run tests with specified options"""
-    
-    # Change to the ai_training directory
-    os.chdir(Path(__file__).parent)
-    
-    # Base pytest command
-    cmd = ["python", "-m", "pytest"]
-    
-    # Add test directory
-    cmd.append("tests/")
-    
-    # Add verbosity
-    if verbose:
-        cmd.append("-v")
-    
-    # Add coverage
-    if coverage:
-        cmd.append("--cov=ai_training")
-        cmd.append("--cov-report=html")
-        cmd.append("--cov-report=term")
-    
-    # Filter by test type
-    if test_type == "unit":
-        cmd.append("tests/test_s3_supabase_sync.py")
-    elif test_type == "integration":
-        cmd.append("tests/test_training_integration.py")
-    elif test_type == "e2e":
-        cmd.append("tests/test_e2e_workflow.py")
-    elif test_type == "all":
-        pass  # Run all tests
-    else:
-        print(f"Unknown test type: {test_type}")
-        return False
-    
-    # Run tests
-    print(f"Running {test_type} tests...")
-    print(f"Command: {' '.join(cmd)}")
+def run_test(test_name: str, test_script: str) -> bool:
+    """Run a single test script"""
+    print(f"\n{'='*60}")
+    print(f"🧪 Running {test_name}")
+    print(f"{'='*60}")
     
     try:
-        result = subprocess.run(cmd, check=True)
-        print("✅ All tests passed!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Tests failed with exit code {e.returncode}")
+        result = subprocess.run([
+            sys.executable, test_script
+        ], capture_output=True, text=True, timeout=300)
+        
+        print(result.stdout)
+        if result.stderr:
+            print("STDERR:", result.stderr)
+        
+        if result.returncode == 0:
+            print(f"✅ {test_name} PASSED")
+            return True
+        else:
+            print(f"❌ {test_name} FAILED (exit code: {result.returncode})")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print(f"⏰ {test_name} TIMED OUT")
         return False
-    except FileNotFoundError:
-        print("❌ pytest not found. Please install it with: pip install pytest")
+    except Exception as e:
+        print(f"💥 {test_name} ERROR: {e}")
         return False
 
 def main():
-    """Main function"""
-    parser = argparse.ArgumentParser(description="Run AI training system tests")
-    parser.add_argument(
-        "--type", 
-        choices=["unit", "integration", "e2e", "all"], 
-        default="all",
-        help="Type of tests to run"
-    )
-    parser.add_argument(
-        "--verbose", "-v", 
-        action="store_true",
-        help="Verbose output"
-    )
-    parser.add_argument(
-        "--coverage", "-c", 
-        action="store_true",
-        help="Generate coverage report"
-    )
+    """Run all tests"""
+    print("🚀 Signature AI Test Suite")
+    print("=" * 60)
     
-    args = parser.parse_args()
+    tests = [
+        ("Smoke Test", "test_smoke.py"),
+        ("S3-Supabase Sync Test", "test_sync.py"),
+        ("End-to-End Test", "test_end_to_end.py"),
+    ]
     
-    success = run_tests(
-        test_type=args.type,
-        verbose=args.verbose,
-        coverage=args.coverage
-    )
+    passed = 0
+    total = len(tests)
     
-    sys.exit(0 if success else 1)
+    for test_name, test_script in tests:
+        if run_test(test_name, test_script):
+            passed += 1
+    
+    print(f"\n{'='*60}")
+    print(f"📊 Test Results: {passed}/{total} tests passed")
+    print(f"{'='*60}")
+    
+    if passed == total:
+        print("🎉 ALL TESTS PASSED!")
+        sys.exit(0)
+    else:
+        print("❌ SOME TESTS FAILED!")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

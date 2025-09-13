@@ -194,6 +194,43 @@ async def sync_supabase_with_s3(dry_run: bool = True) -> Dict:
     """
     return await sync_manager.sync_supabase_with_s3(dry_run)
 
+async def cleanup_orphaned_records() -> Dict:
+    """
+    Clean up orphaned database records that reference missing S3 objects
+    """
+    try:
+        logger.info("Starting orphaned records cleanup...")
+        
+        # Get all signature records
+        all_signatures = await db_manager.list_all_signatures()
+        orphaned_count = 0
+        cleaned_count = 0
+        
+        for signature in all_signatures:
+            s3_key = signature.get('s3_key')
+            if not s3_key:
+                continue
+                
+            # Check if S3 object exists
+            if not object_exists(s3_key):
+                orphaned_count += 1
+                if not dry_run:
+                    # Delete the orphaned record
+                    success = await db_manager.delete_signature(signature.get('id'))
+                    if success:
+                        cleaned_count += 1
+                        logger.info(f"Cleaned orphaned record {signature.get('id')} for student {signature.get('student_id')}")
+        
+        return {
+            'orphaned_records_found': orphaned_count,
+            'records_cleaned': cleaned_count,
+            'dry_run': dry_run
+        }
+        
+    except Exception as e:
+        logger.error(f"Orphaned records cleanup failed: {e}")
+        return {'error': str(e)}
+
 async def get_students_with_missing_images() -> List[Dict]:
     """Get students with missing S3 images"""
     return await sync_manager.get_students_with_missing_images()
