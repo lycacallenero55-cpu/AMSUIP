@@ -562,7 +562,7 @@ const Students = () => {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+              <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
                 {loading ? null : students.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={4} className="px-3 py-1 text-center text-sm text-gray-500">

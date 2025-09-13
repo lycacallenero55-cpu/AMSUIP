@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { User, Mail, Calendar, Shield, Edit, Eye, EyeOff } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -26,14 +25,12 @@ const Profile = () => {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // Edit Profile Dialog State
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  // Form State
   const [editFirstName, setEditFirstName] = useState('');
   const [editLastName, setEditLastName] = useState('');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   
-  // Change Password Dialog State
-  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  // Change Password State
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -74,12 +71,13 @@ const Profile = () => {
     fetchUserProfile();
   }, [user]);
 
-  // Handle Edit Profile
-  const handleEditProfile = () => {
-    setEditFirstName(userProfile?.first_name || '');
-    setEditLastName(userProfile?.last_name || '');
-    setEditProfileOpen(true);
-  };
+  // Initialize form fields with current profile data
+  useEffect(() => {
+    if (userProfile) {
+      setEditFirstName(userProfile.first_name || '');
+      setEditLastName(userProfile.last_name || '');
+    }
+  }, [userProfile]);
 
   const handleUpdateProfile = async () => {
     if (!user || !userProfile) return;
@@ -108,7 +106,6 @@ const Profile = () => {
       } : null);
 
       toast.success('Profile updated successfully!');
-      setEditProfileOpen(false);
     } catch (error) {
       console.error('Error updating profile:', error);
       toast.error('Failed to update profile. Please try again.');
@@ -117,13 +114,6 @@ const Profile = () => {
     }
   };
 
-  // Handle Change Password
-  const handleChangePassword = () => {
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setChangePasswordOpen(true);
-  };
 
   const handleUpdatePassword = async () => {
     if (!user) return;
@@ -175,7 +165,6 @@ const Profile = () => {
       if (error) throw error;
 
       toast.success('Password changed successfully!');
-      setChangePasswordOpen(false);
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -269,15 +258,15 @@ const Profile = () => {
                   {user.email ? getInitials(user.email) : <User className="h-6 w-6" />}
                 </AvatarFallback>
               </Avatar>
-                             <div className="space-y-1">
-                 <h3 className="text-lg font-semibold">
-                   {userProfile?.first_name && userProfile?.last_name 
-                     ? `${userProfile.first_name} ${userProfile.last_name}`
-                     : user.user_metadata?.full_name || 'User'}
-                 </h3>
-                 <p className="text-sm text-muted-foreground">
-                   {user.email}
-                 </p>
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold">
+                  {userProfile?.first_name && userProfile?.last_name 
+                    ? `${userProfile.first_name} ${userProfile.last_name}`
+                    : user.user_metadata?.full_name || 'User'}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {user.email}
+                </p>
                 <Badge variant={getRoleBadgeVariant(userProfile?.role || 'user')}>
                   {getRoleDisplayName(userProfile?.role || 'user')}
                 </Badge>
@@ -286,207 +275,144 @@ const Profile = () => {
 
             <Separator />
 
-            {/* Account Details */}
+            {/* Profile Form */}
             <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <Mail className="h-4 w-4 text-muted-foreground" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-sm font-medium">Email</p>
-                  <p className="text-sm text-muted-foreground">{user.email}</p>
+                  <Label htmlFor="firstName">First Name</Label>
+                  <Input
+                    id="firstName"
+                    value={editFirstName}
+                    onChange={(e) => setEditFirstName(e.target.value)}
+                    placeholder="Enter your first name"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="lastName">Last Name</Label>
+                  <Input
+                    id="lastName"
+                    value={editLastName}
+                    onChange={(e) => setEditLastName(e.target.value)}
+                    placeholder="Enter your last name"
+                  />
                 </div>
               </div>
-
-              <div className="flex items-center gap-3">
-                <Shield className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">Role</p>
-                  <p className="text-sm text-muted-foreground">
-                    {getRoleDisplayName(userProfile?.role || 'user')}
-                  </p>
-                </div>
+              
+              <div>
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  value={user.email || ''}
+                  disabled
+                  className="bg-gray-50"
+                />
               </div>
 
-              <div className="flex items-center gap-3">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">Member Since</p>
-                  <p className="text-sm text-muted-foreground">
-                    {user.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown'}
-                  </p>
-                </div>
+              <div className="flex gap-3">
+                <Button 
+                  onClick={handleUpdateProfile} 
+                  disabled={isUpdatingProfile}
+                  className="flex-1"
+                >
+                  {isUpdatingProfile ? 'Updating...' : 'Update Profile'}
+                </Button>
               </div>
             </div>
 
             <Separator />
 
-                         {/* Account Actions */}
-             <div className="flex gap-3 justify-center">
-               <Button variant="outline" size="sm" onClick={handleEditProfile}>
-                 <Edit className="h-4 w-4 mr-2" />
-                 Edit Profile
-               </Button>
-               
-               <Button variant="outline" size="sm" onClick={handleChangePassword}>
-                 <Shield className="h-4 w-4 mr-2" />
-                 Change Password
-               </Button>
-             </div>
+            {/* Change Password Section */}
+            <div className="space-y-4">
+              <h4 className="text-sm font-medium">Change Password</h4>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="currentPassword">Current Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="currentPassword"
+                      type={showCurrentPassword ? "text" : "password"}
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="Enter your current password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                    >
+                      {showCurrentPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="newPassword">New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="newPassword"
+                      type={showNewPassword ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Enter your new password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                    >
+                      {showNewPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="confirmPassword"
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Confirm your new password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <Button 
+                  onClick={handleUpdatePassword} 
+                  disabled={isChangingPassword}
+                  className="flex-1"
+                >
+                  {isChangingPassword ? 'Changing...' : 'Change Password'}
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Edit Profile Dialog */}
-      <Dialog open={editProfileOpen} onOpenChange={setEditProfileOpen}>
-        <DialogContent className="!max-w-md w-[90vw] mx-auto rounded-lg">
-          <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
-            <DialogDescription>
-              Update your first name and last name
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="firstName">First Name</Label>
-              <Input
-                id="firstName"
-                value={editFirstName}
-                onChange={(e) => setEditFirstName(e.target.value)}
-                placeholder="Enter your first name"
-              />
-            </div>
-            <div>
-              <Label htmlFor="lastName">Last Name</Label>
-              <Input
-                id="lastName"
-                value={editLastName}
-                onChange={(e) => setEditLastName(e.target.value)}
-                placeholder="Enter your last name"
-              />
-            </div>
-          </div>
-          <DialogFooter className="!flex !flex-row !justify-end gap-2 sm:gap-3">
-            <Button 
-              variant="outline" 
-              onClick={() => setEditProfileOpen(false)}
-              className="flex-1 sm:flex-none sm:min-w-[80px]"
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleUpdateProfile} 
-              disabled={isUpdatingProfile}
-              className="flex-1 sm:flex-none sm:min-w-[80px]"
-            >
-              {isUpdatingProfile ? 'Updating...' : 'Update Profile'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Change Password Dialog */}
-      <Dialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen}>
-        <DialogContent className="!max-w-md w-[90vw] mx-auto rounded-lg">
-          <DialogHeader>
-            <DialogTitle>Change Password</DialogTitle>
-            <DialogDescription>
-              Enter your current password and choose a new password
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="currentPassword">Current Password</Label>
-              <div className="relative">
-                <Input
-                  id="currentPassword"
-                  type={showCurrentPassword ? "text" : "password"}
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter your current password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                >
-                  {showCurrentPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="newPassword">New Password</Label>
-              <div className="relative">
-                <Input
-                  id="newPassword"
-                  type={showNewPassword ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter your new password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                  onClick={() => setShowNewPassword(!showNewPassword)}
-                >
-                  {showNewPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="confirmPassword">Confirm New Password</Label>
-              <div className="relative">
-                <Input
-                  id="confirmPassword"
-                  type={showConfirmPassword ? "text" : "password"}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm your new password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                >
-                  {showConfirmPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="!flex !flex-row !justify-end gap-2 sm:gap-3">
-            <Button 
-              variant="outline" 
-              onClick={() => setChangePasswordOpen(false)}
-              className="flex-1 sm:flex-none sm:min-w-[80px]"
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleUpdatePassword} 
-              disabled={isChangingPassword}
-              className="flex-1 sm:flex-none sm:min-w-[80px]"
-            >
-              {isChangingPassword ? 'Changing...' : 'Change Password'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Layout>
   );
 };

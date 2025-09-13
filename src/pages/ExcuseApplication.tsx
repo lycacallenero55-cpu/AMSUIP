@@ -465,7 +465,7 @@ const ExcuseApplicationContent = () => {
 
   const getStatusDisplay = (status: ExcuseStatus) => {
     return (
-      <span className="text-sm text-gray-500 capitalize">
+      <span className="text-xs text-gray-500 capitalize">
         {status}
       </span>
     );
@@ -648,7 +648,7 @@ const ExcuseApplicationContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
               {loading ? null : filteredExcuses.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">
