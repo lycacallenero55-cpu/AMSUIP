@@ -14,7 +14,6 @@ const routeTitles: Record<string, string> = {
   '/accounts': 'Accounts',
   '/excuse-application': 'Excuse Application',
   '/academic-year': 'Allowed Terms',
-  '/profile': 'Profile',
   '/login': 'Login',
   '/sessions': 'Session Students',
 };
