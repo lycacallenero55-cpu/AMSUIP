@@ -668,7 +668,7 @@ async def identify_signature_owner(
         processed_signature = preprocessor.preprocess_signature(test_image)
         
         # Global-first selection (restricted to trained students)
-        hybrid = {}
+        hybrid = {"global_score": 0.0, "global_margin": 0.0, "global_margin_raw": 0.0}
         predicted_owner_id = None
         try:
             trained_ids = await _get_trained_student_ids()
@@ -856,8 +856,8 @@ async def identify_signature_owner(
                 "is_match": True,
                 "confidence": float(combined_confidence),
                 "score": float(combined_confidence),
-                "global_score": hybrid.get("global_score"),
-                "global_margin": hybrid.get("global_margin"),
+                "global_score": hybrid.get("global_score", 0.0),
+                "global_margin": hybrid.get("global_margin", 0.0),
                 "student_confidence": result["student_confidence"],
                 "authenticity_score": 0.0,  # Always 0 since forgery detection is disabled
                 "is_unknown": False,
@@ -1097,8 +1097,8 @@ async def identify_signature_owner(
             "is_match": is_match,
             "confidence": float(combined_confidence),
             "score": float(combined_confidence),
-            "global_score": hybrid.get("global_score"),
-            "global_margin": hybrid.get("global_margin"),
+            "global_score": hybrid.get("global_score", 0.0),
+            "global_margin": hybrid.get("global_margin", 0.0),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
             "is_unknown": result["is_unknown"],
@@ -1404,7 +1404,7 @@ async def verify_signature(
         processed_signature = preprocessor.preprocess_signature(test_image)
         
         # Global-first selection
-        hybrid = {}
+        hybrid = {"global_score": 0.0, "global_margin": 0.0, "global_margin_raw": 0.0}
         predicted_owner_id = None
         try:
             latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
@@ -1600,7 +1600,7 @@ async def verify_signature(
             "is_match": is_match,
             "confidence": float(combined_confidence),
             "score": float(combined_confidence),
-            "global_score": hybrid.get("global_score"),
+            "global_score": hybrid.get("global_score", 0.0),
             "student_confidence": result["student_confidence"],
             "authenticity_score": result["authenticity_score"],
             "predicted_student": predicted_block,
