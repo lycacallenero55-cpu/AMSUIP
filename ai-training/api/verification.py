@@ -833,7 +833,7 @@ async def identify_signature_owner(
         # Use configurable confidence threshold
         confidence_threshold = settings.CONFIDENCE_THRESHOLD
         
-        # Ignore authenticity head - forgery detection disabled
+        # Forgery detection is disabled system-wide
         has_auth = False
         
         # Improved unknown thresholding with configurable confidence threshold
@@ -909,8 +909,8 @@ async def identify_signature_owner(
         
         # Do not auto-accept individual prediction if global was rejected (avoid false positives)
         
-        # Ignore authenticity gating
-        auth_ok = False
+        # Forgery detection is disabled system-wide
+        auth_ok = True  # Always pass since we're not doing forgery detection
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
         try:
@@ -946,8 +946,8 @@ async def identify_signature_owner(
         if result.get("predicted_student_id") and trained_ids and int(result.get("predicted_student_id")) not in trained_ids:
             is_unknown = True
             ownership_ok = False
-        # Final match
-        is_match = (not is_unknown) and ownership_ok
+        # Final match - must be not unknown AND ownership confirmed
+        is_match = (not is_unknown) and ownership_ok and auth_ok
 
         # k-NN fallback over trained students' genuine embeddings when still unknown or classifier absent
         try:
@@ -1086,10 +1086,10 @@ async def identify_signature_owner(
             except Exception:
                 pass
 
-        # Mask unknowns for UI if thresholds not met
+        # Mask unknowns for UI if thresholds not met - return "no_match" for low confidence
         predicted_block = {
-            "id": 0 if is_unknown else result["predicted_student_id"],
-            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+            "id": 0 if is_unknown or not is_match else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown or not is_match else result["predicted_student_name"],
         }
 
         response_obj = {
@@ -1104,7 +1104,8 @@ async def identify_signature_owner(
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
             "ai_architecture": "signature_embedding_network",
-            "success": True
+            "success": True,
+            "message": "Match found" if is_match else "No match found"
         }
         # Back-compat fields for UI
         response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
@@ -1549,14 +1550,14 @@ async def verify_signature(
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
-        # Ignore authenticity gating
-        auth_ok = False
+        # Forgery detection is disabled system-wide
+        auth_ok = True  # Always pass since we're not doing forgery detection
         is_match = is_correct_student and (not is_unknown) and ownership_ok
 
-        # Mask unknowns in response
+        # Mask unknowns in response - return "no_match" for low confidence
         predicted_block = {
-            "id": 0 if is_unknown else result["predicted_student_id"],
-            "name": "Unknown" if is_unknown else result["predicted_student_name"],
+            "id": 0 if is_unknown or not is_match else result["predicted_student_id"],
+            "name": "Unknown" if is_unknown or not is_match else result["predicted_student_name"],
         }
 
         return {
@@ -1573,7 +1574,8 @@ async def verify_signature(
             "is_unknown": result["is_unknown"],
             "model_type": "ai_signature_verification",
             "ai_architecture": "signature_embedding_network",
-            "success": True
+            "success": True,
+            "message": "Match found" if is_match else "No match found"
         }
         
     except HTTPException:

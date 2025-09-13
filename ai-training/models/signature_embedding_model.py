@@ -62,14 +62,14 @@ class SignatureEmbeddingModel:
         # Preprocessing normalization
         x = layers.Rescaling(1.0/255.0, input_shape=(self.image_size, self.image_size, 3))(input_layer)
         
-        # Transfer Learning: Use MobileNetV2 as base
+        # Transfer Learning: Use MobileNetV2 as base for signature recognition
         base_model = keras.applications.MobileNetV2(
             input_shape=(self.image_size, self.image_size, 3),
             include_top=False,
             weights='imagenet'
         )
         
-        # Freeze base model layers for transfer learning
+        # Freeze base model layers for transfer learning (prevents overfitting with small datasets)
         base_model.trainable = False
         
         # Get base model features
@@ -357,8 +357,8 @@ class SignatureEmbeddingModel:
                 student_labels.append(student_id)
                 authenticity_labels.append(1)  # Genuine
                 
-                # Augmented versions (3x augmentation for small datasets)
-                for _ in range(3):
+                # Augmented versions (5x augmentation for small datasets like Teachable Machine)
+                for _ in range(5):
                     try:
                         augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
                         all_images.append(augmented_img)
@@ -369,7 +369,7 @@ class SignatureEmbeddingModel:
                         # Continue without this augmentation
             
             # Skip forged signatures - not used for owner identification training
-            # (Forgery detection is disabled, so we only train on genuine signatures)
+            # (Forgery detection is disabled system-wide, so we only train on genuine signatures)
         
         X = np.array(all_images, dtype=np.float32)
         # Use actual number of students for categorical encoding
@@ -422,24 +422,34 @@ class SignatureEmbeddingModel:
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=3,  # Reduced patience for minimal data
+                patience=5,  # Increased patience for better convergence
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=2,  # Reduced patience for minimal data
+                patience=3,  # Increased patience for better convergence
                 min_lr=1e-6,
                 verbose=1
+            ),
+            keras.callbacks.CSVLogger(
+                'training_log.csv',
+                append=True
             )
         ]
         
         # Train classification model only
         logger.info(f"Training student classification model with {num_students} classes...")
+        
+        # Calculate appropriate batch size for small datasets
+        batch_size = min(32, max(4, len(X) // 4))  # Adaptive batch size for small datasets
+        
+        logger.info(f"Training with batch size: {batch_size}, samples: {len(X)}")
+        
         classification_history = self.classification_head.fit(
             X, y_student,
-            batch_size=min(16, max(1, len(X) // 2)),  # Smaller batch size for minimal signatures
+            batch_size=batch_size,
             epochs=epochs,
             validation_split=0.2,
             callbacks=callbacks,
@@ -563,11 +573,11 @@ class SignatureEmbeddingModel:
         """
         logger.info("Performing comprehensive signature verification...")
         
-        # Check available heads; allow partial inference if only authenticity is present
+        # Check available heads; forgery detection is disabled system-wide
         if not self.embedding_model:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
-        has_authenticity = False  # authenticity disabled system-wide
+        has_authenticity = False  # Forgery detection is disabled system-wide
 
         # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
         if has_classification:
@@ -581,7 +591,7 @@ class SignatureEmbeddingModel:
                     # 1-unit outputs are invalid for identification; disable classification path
                     self.classification_head = None
                     has_classification = False
-                    logger.warning("Disabled 1-unit model for identification (authenticity disabled)")
+                    logger.warning("Disabled 1-unit model for identification (forgery detection disabled)")
                 else:
                     logger.info(f"Classification head has {output_shape[1]} outputs - treating as classifier")
             except Exception as e:
