@@ -66,7 +66,7 @@ const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
 
   return (
     <Card 
-      className="relative cursor-pointer hover:shadow-md transition-shadow h-10 group"
+      className="relative cursor-pointer h-10 group"
       onClick={handleCardClick}
     >
       <CardContent className="py-0 px-2 pr-1 h-full flex flex-col justify-center">

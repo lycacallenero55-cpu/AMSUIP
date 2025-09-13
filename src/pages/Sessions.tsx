@@ -1286,7 +1286,7 @@ const Schedule = () => {
                 </div>
               ) : paginatedSessions.length > 0 ? (
                 [...paginatedSessions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((session) => (
-                <Card key={session.id} className="bg-gradient-card border-0 shadow-card hover:shadow-elegant transition-all duration-300">
+                <Card key={session.id} className="bg-gradient-card border-0 shadow-card">
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-start gap-3">

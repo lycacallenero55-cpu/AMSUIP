@@ -172,7 +172,7 @@ const Reports = () => {
         {/* Reports List */}
         <div className="space-y-3">
           {mockReports.map((report) => (
-            <Card key={report.id} className="bg-gradient-card border-0 shadow-card hover:shadow-elegant transition-all duration-300">
+            <Card key={report.id} className="bg-gradient-card border-0 shadow-card">
               <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">

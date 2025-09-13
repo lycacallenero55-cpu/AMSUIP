@@ -382,7 +382,7 @@ interface SessionCardProps {
 
 const SessionCard: React.FC<SessionCardProps> = ({ session, onStartAttendance }) => {
   return (
-    <Card className="relative overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+    <Card className="relative overflow-hidden shadow-sm">
       <div className="absolute top-2 right-2">
         {session.type === 'class' && (
           <Badge className="bg-primary/10 text-primary border-primary/20 text-xs">Class</Badge>
