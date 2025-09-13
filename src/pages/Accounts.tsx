@@ -40,7 +40,7 @@ interface Profile {
 // Role Component
 const RoleDisplay = ({ role }: { role: UserRole }) => {
   return (
-    <span className="text-xs text-black opacity-50">
+    <span className="text-xs text-gray-500">
       {role.charAt(0).toUpperCase() + role.slice(1)}
     </span>
   );
@@ -49,7 +49,7 @@ const RoleDisplay = ({ role }: { role: UserRole }) => {
 // Status Component
 const StatusDisplay = ({ status }: { status: AccountStatus }) => {
   return (
-    <span className="text-xs text-black opacity-50 capitalize">
+    <span className="text-xs text-gray-500 capitalize">
       {status}
     </span>
   );
@@ -378,7 +378,7 @@ const Accounts = () => {
                       <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+                  <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
                     {isLoading ? null : filteredProfiles.length === 0 ? (
                       <tr className="h-8">
                         <td colSpan={6} className="px-3 py-1 text-center text-sm text-gray-500">

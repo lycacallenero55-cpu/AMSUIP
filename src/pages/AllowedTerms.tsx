@@ -267,7 +267,7 @@ const AllowedTermsContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase"></th> {/* Empty for actions */}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200 text-xs text-black opacity-50">
+            <tbody className="bg-white divide-y divide-gray-200 text-xs text-gray-500">
               {loading ? null : paginatedTerms.length === 0 ? (
                 <tr className="h-8">
                   <td colSpan={3} className="px-3 py-1 text-center text-sm text-gray-500">
