@@ -14,7 +14,12 @@ import {
   GraduationCap, 
   User, 
   LogOut, 
-  Menu
+  Menu,
+  Eye,
+  EyeOff,
+  Edit,
+  Save,
+  X
 } from "lucide-react";
 import { UserCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -83,7 +88,12 @@ const Header = ({ isMobile = false }: HeaderProps) => {
   const isInitialMount = useRef(true);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileForm, setProfileForm] = useState<{ first_name: string; last_name: string; email: string }>({ first_name: '', last_name: '', email: '' });
+  const [passwordForm, setPasswordForm] = useState<{ currentPassword: string; newPassword: string; confirmPassword: string }>({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [showPasswords, setShowPasswords] = useState<{ current: boolean; new: boolean; confirm: boolean }>({ current: false, new: false, confirm: false });
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   useEffect(() => {
     const fetchRole = async () => {
@@ -207,12 +217,15 @@ const Header = ({ isMobile = false }: HeaderProps) => {
       last_name: userProfile?.last_name || '',
       email: userProfile?.email || user?.email || ''
     });
+    setIsEditingProfile(false);
     setIsProfileOpen(true);
   };
 
   const handleProfileSave = async () => {
     try {
       if (!user) return;
+      setIsUpdatingProfile(true);
+      
       // Update either admin or users table depending on where the profile came from
       if (userRole === 'admin') {
         const { error } = await supabase
@@ -228,9 +241,66 @@ const Header = ({ isMobile = false }: HeaderProps) => {
         if (error) throw error;
       }
       setUserProfile((prev: any) => ({ ...prev, first_name: profileForm.first_name, last_name: profileForm.last_name, email: profileForm.email }));
-      setIsProfileOpen(false);
+      setIsEditingProfile(false);
     } catch (e) {
       console.error('Failed to save profile:', e);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    try {
+      if (!user) return;
+      
+      // Validation
+      if (!passwordForm.currentPassword.trim()) {
+        console.error('Please enter your current password');
+        return;
+      }
+      if (!passwordForm.newPassword.trim()) {
+        console.error('Please enter a new password');
+        return;
+      }
+      if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+        console.error('New passwords do not match');
+        return;
+      }
+      if (passwordForm.newPassword.length < 6) {
+        console.error('New password must be at least 6 characters long');
+        return;
+      }
+      if (passwordForm.currentPassword === passwordForm.newPassword) {
+        console.error('New password must be different from current password');
+        return;
+      }
+
+      setIsChangingPassword(true);
+      
+      // First, verify the current password by attempting to sign in
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: user.email!,
+        password: passwordForm.currentPassword
+      });
+
+      if (signInError) {
+        console.error('Current password is incorrect');
+        return;
+      }
+
+      // If current password is correct, update to new password
+      const { error } = await supabase.auth.updateUser({
+        password: passwordForm.newPassword
+      });
+
+      if (error) throw error;
+
+      // Reset password form
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (error) {
+      console.error('Error changing password:', error);
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -300,8 +370,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           {/* User Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-12 w-12 rounded-full p-0 flex items-center justify-center">
-                <UserCircle className="h-10 w-10" />
+              <Button variant="ghost" className="relative h-12 w-12 rounded-full p-0 flex items-center justify-center bg-transparent hover:bg-transparent">
+                <UserCircle className="h-12 w-12 text-gray-600 hover:text-gray-800" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
@@ -328,26 +398,151 @@ const Header = ({ isMobile = false }: HeaderProps) => {
       <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
         <DialogContent className="max-w-lg w-full">
           <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              Profile Information
+              <div className="flex gap-2">
+                {!isEditingProfile ? (
+                  <Button variant="outline" size="sm" onClick={() => setIsEditingProfile(true)}>
+                    <Edit className="h-4 w-4 mr-1" />
+                    Edit
+                  </Button>
+                ) : (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => setIsEditingProfile(false)}>
+                      <X className="h-4 w-4 mr-1" />
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={handleProfileSave} disabled={isUpdatingProfile}>
+                      <Save className="h-4 w-4 mr-1" />
+                      {isUpdatingProfile ? 'Saving...' : 'Save'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 gap-2">
-              <Label htmlFor="first_name">First Name</Label>
-              <Input id="first_name" value={profileForm.first_name} onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} />
+          <div className="space-y-6">
+            {/* Profile Information Display/Edit */}
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="first_name">First Name</Label>
+                {!isEditingProfile ? (
+                  <div className="p-2 bg-gray-50 rounded border text-sm">
+                    {profileForm.first_name || 'Not set'}
+                  </div>
+                ) : (
+                  <Input 
+                    id="first_name" 
+                    value={profileForm.first_name} 
+                    onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} 
+                  />
+                )}
+              </div>
+              <div>
+                <Label htmlFor="last_name">Last Name</Label>
+                {!isEditingProfile ? (
+                  <div className="p-2 bg-gray-50 rounded border text-sm">
+                    {profileForm.last_name || 'Not set'}
+                  </div>
+                ) : (
+                  <Input 
+                    id="last_name" 
+                    value={profileForm.last_name} 
+                    onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} 
+                  />
+                )}
+              </div>
+              <div>
+                <Label htmlFor="email">Email</Label>
+                <div className="p-2 bg-gray-50 rounded border text-sm">
+                  {profileForm.email}
+                </div>
+              </div>
+              <div>
+                <Label>Role</Label>
+                <div className="p-2 bg-gray-50 rounded border text-sm">
+                  {getPanelLabel()}
+                </div>
+              </div>
             </div>
-            <div className="grid grid-cols-1 gap-2">
-              <Label htmlFor="last_name">Last Name</Label>
-              <Input id="last_name" value={profileForm.last_name} onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" value={profileForm.email} disabled />
+
+            {/* Change Password Section */}
+            <div className="border-t pt-4">
+              <h4 className="text-sm font-medium mb-4">Change Password</h4>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="currentPassword">Current Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="currentPassword"
+                      type={showPasswords.current ? "text" : "password"}
+                      value={passwordForm.currentPassword}
+                      onChange={(e) => setPasswordForm(p => ({ ...p, currentPassword: e.target.value }))}
+                      placeholder="Enter your current password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPasswords(p => ({ ...p, current: !p.current }))}
+                    >
+                      {showPasswords.current ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="newPassword">New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="newPassword"
+                      type={showPasswords.new ? "text" : "password"}
+                      value={passwordForm.newPassword}
+                      onChange={(e) => setPasswordForm(p => ({ ...p, newPassword: e.target.value }))}
+                      placeholder="Enter your new password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPasswords(p => ({ ...p, new: !p.new }))}
+                    >
+                      {showPasswords.new ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="confirmPassword"
+                      type={showPasswords.confirm ? "text" : "password"}
+                      value={passwordForm.confirmPassword}
+                      onChange={(e) => setPasswordForm(p => ({ ...p, confirmPassword: e.target.value }))}
+                      placeholder="Confirm your new password"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPasswords(p => ({ ...p, confirm: !p.confirm }))}
+                    >
+                      {showPasswords.confirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <Button 
+                  onClick={handlePasswordChange} 
+                  disabled={isChangingPassword}
+                  className="w-full"
+                >
+                  {isChangingPassword ? 'Changing...' : 'Change Password'}
+                </Button>
+              </div>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsProfileOpen(false)}>Cancel</Button>
-            <Button onClick={handleProfileSave}>Save</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 

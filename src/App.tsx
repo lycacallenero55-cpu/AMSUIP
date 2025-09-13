@@ -17,7 +17,6 @@ import Login from "./pages/Login";
 import ExcuseApplication from "./pages/ExcuseApplication";
 import AllowedTerms from "./pages/AllowedTerms";
 import Subjects from "./pages/Subjects";
-import Profile from "./pages/Profile";
 import SignatureAI from "./pages/SignatureAI";
 import { AuthProvider } from "./contexts/AuthContext";
 import { SidebarProvider } from "./contexts/SidebarContext";
@@ -166,14 +165,6 @@ const AppRoutes = () => {
           <RoleProtectedRoute allowedRoles={['admin', 'ROTC admin', 'Instructor', 'SSG officer']}>
             <SignatureAI />
           </RoleProtectedRoute>
-        </ProtectedRoute>
-      }
-    />
-    <Route
-      path="/profile"
-      element={
-        <ProtectedRoute>
-          <Profile />
         </ProtectedRoute>
       }
     />
