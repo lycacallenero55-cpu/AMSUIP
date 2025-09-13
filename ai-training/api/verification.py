@@ -179,21 +179,32 @@ async def _fetch_genuine_arrays_for_student(student_id: int, max_images: int = 5
         logger.warning(f"Failed to fetch genuine arrays for student {student_id}: {e}")
         return []
 
-async def _list_candidate_student_ids(limit: int = 50) -> list[int]:
-    """List candidate students that have images (limited)."""
+async def _list_candidate_student_ids(limit: int = 50, allowed_ids: set[int] | None = None) -> list[int]:
+    """List candidate students that have images (limited), filtered by allowed_ids if provided."""
     try:
         items = await db_manager.list_students_with_images()
         ids: list[int] = []
         for it in items:
             sid = it.get("student_id") or it.get("id")
             if isinstance(sid, int):
-                ids.append(sid)
+                if allowed_ids is None or int(sid) in allowed_ids:
+                    ids.append(sid)
             if len(ids) >= limit:
                 break
         return ids
     except Exception as e:
         logger.warning(f"Failed to list candidate students: {e}")
         return []
+
+async def _get_trained_student_ids() -> set[int]:
+    try:
+        models = await db_manager.get_trained_models()
+        if not models:
+            return set()
+        return {int(m.get("student_id")) for m in models if m.get("status") == "completed" and m.get("student_id") is not None}
+    except Exception as e:
+        logger.warning(f"Failed to get trained student ids: {e}")
+        return set()
 
 async def _load_cached_centroids(latest_global: dict) -> dict | None:
     try:
@@ -240,7 +251,7 @@ async def identify_signature_owner(
             logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
                 'embedding': latest_ai_model.get("embedding_model_path"),
-                'classification': latest_ai_model.get("model_path"),  # Classification model is stored in model_path
+                'classification': latest_ai_model.get("model_path"),  # May be embedding-only in current mode
                 'authenticity': latest_ai_model.get("authenticity_model_path"),
                 'siamese': latest_ai_model.get("siamese_model_path")
             }
@@ -295,7 +306,16 @@ async def identify_signature_owner(
                                 if model_type == 'embedding':
                                     request_model_manager.embedding_model = model
                                 elif model_type == 'classification':
-                                    request_model_manager.classification_head = model
+                                    # Guard against embedding being loaded as classifier
+                                    from numpy import zeros
+                                    try:
+                                        out = model.predict(zeros((1, request_model_manager.image_size, request_model_manager.image_size, 3)), verbose=0)
+                                        if len(out.shape) == 2 and (out.shape[1] <= 1 or out.shape[1] == request_model_manager.embedding_dim):
+                                            logger.info("Skipping invalid classification head (1-unit or embedding-sized output)")
+                                        else:
+                                            request_model_manager.classification_head = model
+                                    except Exception:
+                                        request_model_manager.classification_head = model
                                 elif model_type == 'authenticity':
                                     request_model_manager.authenticity_head = model
                                 elif model_type == 'siamese':
@@ -646,10 +666,11 @@ async def identify_signature_owner(
         # Preprocess test signature with advanced preprocessing
         processed_signature = preprocessor.preprocess_signature(test_image)
         
-        # Global-first selection: pick owner using global model, then refine with individual model
+        # Global-first selection (restricted to trained students)
         hybrid = {}
         predicted_owner_id = None
         try:
+            trained_ids = await _get_trained_student_ids()
             latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
             if latest_global and latest_global.get("model_path"):
                 gsm = GlobalSignatureVerificationModel()
@@ -690,6 +711,12 @@ async def identify_signature_owner(
                 second_cos = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
+                        # Restrict to trained students only
+                        try:
+                            if trained_ids and int(sid) not in trained_ids:
+                                continue
+                        except Exception:
+                            pass
                         centroid = np.array(centroid)
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
@@ -706,8 +733,8 @@ async def identify_signature_owner(
                             second_best = score01
                             second_cos = cosine
                 else:
-                    # Fallback: compute quick centroids online
-                    candidate_ids = await _list_candidate_student_ids(limit=50)
+                    # Fallback: compute quick centroids online (only consider trained IDs if present)
+                    candidate_ids = await _list_candidate_student_ids(limit=50, allowed_ids=trained_ids if trained_ids else None)
                     for sid in candidate_ids:
                         arrays = await _fetch_genuine_arrays_for_student(int(sid), max_images=3)
                         if not arrays:
@@ -742,11 +769,7 @@ async def identify_signature_owner(
         # Individual model inference to get overall confidence
         try:
             # Check if we have any loaded models
-            has_any_model = (
-                signature_ai_manager.embedding_model is not None or
-                signature_ai_manager.classification_head is not None or
-                signature_ai_manager.authenticity_head is not None
-            )
+            has_any_model = signature_ai_manager.embedding_model is not None
             
             if not has_any_model:
                 logger.error("No models loaded for verification")
@@ -764,31 +787,37 @@ async def identify_signature_owner(
         # Check if global prediction is valid (has proper margin)
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        accepted_zero_margin_high = False
         
         if predicted_owner_id is not None:
-            # Reject global predictions with zero margin (degenerate case)
+            # Handle zero-margin degeneracy: accept if absolute global score is high enough
             if global_margin <= 1e-6 and global_margin_raw <= 1e-6:
-                logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
-                predicted_owner_id = None
-                # Keep individual prediction if available
-                individual_prediction = result.get("predicted_student_id", 0)
-                if individual_prediction and individual_prediction > 0:
-                    result["predicted_student_id"] = individual_prediction
-                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                if hybrid.get("global_score", 0.0) >= 0.95:
+                    # Accept the top-1 centroid even with zero margin
+                    logger.info(f"Accepting global prediction (high score with zero margin): {predicted_owner_id}")
+                    result["predicted_student_id"] = predicted_owner_id
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
+                    combined_confidence = float(hybrid.get("global_score", 0.0))
+                    accepted_zero_margin_high = True
                 else:
-                    result["predicted_student_id"] = 0
-                    result["predicted_student_name"] = "Unknown"
+                    logger.info(f"Rejecting global prediction due to zero margin: {predicted_owner_id}")
+                    predicted_owner_id = None
+                    # Keep individual prediction if available
+                    individual_prediction = result.get("predicted_student_id", 0)
+                    if individual_prediction and individual_prediction > 0:
+                        result["predicted_student_id"] = individual_prediction
+                        result["predicted_student_name"] = signature_ai_manager.id_to_student.get(individual_prediction, f"Unknown_{individual_prediction}")
+                    else:
+                        result["predicted_student_id"] = 0
+                        result["predicted_student_name"] = "Unknown"
             else:
                 individual_prediction = result.get("predicted_student_id")
                 logger.info(f"Individual model predicted: {individual_prediction}, Global model predicted: {predicted_owner_id}")
                 # Preserve the original individual prediction for agreement checks later
                 original_individual_prediction = individual_prediction
                 if individual_prediction != predicted_owner_id:
-                    logger.info(f"Using global model prediction: {predicted_owner_id} (overriding individual: {individual_prediction})")
-                    combined_confidence = float(0.7 * combined_confidence + 0.3 * hybrid.get("global_score", 0.0))
-                    # Update the predicted student name to match the new ID
-                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(predicted_owner_id, f"Unknown_{predicted_owner_id}")
-                    logger.info(f"Updated predicted student name to: {result['predicted_student_name']}")
+                    logger.info(f"Disagreement between models; not forcing override.")
+                    # Keep individual prediction and confidence
                 else:
                     logger.info(f"Both models agree on prediction: {predicted_owner_id}")
                     combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
@@ -803,7 +832,40 @@ async def identify_signature_owner(
         has_auth = False
         # Improved unknown thresholding with better outlier detection (owner identification focus)
         is_unknown = True
+        trained_ids = await _get_trained_student_ids()
         
+        # If we already accepted a high-score zero-margin global prediction, finalize early
+        if accepted_zero_margin_high and predicted_owner_id is not None and (not trained_ids or int(predicted_owner_id) in trained_ids):
+            result["is_unknown"] = False
+            is_unknown = False
+            ownership_ok = True
+            is_match = True
+            result["score"] = combined_confidence
+            predicted_block = {
+                "id": int(predicted_owner_id),
+                "name": signature_ai_manager.id_to_student.get(int(predicted_owner_id), f"Unknown_{predicted_owner_id}"),
+            }
+            response_obj = {
+                "predicted_student": predicted_block,
+                "is_match": True,
+                "confidence": float(combined_confidence),
+                "score": float(combined_confidence),
+                "global_score": hybrid.get("global_score"),
+                "global_margin": hybrid.get("global_margin"),
+                "student_confidence": result["student_confidence"],
+                "authenticity_score": result["authenticity_score"],
+                "is_unknown": False,
+                "model_type": "ai_signature_verification",
+                "ai_architecture": "signature_embedding_network",
+                "success": True
+            }
+            # Back-compat
+            response_obj["predicted_student_id"] = int(predicted_owner_id)
+            response_obj["predicted_student_name"] = predicted_block["name"]
+            response_obj["is_genuine"] = True
+            logger.info(f"Finalized early due to accepted high-score zero-margin global match: {predicted_owner_id}")
+            return response_obj
+
         # Check if we have a valid prediction first
         if predicted_owner_id is not None and predicted_owner_id > 0:
             # Accept if global is confident AND has good separation
@@ -832,14 +894,15 @@ async def identify_signature_owner(
             
         result["is_unknown"] = is_unknown
 
-        # Determine match logic for identify: do not gate on authenticity if head absent
-        # Start with baseline ownership_ok; we'll update it below if models agree
-        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02))
+        # Optimized for minimal signatures: more lenient thresholds for owner identification
+        # Like Teachable Machine - prioritize identifying the owner even with lower confidence
+        ownership_ok = (
+            student_confidence >= 0.40 or  # Lowered from 0.60
+            (global_score >= 0.80 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or  # Lowered thresholds
+            (student_confidence >= 0.30 and global_score >= 0.70)  # Combined confidence for minimal data
+        )
         
-        # If global model was rejected but we have individual prediction, be more lenient
-        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0:
-            ownership_ok = True  # Accept individual model prediction when global is rejected
-            logger.info(f"Accepting individual model prediction due to global rejection")
+        # Do not auto-accept individual prediction if global was rejected (avoid false positives)
         
         # Ignore authenticity gating
         auth_ok = False
@@ -850,7 +913,7 @@ async def identify_signature_owner(
             agree = (predicted_owner_id is not None and original_individual_prediction == predicted_owner_id)
         except Exception:
             agree = False
-        if agree and (global_score >= 0.70 or student_confidence >= 0.40):
+        if agree and (global_score >= 0.60 or student_confidence >= 0.30):  # Lowered for minimal signatures
             # If both models agree with at least moderate confidence, treat as known
             result["is_unknown"] = False
             is_unknown = False
@@ -874,23 +937,123 @@ async def identify_signature_owner(
                 is_unknown = False
                 logger.info(f"Relaxed thresholds for small dataset ({trained_student_count} students)")
 
-        # Compute final match after any adjustments above
-        # Identification-only: match if ownership criteria met and not unknown
+        # Mask predictions to trained set only
+        if result.get("predicted_student_id") and trained_ids and int(result.get("predicted_student_id")) not in trained_ids:
+            is_unknown = True
+            ownership_ok = False
+        # Final match
         is_match = (not is_unknown) and ownership_ok
 
-        # If we have a valid individual prediction but global was rejected, always match
-        if predicted_owner_id is None and result.get("predicted_student_id", 0) > 0 and not is_unknown:
-            is_match = True
-            # Ensure predicted student info is properly set
-            result["predicted_student"] = {
-                "id": result.get("predicted_student_id", 0),
-                "name": result.get("predicted_student_name", "Unknown")
-            }
-            logger.info(f"Force matching individual prediction: {result.get('predicted_student_id')} - {result.get('predicted_student_name')}")
+        # k-NN fallback over trained students' genuine embeddings when still unknown or classifier absent
+        try:
+            need_knn = (not accepted_zero_margin_high) and (is_unknown or (signature_ai_manager.classification_head is None))
+            if need_knn:
+                import numpy as np
+                from collections import defaultdict
+                
+                # Compute test embedding once using the embedding model
+                test_arr = signature_ai_manager._preprocess_signature(processed_signature)
+                test_emb = signature_ai_manager.embedding_model.predict(np.expand_dims(test_arr, 0), verbose=0)[0]
+                
+                # Build reference bank from trained students (genuine only)
+                ref_embs = []
+                ref_labels = []
+                trained_ids_list = sorted(list(trained_ids)) if trained_ids else []
+                
+                def _derive_s3_key_from_url(url: str) -> str | None:
+                    if not url:
+                        return None
+                    base = url.split('?', 1)[0]
+                    if "amazonaws.com" not in base:
+                        return None
+                    try:
+                        parts = base.split(".amazonaws.com/")
+                        if len(parts) == 2:
+                            return parts[1] or None
+                        return base.split("/", 3)[-1] or None
+                    except Exception:
+                        return None
+                
+                for sid in trained_ids_list:
+                    rows = await db_manager.list_student_signatures(int(sid))
+                    taken = 0
+                    for r in rows:
+                        if (r.get("label") or "").lower() != "genuine":
+                            continue
+                        url = r.get("s3_url"); key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                        content = None
+                        if key:
+                            try:
+                                content = download_bytes(key)
+                            except Exception:
+                                content = None
+                        if content is None and url:
+                            try:
+                                import requests
+                                if settings.S3_USE_PRESIGNED_GET and key:
+                                    try:
+                                        url = create_presigned_get(key)
+                                    except Exception:
+                                        pass
+                                resp = requests.get(url, timeout=5)
+                                if resp.status_code == 200:
+                                    content = resp.content
+                            except Exception:
+                                content = None
+                        if not content:
+                            continue
+                        try:
+                            img = Image.open(io.BytesIO(content)).convert('RGB')
+                            arr = preprocessor.preprocess_signature(img)
+                            emb = signature_ai_manager.embedding_model.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                            ref_embs.append(emb)
+                            ref_labels.append(int(sid))
+                            taken += 1
+                            if taken >= 8:
+                                break
+                        except Exception:
+                            continue
+                if ref_embs:
+                    R = np.vstack(ref_embs)
+                    L = np.array(ref_labels)
+                    # Cosine similarity
+                    num = np.dot(R, test_emb)
+                    den = (np.linalg.norm(R, axis=1) * (np.linalg.norm(test_emb) + 1e-8)) + 1e-8
+                    sims = num / den
+                    # Top-k voting
+                    k = int(min(10, len(sims)))
+                    idx = np.argsort(-sims)[:k]
+                    top_labels = L[idx]
+                    top_sims = sims[idx]
+                    agg = defaultdict(list)
+                    for lab, s in zip(top_labels, top_sims):
+                        agg[int(lab)].append(float(s))
+                    best_lab = None
+                    best_score = -1.0
+                    second_score = -1.0
+                    for lab, scores in agg.items():
+                        sc = float(np.mean(scores))
+                        if sc > best_score:
+                            second_score = best_score
+                            best_score = sc
+                            best_lab = lab
+                        elif sc > second_score:
+                            second_score = sc
+                    # Optimized for minimal signatures: more lenient k-NN thresholds
+                    if best_lab is not None and best_score >= 0.85 and (best_score - max(second_score, 0.0)) >= 0.01:
+                        result["predicted_student_id"] = int(best_lab)
+                        result["predicted_student_name"] = signature_ai_manager.id_to_student.get(int(best_lab), f"student_{best_lab}")
+                        combined_confidence = max(combined_confidence, float(best_score))
+                        is_unknown = False
+                        is_match = True
+                        ownership_ok = True
+                        logger.info(f"kNN fallback selected student {best_lab} with score {best_score:.3f}")
+        except Exception as e:
+            logger.warning(f"kNN fallback failed: {e}")
 
-        # Normalize confidence for frontend: if match is true by agreement/ownership, clamp to at least 0.75
-        if is_match and combined_confidence < 0.75:
-            combined_confidence = 0.75
+        # Remove forced-match shortcut; rely on ownership_ok thresholds only
+
+        # Do not clamp confidence upward
             
         # Ensure score matches confidence for frontend compatibility
         result["score"] = combined_confidence
@@ -902,7 +1065,23 @@ async def identify_signature_owner(
         logger.info(f"DEBUG: Decisions - is_unknown={is_unknown}, is_match={is_match}, ownership_ok={ownership_ok}")
         logger.info(f"DEBUG: Final result - predicted_student_id={result.get('predicted_student_id')}, predicted_student_name={result.get('predicted_student_name')}")
         
-        # Mask unknowns instead of returning a trained ID
+        # If still unknown and we have trained IDs, return best trained student (owner-of-best-score) as last resort
+        if is_unknown:
+            try:
+                # Choose from: accepted global, kNN best (already applied), or individual prediction
+                fallback_id = None
+                if predicted_owner_id is not None and (not trained_ids or int(predicted_owner_id) in trained_ids):
+                    fallback_id = int(predicted_owner_id)
+                elif result.get("predicted_student_id") and (not trained_ids or int(result.get("predicted_student_id")) in trained_ids):
+                    fallback_id = int(result.get("predicted_student_id"))
+                if fallback_id is not None:
+                    result["predicted_student_id"] = fallback_id
+                    result["predicted_student_name"] = signature_ai_manager.id_to_student.get(fallback_id, f"student_{fallback_id}")
+                    combined_confidence = max(combined_confidence, float(global_score))
+            except Exception:
+                pass
+
+        # Mask unknowns for UI if thresholds not met
         predicted_block = {
             "id": 0 if is_unknown else result["predicted_student_id"],
             "name": "Unknown" if is_unknown else result["predicted_student_name"],
@@ -1262,6 +1441,12 @@ async def verify_signature(
                 best_score = -1.0
                 if centroids:
                     for sid, centroid in centroids.items():
+                        # Restrict to trained students only
+                        try:
+                            if trained_ids and int(sid) not in trained_ids:
+                                continue
+                        except Exception:
+                            pass
                         centroid = np.array(centroid)
                         num = float((test_emb * centroid).sum())
                         den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)

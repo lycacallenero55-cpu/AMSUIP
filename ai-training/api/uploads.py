@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional, List
 
 from models.database import db_manager
-from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key, object_exists
+from utils.s3_storage import upload_bytes, create_presigned_post, create_presigned_get, delete_key, object_exists, count_student_signatures
 from config import settings
 
 
@@ -112,8 +112,32 @@ async def delete_signature(record_id: int, s3_key: Optional[str] = None):
 
 
 @router.get("/students-with-images")
-async def students_with_images():
+async def students_with_images(summary: bool = False):
     try:
+        if summary:
+            # Trust S3 as the source of truth: count objects under {student_id}/genuine|forged
+            summarized = []
+            try:
+                # List candidate student IDs from DB quickly, then verify counts from S3
+                resp = db_manager.client.table("student_signatures").select("student_id").execute()
+                rows = resp.data or []
+                seen = set()
+                for r in rows:
+                    sid = r.get("student_id")
+                    if sid is None or sid in seen:
+                        continue
+                    seen.add(sid)
+                    g, f = count_student_signatures(int(sid))
+                    if (g + f) > 0:
+                        summarized.append({
+                            "student_id": int(sid),
+                            "genuine_count": int(g),
+                            "forged_count": int(f),
+                        })
+            except Exception:
+                summarized = []
+            return {"items": summarized}
+        # Non-summary: original detailed validation path
         items = await db_manager.list_students_with_images()
         for it in items:
             valid = []

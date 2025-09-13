@@ -145,7 +145,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Created embedding network with {self.embedding_model.count_params():,} parameters")
         return self.embedding_model
     
-    def create_classification_head(self) -> keras.Model:
+    def create_classification_head(self, num_students: int = None) -> keras.Model:
         """
         Create classification head for student identification
         """
@@ -162,9 +162,11 @@ class SignatureEmbeddingModel:
         x = layers.BatchNormalization(name='class_bn2')(x)
         x = layers.Dropout(0.2, name='class_dropout2')(x)
         
-        # Student classification output
+        # Student classification output - use provided num_students or actual count
+        if num_students is None:
+            num_students = len(self.student_to_id) if self.student_to_id else self.max_students
         student_output = layers.Dense(
-            self.max_students, 
+            num_students, 
             activation='softmax', 
             name='student_classification'
         )(x)
@@ -369,18 +371,18 @@ class SignatureEmbeddingModel:
                 student_labels.append(student_id)
                 authenticity_labels.append(1)  # Genuine
             
-            # Process forged signatures
-            for img in signatures['forged']:
-                processed_img = self._preprocess_signature(img)
-                all_images.append(processed_img)
-                student_labels.append(student_id)
-                authenticity_labels.append(0)  # Forged
+            # Skip forged signatures - not used for owner identification training
+            # (Forgery detection is disabled, so we only train on genuine signatures)
         
         X = np.array(all_images, dtype=np.float32)
-        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=self.max_students)
+        # Use actual number of students for categorical encoding
+        num_students = len(self.student_to_id)
+        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
         y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
         logger.info(f"Prepared {len(all_images)} images across {len(self.student_to_id)} students")
+        logger.info(f"Student mappings: {self.student_to_id}")
+        logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
         return X, y_student, y_authenticity
     
     def _preprocess_signature(self, image: Union[np.ndarray, Image.Image]) -> np.ndarray:
@@ -406,6 +408,57 @@ class SignatureEmbeddingModel:
         
         return image.numpy()
     
+    def train_classification_only(self, training_data: Dict, epochs: int = 20) -> Dict:
+        """
+        Train only the classification head for faster identification training
+        """
+        logger.info("Starting classification-only training for faster identification...")
+        
+        # Prepare data first to set up student mappings
+        X, y_student, y_authenticity = self.prepare_training_data(training_data)
+        
+        # Create only the classification model with correct number of students
+        num_students = len(self.student_to_id)
+        self.create_classification_head(num_students=num_students)
+        
+        # Optimized callbacks for minimal signature training (like Teachable Machine)
+        callbacks = [
+            keras.callbacks.EarlyStopping(
+                monitor='val_accuracy',
+                patience=3,  # Reduced patience for minimal data
+                restore_best_weights=True,
+                verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=2,  # Reduced patience for minimal data
+                min_lr=1e-6,
+                verbose=1
+            )
+        ]
+        
+        # Train classification model only
+        logger.info(f"Training student classification model with {num_students} classes...")
+        classification_history = self.classification_head.fit(
+            X, y_student,
+            batch_size=min(16, max(1, len(X) // 2)),  # Smaller batch size for minimal signatures
+            epochs=epochs,
+            validation_split=0.2,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        logger.info("Classification training completed successfully!")
+        
+        return {
+            'classification_history': classification_history.history,
+            'student_mappings': {
+                'student_to_id': self.student_to_id,
+                'id_to_student': self.id_to_student
+            }
+        }
+
     def train_models(self, training_data: Dict, epochs: int = 100) -> Dict:
         """
         Train all models with advanced training strategies
@@ -420,30 +473,19 @@ class SignatureEmbeddingModel:
         self.create_authenticity_head()
         self.create_siamese_network()
         
-        # Advanced callbacks
+        # Optimized callbacks for faster training
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=15,
+                patience=5,  # Reduced patience for faster training
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=8,
-                min_lr=1e-7,
-                verbose=1
-            ),
-            CosineRestartScheduler(
-                T_0=20,
-                T_mult=2,
-                eta_min=1e-7
-            ),
-            keras.callbacks.ModelCheckpoint(
-                'best_signature_model.keras',
-                monitor='val_accuracy',
-                save_best_only=True,
+                patience=3,  # Reduced patience
+                min_lr=1e-6,
                 verbose=1
             )
         ]
@@ -513,13 +555,8 @@ class SignatureEmbeddingModel:
                     pairs.append([img1, img2])
                     labels.append(1)  # Similar
             
-            # Negative pairs (genuine-forged)
-            for i in range(min(len(genuine_images), len(forged_images))):
-                for j in range(min(2, len(forged_images))):
-                    img1 = self._preprocess_signature(genuine_images[i])
-                    img2 = self._preprocess_signature(forged_images[j])
-                    pairs.append([img1, img2])
-                    labels.append(0)  # Different
+            # Skip negative pairs with forged signatures - not used for owner identification
+            # (Forgery detection is disabled, so we only use genuine signatures)
         
         return np.array(pairs), np.array(labels)
     
@@ -533,7 +570,7 @@ class SignatureEmbeddingModel:
         if not self.embedding_model:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
-        has_authenticity = self.authenticity_head is not None
+        has_authenticity = False  # authenticity disabled system-wide
 
         # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
         if has_classification:
@@ -544,20 +581,30 @@ class SignatureEmbeddingModel:
                 output_shape = test_output.shape
                 
                 if len(output_shape) == 2 and output_shape[1] == 1:
-                    # This is actually an authenticity model
-                    if not has_authenticity:
-                        self.authenticity_head = self.classification_head
-                        has_authenticity = True
+                    # 1-unit outputs are invalid for identification; disable classification path
                     self.classification_head = None
                     has_classification = False
-                    logger.info("Classification head is 1-unit; treating it as authenticity head instead of classifier")
+                    logger.warning("Disabled 1-unit model for identification (authenticity disabled)")
                 else:
                     logger.info(f"Classification head has {output_shape[1]} outputs - treating as classifier")
             except Exception as e:
                 logger.warning(f"Could not determine classification head output shape: {e}")
                 pass
-        if not (has_classification or has_authenticity):
-            raise ValueError("No verification heads loaded. Please load a trained model first.")
+        if not has_classification:
+            # Fallback: allow embedding-only flow; return unknown prediction with zero confidence
+            processed_signature = self._preprocess_signature(test_signature)
+            X_test = np.expand_dims(processed_signature, axis=0)
+            embedding = self.embedding_model.predict(X_test, verbose=0)[0]
+            return {
+                'predicted_student_id': 0,
+                'predicted_student_name': 'Unknown',
+                'student_confidence': 0.0,
+                'is_genuine': False,
+                'authenticity_score': 0.0,
+                'overall_confidence': 0.0,
+                'is_unknown': True,
+                'embedding': embedding.tolist()
+            }
         
         # Preprocess test signature
         processed_signature = self._preprocess_signature(test_signature)
@@ -568,57 +615,21 @@ class SignatureEmbeddingModel:
         
         predicted_student_id = 0
         student_confidence = 0.0
-        if has_classification:
-            student_probs = self.classification_head.predict(X_test, verbose=0)[0]
-            predicted_student_id = int(np.argmax(student_probs))
-            student_confidence = float(np.max(student_probs))
-            logger.info(f"Classification prediction: class {predicted_student_id}, confidence {student_confidence:.3f}")
-        else:
-            logger.warning("No classification head available - cannot predict student")
-            
-            # CRITICAL FIX: Ensure we only predict students that exist in our training data
-            if not self.id_to_student or predicted_student_id not in self.id_to_student:
-                # Try to map the predicted class to actual student IDs
-                if self.id_to_student and len(self.id_to_student) > 0:
-                    # Get the list of available student IDs (only trained students)
-                    available_ids = [k for k in self.id_to_student.keys() if isinstance(k, int) and k > 0]
-                    if predicted_student_id < len(available_ids):
-                        # Map the predicted class index to the actual student ID
-                        mapped_student_id = available_ids[predicted_student_id]
-                        predicted_student_id = mapped_student_id
-                        logger.info(f"Mapped predicted class {predicted_student_id} to student ID {mapped_student_id}")
-                    else:
-                        # If predicted class is out of range, mark as unknown
-                        predicted_student_id = 0
-                        student_confidence = 0.0
-                        logger.warning(f"Predicted class {predicted_student_id} out of range (available trained students: {len(available_ids)})")
-                else:
-                    # If no mappings loaded, mark as unknown
-                    predicted_student_id = 0
-                    student_confidence = 0.0
-                    logger.warning(f"No student mappings available (mappings: {len(self.id_to_student) if self.id_to_student else 0})")
+        # Predict identification strictly via classification head
+        student_probs = self.classification_head.predict(X_test, verbose=0)[0]
+        predicted_student_id = int(np.argmax(student_probs))
+        student_confidence = float(np.max(student_probs))
+        logger.info(f"Classification prediction: class {predicted_student_id}, confidence {student_confidence:.3f}")
         
         # Authenticity detection
         authenticity_score = 0.0
         is_genuine = False
-        if has_authenticity:
-            authenticity_score = float(self.authenticity_head.predict(X_test, verbose=0)[0][0])
-            is_genuine = authenticity_score > 0.5
         
-        # Get student name and actual student ID
+        # Get student name - predicted_student_id is the class index (0, 1, 2, 3, 4, 5, 6, 7)
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
         
-        # If we predicted a class index (0, 1), try to find the corresponding actual student ID
+        # The predicted_student_id is already the correct class index, no mapping needed
         actual_student_id = predicted_student_id
-        if predicted_student_id in [0, 1] and len(self.id_to_student) > 2:
-            # Look for actual student IDs in the mappings
-            actual_ids = [k for k in self.id_to_student.keys() if k not in [0, 1]]
-            if actual_ids and predicted_student_id < len(actual_ids):
-                actual_student_id = actual_ids[predicted_student_id]
-                logger.info(f"Mapped class {predicted_student_id} to actual student ID {actual_student_id}")
-                # Update the predicted student name to match the new ID
-                predicted_student_name = self.id_to_student.get(actual_student_id, f"Unknown_{actual_student_id}")
-                logger.info(f"Updated predicted student name to: {predicted_student_name}")
         
         # Calculate overall confidence
         if has_classification and has_authenticity:
@@ -628,11 +639,10 @@ class SignatureEmbeddingModel:
         else:
             overall_confidence = student_confidence
         
-        # Determine if signature is unknown - More lenient thresholds for better accuracy
+        # Determine if signature is unknown - stricter threshold to avoid false 100%
         is_unknown = (
-            (has_classification and student_confidence < 0.3) or  # Even more lenient for individual model
-            overall_confidence < 0.4 or  # More lenient overall
-            predicted_student_id == 0  # If no valid student ID found
+            (student_confidence < 0.5) or
+            predicted_student_id == 0
         )
         
         result = {

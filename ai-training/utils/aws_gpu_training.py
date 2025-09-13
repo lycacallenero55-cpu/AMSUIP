@@ -162,18 +162,16 @@ def train_on_gpu(training_data_key, job_id, student_id):
             processed = preprocessor.preprocess_signature(img)
             genuine_images.append(processed)
         
-        for img_data in signatures['forged']:
-            img = Image.open(io.BytesIO(bytes(img_data)))
-            processed = preprocessor.preprocess_signature(img)
-            forged_images.append(processed)
+        # Skip forged signature processing - not used for owner identification training
+        # (Forgery detection is disabled, so we only process genuine signatures)
         
         processed_data[student_name] = {{
             'genuine': genuine_images,
             'forged': forged_images
         }}
     
-    # Train models
-    result = ai_model.train_models(processed_data, epochs=50)
+    # Train classification-only model for owner identification
+    result = ai_model.train_classification_only(processed_data, epochs=50)
     
     # Save models
     model_path = f'/tmp/models_{job_id}'

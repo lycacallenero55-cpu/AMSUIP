@@ -390,7 +390,9 @@ const SignatureAI = () => {
   };
 
   const canTrainModel = () => {
-    return studentCards.some(card => card.student !== null && hasUploadedImages(card));
+    return studentCards.some(card => card.student !== null && (
+      (card.genuineCount ?? 0) + (card.forgedCount ?? 0) > 0 || hasUploadedImages(card)
+    ));
   };
 
   const getTotalTrainingData = () => {
@@ -1064,20 +1066,19 @@ const SignatureAI = () => {
                       <DropdownMenuItem disabled={isLocked} onClick={async () => {
                         if (isLocked) return;
                         try {
-                          const items = await aiService.listStudentsWithImages();
+                          const items = await aiService.listStudentsWithImages(true);
                           const byId = new Map(allStudents.map(s => [s.id, s]));
-                          // Only include students that still have at least 1 signature
-                          const toAdd = items
-                            .filter(it => (it.signatures?.length || 0) > 0)
-                            .map(it => ({ student: byId.get(it.student_id), count: it.signatures.length }))
-                            .filter((x) => Boolean(x.student)) as Array<{ student: Student; count: number }>;
+                          // Always display students with Supabase records; counts reflect summary
+                          const toAdd = (items as any[])
+                            .map(it => ({ student: byId.get(it.student_id), genuine_count: it.genuine_count || 0, forged_count: it.forged_count || 0 }))
+                            .filter((x) => Boolean(x.student)) as Array<{ student: Student; genuine_count: number; forged_count: number }>;
                           // Add cards for these students
                           let addedIds: number[] = [];
                           setStudentCards(prev => {
                             const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
                             const newCards = toAdd
                               .filter(x => !existingIds.has(x.student.id))
-                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: undefined, forgedCount: undefined }));
+                              .map(x => ({ id: `${Date.now()}-${x.student.id}`, student: x.student, genuineFiles: [], forgedFiles: [], isExpanded: true, genuineCount: x.genuine_count, forgedCount: x.forged_count }));
                             addedIds = newCards.map(c => (c.student as any).id);
                             const merged = [...prev, ...newCards];
                             // Remove placeholder empty card if real students exist
@@ -1087,50 +1088,29 @@ const SignatureAI = () => {
                           // For each added student, load their images and populate previews
                           for (const sid of addedIds) {
                             try {
-                              // Set counts immediately and show placeholders
+                              // Ensure counts are preserved and show placeholders based on counts (do not fetch images now)
+                              const summary = (items as any[]).find((it:any) => it.student_id === sid) as any;
+                              const gCount = (summary?.genuine_count ?? 0);
+                              const fCount = (summary?.forged_count ?? 0);
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  return { ...c, genuineCount: 0, forgedCount: 0, isFetchingImages: true };
+                                  return { ...c, genuineCount: gCount, forgedCount: fCount, isFetchingImages: true };
                                 }
                                 return c;
                               }));
-                              const persisted = await aiService.listSignatures(sid);
-                              const genuines = persisted.filter(x => x.label === 'genuine');
-                              const forgeds = persisted.filter(x => x.label === 'forged');
+                              const genuines = Array.from({ length: gCount });
+                              const forgeds = Array.from({ length: fCount });
                               // Prime placeholders so users see counts immediately
                               setStudentCards(prev => prev.map(c => {
                                 if (c.student && c.student.id === sid) {
-                                  const gPlaceholders = genuines.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  const fPlaceholders = forgeds.map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
-                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders, genuineCount: genuines.length, forgedCount: forgeds.length };
+                                  const gPlaceholders = Array.from({ length: c.genuineCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  const fPlaceholders = Array.from({ length: c.forgedCount ?? 0 }).map(() => ({ file: new File([], ''), preview: '', placeholder: true } as any));
+                                  return { ...c, genuineFiles: gPlaceholders, forgedFiles: fPlaceholders };
                                 }
                                 return c;
                               }));
-                              // Stream in images incrementally
-                              for (const rec of persisted) {
-                                try {
-                                  const mapped = { file: new File([], rec.s3_url), preview: rec.s3_url, id: rec.id, s3Key: rec.s3_key, label: rec.label } as any;
-                                  setStudentCards(prev => prev.map(c => {
-                                    if (c.student && c.student.id === sid) {
-                                      if (rec.label === 'genuine') {
-                                        // replace first placeholder or append
-                                        const next = [...c.genuineFiles];
-                                        const idx = next.findIndex(x => (x as any).placeholder);
-                                        if (idx >= 0) next[idx] = mapped; else next.push(mapped);
-                                        return { ...c, genuineFiles: next };
-                                      } else {
-                                        const next = [...c.forgedFiles];
-                                        const idx = next.findIndex(x => (x as any).placeholder);
-                                        if (idx >= 0) next[idx] = mapped; else next.push(mapped);
-                                        return { ...c, forgedFiles: next };
-                                      }
-                                    }
-                                    return c;
-                                  }));
-                                } catch {}
-                              }
-                              // Mark fetching complete
-                              setStudentCards(prev => prev.map(c => (c.student && c.student.id === sid) ? { ...c, isFetchingImages: false } : c));
+                              // Defer actual image fetching to training phase
+                              setStudentCards(prev => prev.map(c => (c.student && c.student.id === sid) ? { ...c, isFetchingImages: true } : c));
                             } catch {
                               // Ensure removed students (no images) are filtered out on any failure
                               setStudentCards(prev => prev.filter(c => !(c.student && c.student.id === sid)));

@@ -167,32 +167,22 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         return arr
     genuine_norm = [_normalize(a) for a in genuine_arrays]
     forged_norm = [_normalize(a) for a in forged_arrays]
+    # Use student name for consistent mapping
+    student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
     training_data = {
-        f"student_{student['id']}": {
+        student_name: {
             'genuine': genuine_norm,
             'forged': forged_norm
         }
     }
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
-    local_manager = SignatureEmbeddingModel(max_students=1)
-    # Prepare data once and train authenticity-only to avoid softmax(num_classes=1) issues
-    X, _y_student, y_auth = local_manager.prepare_training_data(training_data)
+    local_manager = SignatureEmbeddingModel(max_students=150)
+    # Create proper classification head for identification
+    _X, _y_student, _y_auth = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
-    local_manager.create_authenticity_head()
-    # Minimal, robust callbacks for small per-student datasets
-    callbacks = [
-        keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
-        keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1),
-    ]
-    authenticity_history = local_manager.authenticity_head.fit(
-        X, y_auth,
-        batch_size=min(16, len(X)) or 1,
-        epochs=max(10, min(25, settings.MODEL_EPOCHS)),
-        validation_split=0.2,
-        callbacks=callbacks,
-        verbose=1
-    )
+    num_students = len(local_manager.student_to_id)
+    local_manager.create_classification_head(num_students=num_students)
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
@@ -208,8 +198,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         s3_urls = {}
         s3_keys = {}
         for model_type, file_info in uploaded_files.items():
-            s3_urls[model_type] = file_info['url']
-            s3_keys[model_type] = file_info['key']
+            if model_type in ['embedding', 'classification']:
+                s3_urls[model_type] = file_info['url']
+                s3_keys[model_type] = file_info['key']
             
         logger.info(f"✅ Individual model {model_uuid} saved with optimized S3 saving")
         
@@ -227,8 +218,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             s3_urls = {}
             s3_keys = {}
             for model_type, file_info in uploaded_files.items():
-                s3_urls[model_type] = file_info['url']
-                s3_keys[model_type] = file_info['key']
+                if model_type in ['embedding', 'classification']:
+                    s3_urls[model_type] = file_info['url']
+                    s3_keys[model_type] = file_info['key']
                 
             logger.info(f"✅ Individual model {model_uuid} saved with direct S3 saving")
             
@@ -242,7 +234,6 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         model_files = [
             (f"{base_path}_embedding.keras", "embedding"),
             (f"{base_path}_classification.keras", "classification"),
-            (f"{base_path}_authenticity.keras", "authenticity"),
         ]
         s3_urls = {}
         s3_keys = {}
@@ -262,7 +253,6 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         # Store classification model as primary path for student identification
         "model_path": s3_urls.get("classification", ""),
         "embedding_model_path": s3_urls.get("embedding", ""),
-        "authenticity_model_path": s3_urls.get("authenticity", ""),
         "s3_key": s3_keys.get("classification", ""),
         "model_uuid": model_uuid,
         "status": "completed",
@@ -270,13 +260,13 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         "genuine_count": len(genuine_arrays),
         "forged_count": len(forged_arrays),
         "training_date": datetime.utcnow().isoformat(),
-        "accuracy": float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
+        "accuracy": None,
         "training_metrics": {
             'model_type': 'ai_signature_verification_individual',
             'architecture': 'signature_embedding_network',
-            'epochs_trained': len(authenticity_history.history.get('accuracy', [])) if authenticity_history else None,
-            'final_accuracy': float(authenticity_history.history.get('accuracy', [0])[-1]) if authenticity_history else None,
-            'val_accuracy': float(authenticity_history.history.get('val_accuracy', [0])[-1]) if authenticity_history else None,
+            'epochs_trained': None,
+            'final_accuracy': None,
+            'val_accuracy': None,
             'embedding_dimension': local_manager.embedding_dim,
         }
     }
@@ -327,25 +317,16 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 progress = 10.0 + (i + 1) / len(genuine_data) * 20.0
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
 
-        if job:
-            job_queue.update_job_progress(job.job_id, 30.0, "Processing forged signatures...")
-
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            # Apply advanced signature preprocessing
-            processed_image = preprocessor.preprocess_signature(image)
-            forged_images.append(processed_image)
-            
-            if job:
-                progress = 30.0 + (i + 1) / len(forged_data) * 20.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged signatures... {i+1}/{len(forged_data)}")
+        # Skip forged signature processing - not used for owner identification training
+        # (Forgery detection is disabled, so we only process genuine signatures)
 
         if job:
             job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
 
-        # Prepare training data with augmentation
+        # Prepare training data with augmentation - use student name for consistent mapping
+        student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
         training_data = {
-            f"student_{student['id']}": {
+            student_name: {
                 'genuine': genuine_images,
                 'forged': forged_images
             }
@@ -356,8 +337,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
 
         t0 = time.time()
         
-        # Train with the new AI system
-        result_models = signature_ai_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
+        # Train with classification-only for faster identification
+        result_models = signature_ai_manager.train_classification_only(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
             job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
@@ -412,12 +393,10 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             # Save all models
             signature_ai_manager.save_models(base_path)
 
-            # Upload models to S3
+            # Upload models to S3 (only classification and embedding for faster training)
             model_files = [
                 (f"{base_path}_embedding.keras", "embedding"),
-                (f"{base_path}_classification.keras", "classification"),
-                (f"{base_path}_authenticity.keras", "authenticity"),
-                (f"{base_path}_siamese.keras", "siamese")
+                (f"{base_path}_classification.keras", "classification")
             ]
             
             s3_urls = {}
@@ -441,14 +420,12 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         # Create model record with comprehensive metrics
         # Prefer classification accuracy; fallback to authenticity, then siamese
         _cls_acc = float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None
-        _auth_acc = float(result_models['authenticity_history'].get('accuracy', [0])[-1]) if 'authenticity_history' in result_models else None
         _sia_acc = float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None
-        top_level_accuracy = next((a for a in [_cls_acc, _auth_acc, _sia_acc] if a is not None), None)
+        top_level_accuracy = next((a for a in [_cls_acc, _sia_acc] if a is not None), None)
         model_record = await db_manager.create_trained_model({
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
             "embedding_model_path": s3_urls.get("embedding", ""),
-            "authenticity_model_path": s3_urls.get("authenticity", ""),
             "s3_key": s3_keys.get("classification", ""),
             "status": "completed",
             "sample_count": len(genuine_images) + len(forged_images),
@@ -460,14 +437,12 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 'model_type': 'ai_signature_verification',
                 'architecture': 'signature_embedding_network',
                 'student_recognition_accuracy': _cls_acc,
-                'authenticity_accuracy': _auth_acc,
                 'siamese_accuracy': _sia_acc,
                 'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
                 'embedding_dimension': signature_ai_manager.embedding_dim,
                 'model_parameters': sum([
                     signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
                     signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
-                    signature_ai_manager.authenticity_head.count_params() if signature_ai_manager.authenticity_head else 0,
                     signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
                 ])
             }
@@ -515,12 +490,11 @@ async def start_training(
 
         genuine_data: List[bytes] = []
         forged_data: List[bytes] = []
-        if genuine_files and forged_files:
+        if genuine_files:  # Only need genuine files for owner identification
             # Use uploaded files
             if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                 raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
+            # Forged samples not required since forgery detection is disabled
             genuine_data = [await f.read() for f in genuine_files]
             forged_data = [await f.read() for f in forged_files]
         else:
@@ -557,8 +531,8 @@ async def start_training(
                     genuine_data.append(data)
                 else:
                     forged_data.append(data)
-            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES or len(forged_data) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine/forged samples)")
+            if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
+                raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
 
         result = await train_signature_model(student, genuine_data, forged_data)
         return result
@@ -571,8 +545,8 @@ async def start_training(
 @router.post("/start-gpu-training")
 async def start_gpu_training(
     student_id: str = Form(...),
-    genuine_files: List[UploadFile] = File(...),
-    forged_files: List[UploadFile] = File(...),
+    genuine_files: List[UploadFile] | None = File(None),
+    forged_files: List[UploadFile] | None = File(None),
     use_gpu: bool = Form(True)
 ):
     """
@@ -594,14 +568,41 @@ async def start_gpu_training(
             if not student:
                 raise HTTPException(status_code=404, detail="Student not found")
 
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             job = job_queue.create_job(int(student["id"]), "gpu_training")
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # If no files uploaded, auto-fetch from storage
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
+                rows = await db_manager.list_student_signatures(int(student["id"]))
+                if not rows:
+                    raise HTTPException(status_code=400, detail="No stored signatures available for this student")
+                import requests
+                genuine_data = []
+                forged_data = []
+                for r in rows:
+                    url = r.get("s3_url"); label = (r.get("label") or "").lower()
+                    key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                    content: bytes | None = None
+                    if key:
+                        try:
+                            content = download_bytes(key)
+                        except Exception:
+                            content = None
+                    if content is None and url:
+                        try:
+                            resp = requests.get(url, timeout=8); resp.raise_for_status(); content = resp.content
+                        except Exception:
+                            continue
+                    if not content:
+                        continue
+                    if label == "genuine": genuine_data.append(content)
+                    else: forged_data.append(content)
+                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                # Forged samples not required since forgery detection is disabled
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             
             if use_gpu and gpu_training_manager.is_available():
                 # Use GPU training
@@ -626,14 +627,17 @@ async def start_gpu_training(
         
         else:
             # Multiple students - use global training
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             job = job_queue.create_job(0, "global_gpu_training")
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # For global GPU, allow auto-fetch when files are not provided
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
+                genuine_data = []
+                forged_data = []
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                # Forged samples not required since forgery detection is disabled
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             
             if use_gpu and gpu_training_manager.is_available():
                 asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data))
@@ -663,8 +667,8 @@ async def start_gpu_training(
 @router.post("/start-async")
 async def start_async_training(
     student_id: str = Form(...),
-    genuine_files: List[UploadFile] = File(...),
-    forged_files: List[UploadFile] = File(...)
+    genuine_files: List[UploadFile] | None = File(None),
+    forged_files: List[UploadFile] | None = File(None)
 ):
     try:
         # Handle multiple students (comma-separated) or single student
@@ -682,28 +686,58 @@ async def start_async_training(
             if not student:
                 raise HTTPException(status_code=404, detail="Student not found")
 
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             job = job_queue.create_job(int(student["id"]), "training")
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # Allow auto-fetch when files are not uploaded
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
+                rows = await db_manager.list_student_signatures(int(student["id"]))
+                if not rows:
+                    raise HTTPException(status_code=400, detail="No stored signatures available for this student")
+                import requests
+                genuine_data = []
+                forged_data = []
+                for r in rows:
+                    url = r.get("s3_url"); label = (r.get("label") or "").lower()
+                    key = r.get("s3_key") or _derive_s3_key_from_url(url)
+                    content: bytes | None = None
+                    if key:
+                        try:
+                            content = download_bytes(key)
+                        except Exception:
+                            content = None
+                    if content is None and url:
+                        try:
+                            resp = requests.get(url, timeout=8); resp.raise_for_status(); content = resp.content
+                        except Exception:
+                            continue
+                    if not content:
+                        continue
+                    if label == "genuine": genuine_data.append(content)
+                    else: forged_data.append(content)
+                if len(genuine_data) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail="Insufficient stored signatures to train (need more genuine samples)")
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                # Forged samples not required since forgery detection is disabled
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
         
         else:
             # Multiple students - use global training
-            if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            if len(forged_files) < settings.MIN_FORGED_SAMPLES:
-                raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_FORGED_SAMPLES} forged samples required")
-
             # Create a job for global training
             job = job_queue.create_job(0, "global_training")  # 0 indicates global training
-            genuine_data = [await f.read() for f in genuine_files]
-            forged_data = [await f.read() for f in forged_files]
+            # Support auto-fetch when files omitted (defer per-student fetch to run_global_async_training)
+            if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
+                genuine_data = []
+                forged_data = []
+            else:
+                if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
+                    raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
+                # Forged samples not required since forgery detection is disabled
+                genuine_data = [await f.read() for f in genuine_files]
+                forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
             
@@ -831,12 +865,8 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 progress = 5.0 + (i + 1) / len(genuine_data) * 10.0
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
 
-        for i, data in enumerate(forged_data):
-            image = Image.open(io.BytesIO(data))
-            forged_images.append(image)
-            if job:
-                progress = 15.0 + (i + 1) / len(forged_data) * 10.0
-                job_queue.update_job_progress(job.job_id, progress, f"Processing forged images... {i+1}/{len(forged_data)}")
+        # Skip forged signature processing - not used for owner identification training
+        # (Forgery detection is disabled, so we only process genuine signatures)
 
         # Prepare training data
         training_data = {
@@ -863,7 +893,6 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 "student_id": int(student["id"]),
                 "model_path": gpu_result['model_urls'].get('classification', ''),
                 "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
-                "authenticity_model_path": gpu_result['model_urls'].get('authenticity', ''),
                 "status": "completed",
                 "sample_count": len(genuine_images) + len(forged_images),
                 "genuine_count": len(genuine_images),
@@ -936,7 +965,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         # Validate minimum totals across all selected students
         total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
         total_forged = sum(len(v["forged_images"]) for v in per_student.values())
-        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+        if total_genuine < settings.MIN_GENUINE_SAMPLES:
             raise Exception("Insufficient stored signatures across selected students to train global model")
 
         # Build training data structure for GPU service (expects simple dict of lists of arrays)
@@ -944,7 +973,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         for s in students:
             sid = int(s["id"])  # type: ignore[index]
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-            training_data[f"student_{sid}"] = {
+            # Use student name for consistent mapping
+            student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
+            training_data[student_name] = {
                 "genuine_images": bucket["genuine_images"],
                 "forged_images": bucket["forged_images"],
             }
@@ -999,7 +1030,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 for s in students:
                     sid = int(s["id"])  # type: ignore[index]
                     bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                    if bucket["genuine_images"] and bucket["forged_images"]:
+                    if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
                         await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                         individual_count += 1
             except Exception as e:
@@ -1049,14 +1080,16 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
 
         total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())
         total_forged = sum(len(v["forged_images"]) for v in per_student.values())
-        if total_genuine < settings.MIN_GENUINE_SAMPLES or total_forged < settings.MIN_FORGED_SAMPLES:
+        if total_genuine < settings.MIN_GENUINE_SAMPLES:
             raise Exception("Insufficient stored signatures across selected students to train global model")
 
         training_data = {}
         for s in students:
             sid = int(s["id"])  # type: ignore[index]
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-            training_data[f"student_{sid}"] = {
+            # Use student name for consistent mapping
+            student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
+            training_data[student_name] = {
                 'genuine_images': bucket['genuine_images'],
                 'forged_images': bucket['forged_images']
             }
@@ -1142,7 +1175,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
             for s in students:
                 sid = int(s["id"])  # type: ignore[index]
                 bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                if bucket["genuine_images"] and bucket["forged_images"]:
+                if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
                     await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
                     individual_count += 1
         except Exception as e:
