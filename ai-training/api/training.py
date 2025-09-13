@@ -26,6 +26,7 @@ from config import settings
 from models.global_signature_model import GlobalSignatureVerificationModel
 from utils.s3_storage import create_presigned_get, download_bytes
 from utils.s3_storage import upload_model_file as upload_file_generic
+from utils.storage import cleanup_local_file
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
