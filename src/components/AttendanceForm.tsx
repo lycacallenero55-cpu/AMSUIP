@@ -585,7 +585,7 @@ const AttendanceForm = ({ onSuccess, onSubmit, initialData }: AttendanceFormProp
               .map((option) => (
               <div 
                 key={option.type} 
-                className={`group relative rounded-lg p-0.5 ${option.bg} ${option.hoverBg} transition-all duration-200 hover:scale-105 hover:shadow-md w-full`}
+                className={`group relative rounded-lg p-0.5 ${option.bg} ${option.hoverBg} transition-all duration-200 hover:scale-105 w-full`}
               >
                 <div 
                   className={`p-4 rounded-lg cursor-pointer transition-all duration-200 h-full ${

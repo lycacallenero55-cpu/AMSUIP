@@ -384,7 +384,7 @@ const Dashboard = () => {
       
       {/* Minimalist Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
+        <Card className="bg-white border border-gray-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Total Students</CardTitle>
             <div className="p-2 bg-blue-100 rounded-lg">
@@ -402,7 +402,7 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
+        <Card className="bg-white border border-gray-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Today's Attendance</CardTitle>
             <div className="p-2 bg-purple-100 rounded-lg">
@@ -424,7 +424,7 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
+        <Card className="bg-white border border-gray-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Attendance Rate</CardTitle>
             <div className="p-2 bg-green-100 rounded-lg">
@@ -444,7 +444,7 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
+        <Card className="bg-white border border-gray-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Today's Sessions</CardTitle>
             <div className="p-2 bg-orange-100 rounded-lg">
@@ -462,7 +462,7 @@ const Dashboard = () => {
           </CardContent>
         </Card>
         
-        <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-all duration-200">
+        <Card className="bg-white border border-gray-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-6 pt-6">
             <CardTitle className="text-sm font-medium text-gray-700">Academic Year</CardTitle>
             <div className="p-2 bg-indigo-100 rounded-lg">

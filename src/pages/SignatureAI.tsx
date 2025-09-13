@@ -1289,7 +1289,7 @@ const SignatureAI = () => {
                     Object.entries(dateGroupedModels).map(([date, models]) => (
                       <div key={date} className="group">
                         <Card 
-                          className="h-10 cursor-pointer hover:shadow-md transition-shadow"
+                          className="h-10 cursor-pointer"
                           onClick={() => setSelectedDate(date)}
                         >
                           <CardContent className="py-0 px-2 pr-1 h-full flex items-center">
