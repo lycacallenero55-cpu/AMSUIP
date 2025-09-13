@@ -11,6 +11,7 @@ import asyncio
 from models.database import db_manager
 from utils.s3_storage import object_exists, count_objects_with_prefix
 from config import settings
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,27 @@ async def sync_supabase_with_s3(dry_run: bool = True) -> Dict:
 async def get_students_with_missing_images() -> List[Dict]:
     """Get students with missing S3 images"""
     return await sync_manager.get_students_with_missing_images()
+
+async def count_student_signatures(student_id: int) -> Tuple[int, int]:
+    """Count genuine and forged signatures for a student from S3"""
+    try:
+        # Get signatures from database and verify they exist in S3
+        signatures = await db_manager.list_student_signatures(student_id)
+        genuine_count = 0
+        forged_count = 0
+        
+        for sig in signatures:
+            s3_key = sig.get('s3_key')
+            if s3_key and object_exists(s3_key):
+                if sig.get('label') == 'genuine':
+                    genuine_count += 1
+                elif sig.get('label') == 'forged':
+                    forged_count += 1
+        
+        return genuine_count, forged_count
+    except Exception as e:
+        logger.error(f"Error counting signatures for student {student_id}: {e}")
+        return 0, 0
 
 async def fix_student_image_counts(student_id: int) -> Dict:
     """Fix image counts for a specific student"""

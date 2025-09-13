@@ -335,7 +335,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
 
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled, so we only process genuine signatures)
+        # (Forgery detection is disabled system-wide, so we only process genuine signatures)
 
         if job:
             job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
@@ -883,7 +883,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
 
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled, so we only process genuine signatures)
+        # (Forgery detection is disabled system-wide, so we only process genuine signatures)
 
         # Prepare training data
         training_data = {
