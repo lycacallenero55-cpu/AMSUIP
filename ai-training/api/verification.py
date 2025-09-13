@@ -12,6 +12,7 @@ from utils.image_processing import validate_image
 # Removed non-existent imports - using direct S3 download instead
 from utils.s3_storage import create_presigned_get, download_bytes
 from models.global_signature_model import GlobalSignatureVerificationModel
+from utils.s3_supabase_sync import sync_supabase_with_s3, get_students_with_missing_images, fix_student_image_counts
 import requests
 from config import settings
 
@@ -823,14 +824,19 @@ async def identify_signature_owner(
                     combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
                 result["predicted_student_id"] = predicted_owner_id
         
-        # Apply robust unknown/match logic
+        # Apply robust unknown/match logic with configurable confidence threshold
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
         global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
         global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
-        # Ignore authenticity head for now to prioritize identification
+        
+        # Use configurable confidence threshold
+        confidence_threshold = settings.CONFIDENCE_THRESHOLD
+        
+        # Ignore authenticity head - forgery detection disabled
         has_auth = False
-        # Improved unknown thresholding with better outlier detection (owner identification focus)
+        
+        # Improved unknown thresholding with configurable confidence threshold
         is_unknown = True
         trained_ids = await _get_trained_student_ids()
         
@@ -894,12 +900,11 @@ async def identify_signature_owner(
             
         result["is_unknown"] = is_unknown
 
-        # Optimized for minimal signatures: more lenient thresholds for owner identification
-        # Like Teachable Machine - prioritize identifying the owner even with lower confidence
+        # Use configurable confidence threshold for owner identification
         ownership_ok = (
-            student_confidence >= 0.40 or  # Lowered from 0.60
-            (global_score >= 0.80 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or  # Lowered thresholds
-            (student_confidence >= 0.30 and global_score >= 0.70)  # Combined confidence for minimal data
+            student_confidence >= confidence_threshold or
+            (global_score >= confidence_threshold + 0.1 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or
+            (student_confidence >= confidence_threshold - 0.1 and global_score >= confidence_threshold)
         )
         
         # Do not auto-accept individual prediction if global was rejected (avoid false positives)
@@ -1576,3 +1581,64 @@ async def verify_signature(
     except Exception as e:
         logger.error(f"AI verification failed: {e}")
         return _get_fallback_response("verify", student_id)
+
+@router.post("/sync-s3-supabase")
+async def sync_s3_supabase(dry_run: bool = True):
+    """
+    Synchronize Supabase records with S3 objects
+    """
+    try:
+        result = await sync_supabase_with_s3(dry_run=dry_run)
+        return {
+            "success": True,
+            "dry_run": dry_run,
+            "sync_stats": result,
+            "message": "Sync completed successfully" if not dry_run else "Dry run completed - no changes made"
+        }
+    except Exception as e:
+        logger.error(f"S3-Supabase sync failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Sync failed"
+        }
+
+@router.get("/missing-images")
+async def get_missing_images():
+    """
+    Get list of students with missing S3 images
+    """
+    try:
+        missing_images = await get_students_with_missing_images()
+        return {
+            "success": True,
+            "missing_images": missing_images,
+            "count": len(missing_images)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get missing images: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "missing_images": []
+        }
+
+@router.post("/fix-student-images/{student_id}")
+async def fix_student_images(student_id: int):
+    """
+    Fix image counts for a specific student
+    """
+    try:
+        result = await fix_student_image_counts(student_id)
+        return {
+            "success": True,
+            "student_id": student_id,
+            "result": result
+        }
+    except Exception as e:
+        logger.error(f"Failed to fix images for student {student_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "student_id": student_id
+        }
