@@ -300,8 +300,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           {/* User Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0 flex items-center justify-center">
-                <UserCircle className="h-8 w-8" />
+              <Button variant="ghost" className="relative h-12 w-12 rounded-full p-0 flex items-center justify-center">
+                <UserCircle className="h-10 w-10" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
