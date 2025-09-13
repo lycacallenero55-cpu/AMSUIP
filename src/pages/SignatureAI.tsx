@@ -1069,17 +1069,20 @@ const SignatureAI = () => {
                           const items = await aiService.listStudentsWithImages(true);
                           const byId = new Map(allStudents.map(s => [s.id, s]));
                           
-                          // Filter out students with missing S3 images
+                          // Filter out students with missing S3 images and validate counts
                           const validItems = [];
                           for (const item of items) {
                             if (item.student_id && byId.has(item.student_id)) {
-                              // Check if student has actual images (not just DB records)
                               const student = byId.get(item.student_id);
-                              if (student && (item.genuine_count > 0 || item.forged_count > 0)) {
+                              const genuineCount = item.genuine_count || 0;
+                              const forgedCount = item.forged_count || 0;
+                              
+                              // Only include students with actual images (not just DB records)
+                              if (student && (genuineCount > 0 || forgedCount > 0)) {
                                 validItems.push({
                                   student: student,
-                                  genuine_count: item.genuine_count || 0,
-                                  forged_count: item.forged_count || 0
+                                  genuine_count: genuineCount,
+                                  forged_count: forgedCount
                                 });
                               }
                             }
@@ -1094,7 +1097,7 @@ const SignatureAI = () => {
                             return;
                           }
                           
-                          // Add cards for these students
+                          // Add cards for these students with immediate display
                           let addedIds: number[] = [];
                           setStudentCards(prev => {
                             const existingIds = new Set(prev.filter(c => c.student).map(c => (c.student as any).id));
@@ -1107,7 +1110,20 @@ const SignatureAI = () => {
                                 forgedFiles: [], 
                                 isExpanded: true, 
                                 genuineCount: x.genuine_count, 
-                                forgedCount: x.forged_count 
+                                forgedCount: x.forged_count,
+                                // Add placeholder files to show loading state
+                                genuineFiles: Array(x.genuine_count).fill(null).map((_, i) => ({
+                                  file: new File([], `placeholder-${i}`),
+                                  preview: '',
+                                  placeholder: true,
+                                  label: 'genuine' as const
+                                })),
+                                forgedFiles: Array(x.forged_count).fill(null).map((_, i) => ({
+                                  file: new File([], `placeholder-${i}`),
+                                  preview: '',
+                                  placeholder: true,
+                                  label: 'forged' as const
+                                }))
                               }));
                             addedIds = newCards.map(c => (c.student as any).id);
                             const merged = [...prev, ...newCards];
@@ -1116,9 +1132,65 @@ const SignatureAI = () => {
                             return hasReal ? merged.filter(c => c.student) : merged;
                           });
                           
+                          // Load actual images in background for each student
+                          for (const item of validItems) {
+                            try {
+                              const signatures = await aiService.listSignatures(item.student.id);
+                              
+                              // Filter out signatures with invalid S3 URLs (deleted images)
+                              const validSignatures = signatures.filter(s => s.s3_url && s.s3_url.trim() !== '');
+                              
+                              const genuineFiles = validSignatures
+                                .filter(s => s.label === 'genuine')
+                                .map(s => ({
+                                  file: new File([], s.s3_url),
+                                  preview: s.s3_url,
+                                  id: s.id,
+                                  s3Key: s.s3_key,
+                                  label: s.label as 'genuine'
+                                }));
+                              const forgedFiles = validSignatures
+                                .filter(s => s.label === 'forged')
+                                .map(s => ({
+                                  file: new File([], s.s3_url),
+                                  preview: s.s3_url,
+                                  id: s.id,
+                                  s3Key: s.s3_key,
+                                  label: s.label as 'forged'
+                                }));
+                              
+                              // Update the card with actual images
+                              setStudentCards(prev => prev.map(card => 
+                                card.student?.id === item.student.id 
+                                  ? { 
+                                      ...card, 
+                                      genuineFiles: genuineFiles,
+                                      forgedFiles: forgedFiles,
+                                      genuineCount: genuineFiles.length,
+                                      forgedCount: forgedFiles.length
+                                    }
+                                  : card
+                              ));
+                            } catch (e) {
+                              console.error(`Error loading images for student ${item.student.id}:`, e);
+                              // Remove placeholder files if loading fails and update counts to 0
+                              setStudentCards(prev => prev.map(card => 
+                                card.student?.id === item.student.id 
+                                  ? { 
+                                      ...card, 
+                                      genuineFiles: [],
+                                      forgedFiles: [],
+                                      genuineCount: 0,
+                                      forgedCount: 0
+                                    }
+                                  : card
+                              ));
+                            }
+                          }
+                          
                           toast({ 
                             title: 'Students Loaded', 
-                            description: `Loaded ${validItems.length} students with signature images` 
+                            description: `Loaded ${validItems.length} students with signature images. Images are loading in the background.` 
                           });
                           
                         } catch (e) {
@@ -1949,7 +2021,10 @@ const SignatureAI = () => {
                                 >
                                   {item.placeholder ? (
                                     <div className="absolute inset-0 w-full h-full flex items-center justify-center bg-gray-100 text-[10px] text-muted-foreground text-center p-1">
-                                      Fetching {trainingImagesSet==='genuine' ? (card.genuineCount ?? card.genuineFiles.length) : (card.forgedCount ?? card.forgedFiles.length)} signatures, please wait...
+                                      <div className="flex flex-col items-center gap-1">
+                                        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                        <span>Loading...</span>
+                                      </div>
                                     </div>
                                   ) : (
                                     <img
@@ -1957,6 +2032,15 @@ const SignatureAI = () => {
                                       alt={item.label ? `${item.label} sample ${index + 1}` : `Sample ${index + 1}`}
                                       className="absolute inset-0 w-full h-full object-cover hover:opacity-80 transition-opacity"
                                       loading="lazy"
+                                      onError={(e) => {
+                                        // Handle broken image URLs (deleted S3 images)
+                                        const target = e.target as HTMLImageElement;
+                                        target.style.display = 'none';
+                                        const parent = target.parentElement;
+                                        if (parent) {
+                                          parent.innerHTML = '<div class="absolute inset-0 w-full h-full flex items-center justify-center bg-red-100 text-[10px] text-red-600 text-center p-1">Image not found</div>';
+                                        }
+                                      }}
                                     />
                                   )}
                                   <button

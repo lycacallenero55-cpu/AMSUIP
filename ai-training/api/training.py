@@ -249,6 +249,11 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
         # Atomic DB write - only create record after successful S3 upload
         try:
+            # Ensure atomic operations
+            from utils.s3_supabase_sync import ensure_atomic_operations
+            if not await ensure_atomic_operations():
+                raise Exception("Database connection not available for atomic operations")
+            
             # Verify S3 uploads were successful
             for model_type, file_info in uploaded_files.items():
                 if 'key' in file_info:
@@ -335,7 +340,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine signatures... {i+1}/{len(genuine_data)}")
 
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled system-wide, so we only process genuine signatures)
+        # (Forgery detection is disabled system-wide - focus on owner identification only)
 
         if job:
             job_queue.update_job_progress(job.job_id, 50.0, "Preparing training data with augmentation...")
@@ -355,6 +360,12 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         t0 = time.time()
         
         # Train with classification-only for faster identification
+        # Pass job_id to training context for real-time metrics
+        if job:
+            import threading
+            current_thread = threading.current_thread()
+            current_thread.job_id = job.job_id
+        
         result_models = signature_ai_manager.train_classification_only(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
@@ -511,7 +522,7 @@ async def start_training(
             # Use uploaded files
             if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                 raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-            # Forged samples not required since forgery detection is disabled
+            # Forged samples not required since forgery detection is disabled - focus on owner identification only
             genuine_data = [await f.read() for f in genuine_files]
             forged_data = [await f.read() for f in forged_files]
         else:
@@ -617,7 +628,7 @@ async def start_gpu_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                # Forged samples not required since forgery detection is disabled
+                # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             
@@ -652,7 +663,7 @@ async def start_gpu_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                # Forged samples not required since forgery detection is disabled
+                # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             
@@ -735,7 +746,7 @@ async def start_async_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                # Forged samples not required since forgery detection is disabled
+                # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
@@ -752,7 +763,7 @@ async def start_async_training(
             else:
                 if len(genuine_files) < settings.MIN_GENUINE_SAMPLES:
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
-                # Forged samples not required since forgery detection is disabled
+                # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files]
             asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
@@ -883,7 +894,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 job_queue.update_job_progress(job.job_id, progress, f"Processing genuine images... {i+1}/{len(genuine_data)}")
 
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled system-wide, so we only process genuine signatures)
+        # (Forgery detection is disabled system-wide - focus on owner identification only)
 
         # Prepare training data
         training_data = {
@@ -1020,7 +1031,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 "forged_count": int(total_forged),
                 "student_count": len(students),
                 "training_date": datetime.utcnow().isoformat(),
-                "accuracy": 0.95,  # Placeholder - would come from training results
+                "accuracy": gpu_result.get('accuracy', 0.0),  # Use actual training results
                 "training_metrics": {
                     'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',

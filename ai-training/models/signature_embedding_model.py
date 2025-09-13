@@ -369,7 +369,7 @@ class SignatureEmbeddingModel:
                         # Continue without this augmentation
             
             # Skip forged signatures - not used for owner identification training
-            # (Forgery detection is disabled system-wide, so we only train on genuine signatures)
+            # (Forgery detection is disabled system-wide - focus on owner identification only)
         
         X = np.array(all_images, dtype=np.float32)
         # Use actual number of students for categorical encoding
@@ -439,6 +439,19 @@ class SignatureEmbeddingModel:
             )
         ]
         
+        # Add real-time metrics callback if job_id is available
+        try:
+            from utils.training_callback import RealTimeMetricsCallback
+            # Try to get job_id from context (if available)
+            import threading
+            current_thread = threading.current_thread()
+            job_id = getattr(current_thread, 'job_id', None)
+            if job_id:
+                callbacks.append(RealTimeMetricsCallback(job_id, epochs))
+                logger.info(f"Added real-time metrics callback for job {job_id}")
+        except Exception as e:
+            logger.warning(f"Could not add real-time metrics callback: {e}")
+        
         # Train classification model only
         logger.info(f"Training student classification model with {num_students} classes...")
         
@@ -456,7 +469,18 @@ class SignatureEmbeddingModel:
             verbose=1
         )
         
-        logger.info("Classification training completed successfully!")
+        # Log detailed training metrics
+        final_accuracy = classification_history.history['accuracy'][-1]
+        final_loss = classification_history.history['loss'][-1]
+        val_accuracy = classification_history.history['val_accuracy'][-1] if 'val_accuracy' in classification_history.history else 0.0
+        val_loss = classification_history.history['val_loss'][-1] if 'val_loss' in classification_history.history else 0.0
+        
+        logger.info(f"Classification training completed successfully!")
+        logger.info(f"Final training accuracy: {final_accuracy:.4f}")
+        logger.info(f"Final training loss: {final_loss:.4f}")
+        logger.info(f"Final validation accuracy: {val_accuracy:.4f}")
+        logger.info(f"Final validation loss: {val_loss:.4f}")
+        logger.info(f"Epochs trained: {len(classification_history.history['accuracy'])}")
         
         return {
             'classification_history': classification_history.history,
@@ -563,7 +587,7 @@ class SignatureEmbeddingModel:
                     labels.append(1)  # Similar
             
             # Skip negative pairs with forged signatures - not used for owner identification
-            # (Forgery detection is disabled, so we only use genuine signatures)
+            # (Forgery detection is disabled - focus on owner identification only)
         
         return np.array(pairs), np.array(labels)
     
@@ -577,7 +601,7 @@ class SignatureEmbeddingModel:
         if not self.embedding_model:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
-        has_authenticity = False  # Forgery detection is disabled system-wide
+        has_authenticity = False  # Forgery detection is disabled system-wide - focus on owner identification only
 
         # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
         if has_classification:
@@ -591,7 +615,7 @@ class SignatureEmbeddingModel:
                     # 1-unit outputs are invalid for identification; disable classification path
                     self.classification_head = None
                     has_classification = False
-                    logger.warning("Disabled 1-unit model for identification (forgery detection disabled)")
+                    logger.warning("Disabled 1-unit model for identification (forgery detection disabled - focus on owner identification only)")
                 else:
                     logger.info(f"Classification head has {output_shape[1]} outputs - treating as classifier")
             except Exception as e:
@@ -628,9 +652,9 @@ class SignatureEmbeddingModel:
         student_confidence = float(np.max(student_probs))
         logger.info(f"Classification prediction: class {predicted_student_id}, confidence {student_confidence:.3f}")
         
-        # Authenticity detection
+        # Authenticity detection is disabled - focus on owner identification only
         authenticity_score = 0.0
-        is_genuine = False
+        is_genuine = True  # Always true since we're not doing forgery detection
         
         # Get student name - predicted_student_id is the class index (0, 1, 2, 3, 4, 5, 6, 7)
         predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")

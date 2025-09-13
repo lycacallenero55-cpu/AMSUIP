@@ -833,7 +833,7 @@ async def identify_signature_owner(
         # Use configurable confidence threshold
         confidence_threshold = settings.CONFIDENCE_THRESHOLD
         
-        # Forgery detection is disabled system-wide
+        # Forgery detection is disabled system-wide - focus on owner identification only
         has_auth = False
         
         # Improved unknown thresholding with configurable confidence threshold
@@ -859,7 +859,7 @@ async def identify_signature_owner(
                 "global_score": hybrid.get("global_score"),
                 "global_margin": hybrid.get("global_margin"),
                 "student_confidence": result["student_confidence"],
-                "authenticity_score": result["authenticity_score"],
+                "authenticity_score": 0.0,  # Always 0 since forgery detection is disabled
                 "is_unknown": False,
                 "model_type": "ai_signature_verification",
                 "ai_architecture": "signature_embedding_network",
@@ -868,7 +868,7 @@ async def identify_signature_owner(
             # Back-compat
             response_obj["predicted_student_id"] = int(predicted_owner_id)
             response_obj["predicted_student_name"] = predicted_block["name"]
-            response_obj["is_genuine"] = True
+            response_obj["is_genuine"] = True  # Always true since we're not doing forgery detection
             logger.info(f"Finalized early due to accepted high-score zero-margin global match: {predicted_owner_id}")
             return response_obj
 
@@ -909,7 +909,7 @@ async def identify_signature_owner(
         
         # Do not auto-accept individual prediction if global was rejected (avoid false positives)
         
-        # Forgery detection is disabled system-wide
+        # Forgery detection is disabled system-wide - focus on owner identification only
         auth_ok = True  # Always pass since we're not doing forgery detection
 
         # Agreement boost: if individual and global agree on the same student, relax unknown
@@ -1540,7 +1540,7 @@ async def verify_signature(
         # Apply robust unknown/match logic
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
-        # Ignore authenticity head for now to prioritize identification
+        # Forgery detection is disabled system-wide - focus on owner identification only
         has_auth = False
         # Identification-first unknown logic
         is_unknown = (student_confidence < 0.60 and global_score < 0.65)
@@ -1550,7 +1550,7 @@ async def verify_signature(
         predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
         ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
-        # Forgery detection is disabled system-wide
+        # Forgery detection is disabled system-wide - focus on owner identification only
         auth_ok = True  # Always pass since we're not doing forgery detection
         is_match = is_correct_student and (not is_unknown) and ownership_ok
 
