@@ -330,11 +330,11 @@ export function LoadingButton({
           "h-9 w-9": size === "icon",
           "bg-primary text-primary-foreground hover:bg-primary/90":
             variant === "default",
-          "bg-background text-foreground hover:bg-accent hover:text-accent-foreground border border-input":
+          "bg-background text-foreground hover:bg-gray-200 hover:text-gray-900 border border-input":
             variant === "outline",
           "bg-secondary text-secondary-foreground hover:bg-secondary/80":
             variant === "secondary",
-          "hover:bg-accent hover:text-accent-foreground": variant === "ghost",
+          "hover:bg-gray-200 hover:text-gray-900": variant === "ghost",
           "text-primary underline-offset-4 hover:underline": variant === "link",
         },
         className
