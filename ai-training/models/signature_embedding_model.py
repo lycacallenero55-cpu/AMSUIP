@@ -50,7 +50,8 @@ class SignatureEmbeddingModel:
     
     def create_signature_backbone(self) -> keras.Model:
         """
-        Create signature-specific CNN backbone with:
+        Create signature-specific CNN backbone with transfer learning:
+        - Uses MobileNetV2 as base for transfer learning
         - Multi-scale feature extraction
         - Attention mechanisms for stroke patterns
         - Signature-specific architectural choices
@@ -61,52 +62,29 @@ class SignatureEmbeddingModel:
         # Preprocessing normalization
         x = layers.Rescaling(1.0/255.0, input_shape=(self.image_size, self.image_size, 3))(input_layer)
         
-        # Multi-scale feature extraction
-        # Scale 1: Fine details (strokes, curves)
-        scale1 = layers.Conv2D(32, (3, 3), activation='relu', padding='same', name='scale1_conv1')(x)
-        scale1 = layers.BatchNormalization(name='scale1_bn1')(scale1)
-        scale1 = layers.Conv2D(32, (3, 3), activation='relu', padding='same', name='scale1_conv2')(scale1)
-        scale1 = layers.MaxPooling2D((2, 2), name='scale1_pool')(scale1)
+        # Transfer Learning: Use MobileNetV2 as base
+        base_model = keras.applications.MobileNetV2(
+            input_shape=(self.image_size, self.image_size, 3),
+            include_top=False,
+            weights='imagenet'
+        )
         
-        # Scale 2: Medium patterns (letter shapes, connections)
-        scale2 = layers.Conv2D(64, (5, 5), activation='relu', padding='same', name='scale2_conv1')(x)
-        scale2 = layers.BatchNormalization(name='scale2_bn1')(scale2)
-        scale2 = layers.Conv2D(64, (5, 5), activation='relu', padding='same', name='scale2_conv2')(scale2)
-        scale2 = layers.MaxPooling2D((2, 2), name='scale2_pool')(scale2)
+        # Freeze base model layers for transfer learning
+        base_model.trainable = False
         
-        # Scale 3: Global structure (overall signature shape)
-        scale3 = layers.Conv2D(128, (7, 7), activation='relu', padding='same', name='scale3_conv1')(x)
-        scale3 = layers.BatchNormalization(name='scale3_bn1')(scale3)
-        scale3 = layers.Conv2D(128, (7, 7), activation='relu', padding='same', name='scale3_conv2')(scale3)
-        scale3 = layers.MaxPooling2D((2, 2), name='scale3_pool')(scale3)
+        # Get base model features
+        base_features = base_model(x, training=False)
         
-        # Combine multi-scale features
-        scale1_resized = layers.Resizing(56, 56)(scale1)
-        scale2_resized = layers.Resizing(56, 56)(scale2)
-        scale3_resized = layers.Resizing(56, 56)(scale3)
+        # Add custom layers for signature-specific processing
+        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name='custom_conv1')(base_features)
+        x = layers.BatchNormalization(name='custom_bn1')(x)
+        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name='custom_conv2')(x)
+        x = layers.BatchNormalization(name='custom_bn2')(x)
         
-        combined = layers.Concatenate(axis=-1, name='multi_scale_concat')([scale1_resized, scale2_resized, scale3_resized])
-        
-        # Deep feature extraction with residual connections
-        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name='deep_conv1')(combined)
-        x = layers.BatchNormalization(name='deep_bn1')(x)
-        
-        # Residual block 1
-        residual = x
-        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name='res1_conv1')(x)
-        x = layers.BatchNormalization(name='res1_bn1')(x)
-        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name='res1_conv2')(x)
-        x = layers.BatchNormalization(name='res1_bn2')(x)
-        x = layers.Add(name='res1_add')([x, residual])
-        x = layers.ReLU(name='res1_relu')(x)
-        
-        # Spatial attention for stroke patterns
-        attention = layers.Conv2D(1, (1, 1), activation='sigmoid', name='spatial_attention')(x)
-        attended = layers.Multiply(name='attention_application')([x, attention])
-        
-        # Global feature aggregation (apply pooling to feature maps, not sequentially)
-        gap = layers.GlobalAveragePooling2D(name='global_avg_pool')(attended)
-        gmp = layers.GlobalMaxPooling2D(name='global_max_pool')(attended)
+        # Add signature-specific processing on top of transfer learning features
+        # Global feature aggregation from MobileNetV2 features
+        gap = layers.GlobalAveragePooling2D(name='global_avg_pool')(x)
+        gmp = layers.GlobalMaxPooling2D(name='global_max_pool')(x)
         x = layers.Concatenate(name='global_pool_concat')([gap, gmp])
         
         # Create backbone model
@@ -349,11 +327,15 @@ class SignatureEmbeddingModel:
         """
         Prepare training data with proper preprocessing and augmentation
         """
-        logger.info("Preparing training data with signature-specific preprocessing...")
+        logger.info("Preparing training data with signature-specific preprocessing and augmentation...")
         
         all_images = []
         student_labels = []
         authenticity_labels = []
+        
+        # Import augmentation
+        from utils.signature_preprocessing import SignatureAugmentation
+        augmenter = SignatureAugmentation()
         
         for student_name, signatures in training_data.items():
             if student_name not in self.student_to_id:
@@ -364,12 +346,27 @@ class SignatureEmbeddingModel:
             
             student_id = self.student_to_id[student_name]
             
-            # Process genuine signatures
-            for img in signatures['genuine']:
+            # Process genuine signatures with augmentation
+            genuine_images = signatures['genuine']
+            logger.info(f"Processing {len(genuine_images)} genuine signatures for {student_name}")
+            
+            for img in genuine_images:
+                # Original image
                 processed_img = self._preprocess_signature(img)
                 all_images.append(processed_img)
                 student_labels.append(student_id)
                 authenticity_labels.append(1)  # Genuine
+                
+                # Augmented versions (3x augmentation for small datasets)
+                for _ in range(3):
+                    try:
+                        augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
+                        all_images.append(augmented_img)
+                        student_labels.append(student_id)
+                        authenticity_labels.append(1)  # Genuine
+                    except Exception as e:
+                        logger.warning(f"Augmentation failed for {student_name}: {e}")
+                        # Continue without this augmentation
             
             # Skip forged signatures - not used for owner identification training
             # (Forgery detection is disabled, so we only train on genuine signatures)
@@ -380,7 +377,7 @@ class SignatureEmbeddingModel:
         y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
         y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
-        logger.info(f"Prepared {len(all_images)} images across {len(self.student_to_id)} students")
+        logger.info(f"Prepared {len(all_images)} images (including augmentations) across {len(self.student_to_id)} students")
         logger.info(f"Student mappings: {self.student_to_id}")
         logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
         return X, y_student, y_authenticity
