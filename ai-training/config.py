@@ -24,9 +24,10 @@ class Settings:
     
     # Model Configuration
     MODEL_IMAGE_SIZE = int(os.getenv("MODEL_IMAGE_SIZE", 224))
-    MODEL_BATCH_SIZE = int(os.getenv("MODEL_BATCH_SIZE", 32))
-    MODEL_EPOCHS = int(os.getenv("MODEL_EPOCHS", 15))  # Optimized for minimal signatures like Teachable Machine
-    MODEL_LEARNING_RATE = float(os.getenv("MODEL_LEARNING_RATE", 0.0002))  # Further reduced to prevent overfitting
+    MODEL_BATCH_SIZE = int(os.getenv("MODEL_BATCH_SIZE", 16))  # Smaller batch size for small datasets
+    MODEL_EPOCHS = int(os.getenv("MODEL_EPOCHS", 50))  # More epochs for better convergence with small datasets
+    MODEL_LEARNING_RATE = float(os.getenv("MODEL_LEARNING_RATE", 0.0001))  # Lower learning rate for transfer learning
+    MODEL_FINE_TUNE_EPOCHS = int(os.getenv("MODEL_FINE_TUNE_EPOCHS", 10))  # Additional epochs for fine-tuning
 
         # CPU Optimization
     USE_CPU_OPTIMIZATION: bool = True

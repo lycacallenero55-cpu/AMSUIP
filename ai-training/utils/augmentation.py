@@ -143,7 +143,7 @@ class SignatureAugmentation:
         """Apply rotation with proper boundary handling"""
         angle = random.uniform(-self.rotation_range, self.rotation_range)
         h, w = image.shape[:2]
-        center = (w // 2, h // 2)
+        center = (float(w // 2), float(h // 2))  # Ensure center is float tuple
         
         # Get rotation matrix with proper scaling to avoid cropping
         rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -196,10 +196,17 @@ class SignatureAugmentation:
         # Use gamma correction for more realistic brightness changes
         gamma = 1.0 / factor if factor > 0 else 1.0
         inv_gamma = 1.0 / gamma
+        
+        # Create lookup table for each channel
         table = np.array([((i / 255.0) ** inv_gamma) * 255 
                          for i in range(256)]).astype(np.uint8)
         
-        return cv2.LUT(image, table)
+        # Apply LUT to each channel separately to avoid OpenCV LUT errors
+        result = image.copy()
+        for c in range(image.shape[2]):
+            result[:, :, c] = cv2.LUT(image[:, :, c], table)
+        
+        return result
     
     def _apply_blur(self, image: np.ndarray) -> np.ndarray:
         """Apply various blur types"""
@@ -223,7 +230,7 @@ class SignatureAugmentation:
         kernel[kernel_size // 2, :] = np.ones(kernel_size)
         kernel = kernel / kernel_size
         
-        center = (kernel_size // 2, kernel_size // 2)
+        center = (float(kernel_size // 2), float(kernel_size // 2))  # Ensure center is float tuple
         rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
         kernel = cv2.warpAffine(kernel, rotation_matrix, (kernel_size, kernel_size))
         
