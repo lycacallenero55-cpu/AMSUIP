@@ -326,6 +326,7 @@ class SignatureEmbeddingModel:
     def prepare_training_data(self, training_data: Dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Prepare training data with proper preprocessing and augmentation
+        Optimized for small datasets (3-10 images per student) like Teachable Machine
         """
         logger.info("Preparing training data with signature-specific preprocessing and augmentation...")
         
@@ -346,9 +347,13 @@ class SignatureEmbeddingModel:
             
             student_id = self.student_to_id[student_name]
             
-            # Process genuine signatures with augmentation
+            # Process genuine signatures with aggressive augmentation for small datasets
             genuine_images = signatures['genuine']
             logger.info(f"Processing {len(genuine_images)} genuine signatures for {student_name}")
+            
+            # Calculate augmentation factor based on dataset size
+            # For very small datasets (1-3 images), use more augmentation
+            augmentation_factor = max(8, 15 - len(genuine_images))  # 8-15x augmentation
             
             for img in genuine_images:
                 # Original image
@@ -357,10 +362,12 @@ class SignatureEmbeddingModel:
                 student_labels.append(student_id)
                 authenticity_labels.append(1)  # Genuine
                 
-                # Augmented versions (5x augmentation for small datasets like Teachable Machine)
-                for _ in range(5):
+                # Aggressive augmentation for small datasets
+                for _ in range(augmentation_factor):
                     try:
-                        augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
+                        # Use different difficulty levels for variety
+                        difficulty = np.random.choice(['easy', 'medium', 'hard'], p=[0.3, 0.5, 0.2])
+                        augmented_img = augmenter.augment_image(processed_img, is_genuine=True, difficulty=difficulty)
                         all_images.append(augmented_img)
                         student_labels.append(student_id)
                         authenticity_labels.append(1)  # Genuine
@@ -377,7 +384,7 @@ class SignatureEmbeddingModel:
         y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
         y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
-        logger.info(f"Prepared {len(all_images)} images (including augmentations) across {len(self.student_to_id)} students")
+        logger.info(f"Prepared {len(all_images)} images (including {augmentation_factor}x augmentations) across {len(self.student_to_id)} students")
         logger.info(f"Student mappings: {self.student_to_id}")
         logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
         return X, y_student, y_authenticity
@@ -408,6 +415,7 @@ class SignatureEmbeddingModel:
     def train_classification_only(self, training_data: Dict, epochs: int = 20) -> Dict:
         """
         Train only the classification head for faster identification training
+        Optimized for small datasets (3-10 images per student)
         """
         logger.info("Starting classification-only training for faster identification...")
         
@@ -418,19 +426,19 @@ class SignatureEmbeddingModel:
         num_students = len(self.student_to_id)
         self.create_classification_head(num_students=num_students)
         
-        # Optimized callbacks for minimal signature training (like Teachable Machine)
+        # Optimized callbacks for small dataset training (like Teachable Machine)
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=5,  # Increased patience for better convergence
+                patience=8,  # Increased patience for small datasets
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
-                factor=0.5,
-                patience=3,  # Increased patience for better convergence
-                min_lr=1e-6,
+                factor=0.3,  # More aggressive learning rate reduction
+                patience=4,  # Increased patience for small datasets
+                min_lr=1e-7,
                 verbose=1
             ),
             keras.callbacks.CSVLogger(
@@ -443,15 +451,19 @@ class SignatureEmbeddingModel:
         logger.info(f"Training student classification model with {num_students} classes...")
         
         # Calculate appropriate batch size for small datasets
-        batch_size = min(32, max(4, len(X) // 4))  # Adaptive batch size for small datasets
+        # Use smaller batches for better gradient updates with limited data
+        batch_size = min(16, max(2, len(X) // 8))  # Smaller batches for small datasets
         
-        logger.info(f"Training with batch size: {batch_size}, samples: {len(X)}")
+        # Adjust validation split for small datasets
+        validation_split = min(0.3, max(0.1, 0.2))  # Use more data for training with small datasets
+        
+        logger.info(f"Training with batch size: {batch_size}, samples: {len(X)}, validation_split: {validation_split}")
         
         classification_history = self.classification_head.fit(
             X, y_student,
             batch_size=batch_size,
             epochs=epochs,
-            validation_split=0.2,
+            validation_split=validation_split,
             callbacks=callbacks,
             verbose=1
         )

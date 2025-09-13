@@ -49,7 +49,7 @@ class Settings:
     CONFIDENCE_THRESHOLD: float = 0.6  # Minimum confidence for positive match
     ENABLE_FORGERY_DETECTION: bool = False  # Disabled for owner detection focus
     
-        # Anti-Spoofing (disabled to prioritize identification flow)
+    # Anti-Spoofing (disabled to prioritize identification flow)
     ENABLE_ANTISPOOFING: bool = False
     SPOOFING_THRESHOLD: float = 0.6
     
