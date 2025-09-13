@@ -253,7 +253,7 @@ const AllowedTermsContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
                   <div className="flex items-center gap-1">Academic Year
                     <button type="button" onClick={() => handleSort('year')} className="p-0.5 text-gray-500 hover:text-black">
-                      {sortKey === 'year' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                      {sortKey === 'year' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black"/> : <ChevronsDown className="w-3.5 h-3.5 text-black"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black"/>}
                     </button>
                   </div>
                 </th>
@@ -294,7 +294,7 @@ const AllowedTermsContent = () => {
                             className="h-6 w-6 p-0"
                             onClick={() => handleEdit(term)}
                           >
-                            <Edit className="h-3 w-3" />
+                            <Edit className="h-3 w-3 text-black" />
                           </Button>
                           <Button
                             variant="outline"
@@ -302,7 +302,7 @@ const AllowedTermsContent = () => {
                             className="h-6 w-6 p-0"
                             onClick={() => handleDelete(term.id)}
                           >
-                            <Trash2 className="h-3 w-3" />
+                            <Trash2 className="h-3 w-3 text-black" />
                           </Button>
                         </div>
                       </td>
