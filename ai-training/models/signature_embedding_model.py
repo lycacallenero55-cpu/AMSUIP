@@ -555,13 +555,8 @@ class SignatureEmbeddingModel:
                     pairs.append([img1, img2])
                     labels.append(1)  # Similar
             
-            # Negative pairs (genuine-forged)
-            for i in range(min(len(genuine_images), len(forged_images))):
-                for j in range(min(2, len(forged_images))):
-                    img1 = self._preprocess_signature(genuine_images[i])
-                    img2 = self._preprocess_signature(forged_images[j])
-                    pairs.append([img1, img2])
-                    labels.append(0)  # Different
+            # Skip negative pairs with forged signatures - not used for owner identification
+            # (Forgery detection is disabled, so we only use genuine signatures)
         
         return np.array(pairs), np.array(labels)
     
