@@ -19,7 +19,8 @@ import {
   EyeOff,
   Edit,
   Save,
-  X
+  X,
+  Shield
 } from "lucide-react";
 import { UserCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -88,7 +89,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
   const isInitialMount = useRef(true);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileMode, setProfileMode] = useState<'display' | 'edit' | 'password'>('display');
   const [profileForm, setProfileForm] = useState<{ first_name: string; last_name: string; email: string }>({ first_name: '', last_name: '', email: '' });
   const [passwordForm, setPasswordForm] = useState<{ currentPassword: string; newPassword: string; confirmPassword: string }>({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [showPasswords, setShowPasswords] = useState<{ current: boolean; new: boolean; confirm: boolean }>({ current: false, new: false, confirm: false });
@@ -217,7 +218,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
       last_name: userProfile?.last_name || '',
       email: userProfile?.email || user?.email || ''
     });
-    setIsEditingProfile(false);
+    setProfileMode('display');
     setIsProfileOpen(true);
   };
 
@@ -241,7 +242,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
         if (error) throw error;
       }
       setUserProfile((prev: any) => ({ ...prev, first_name: profileForm.first_name, last_name: profileForm.last_name, email: profileForm.email }));
-      setIsEditingProfile(false);
+      setProfileMode('display');
     } catch (e) {
       console.error('Failed to save profile:', e);
     } finally {
@@ -297,6 +298,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
 
       // Reset password form
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setProfileMode('display');
     } catch (error) {
       console.error('Error changing password:', error);
     } finally {
@@ -396,152 +398,201 @@ const Header = ({ isMobile = false }: HeaderProps) => {
       </div>
       {/* Profile Dialog */}
       <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
-        <DialogContent className="max-w-lg w-full">
+        <DialogContent className="max-w-md w-full">
           <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              Profile Information
-              <div className="flex gap-2">
-                {!isEditingProfile ? (
-                  <Button variant="outline" size="sm" onClick={() => setIsEditingProfile(true)}>
-                    <Edit className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-                ) : (
-                  <>
-                    <Button variant="outline" size="sm" onClick={() => setIsEditingProfile(false)}>
-                      <X className="h-4 w-4 mr-1" />
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={handleProfileSave} disabled={isUpdatingProfile}>
-                      <Save className="h-4 w-4 mr-1" />
-                      {isUpdatingProfile ? 'Saving...' : 'Save'}
-                    </Button>
-                  </>
-                )}
-              </div>
-            </DialogTitle>
+            <DialogTitle>Profile Information</DialogTitle>
           </DialogHeader>
-          <div className="space-y-6">
-            {/* Profile Information Display/Edit */}
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="first_name">First Name</Label>
-                {!isEditingProfile ? (
-                  <div className="p-2 bg-gray-50 rounded border text-sm">
-                    {profileForm.first_name || 'Not set'}
-                  </div>
-                ) : (
-                  <Input 
-                    id="first_name" 
-                    value={profileForm.first_name} 
-                    onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} 
-                  />
-                )}
-              </div>
-              <div>
-                <Label htmlFor="last_name">Last Name</Label>
-                {!isEditingProfile ? (
-                  <div className="p-2 bg-gray-50 rounded border text-sm">
-                    {profileForm.last_name || 'Not set'}
-                  </div>
-                ) : (
-                  <Input 
-                    id="last_name" 
-                    value={profileForm.last_name} 
-                    onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} 
-                  />
-                )}
-              </div>
-              <div>
-                <Label htmlFor="email">Email</Label>
-                <div className="p-2 bg-gray-50 rounded border text-sm">
-                  {profileForm.email}
-                </div>
-              </div>
-              <div>
-                <Label>Role</Label>
-                <div className="p-2 bg-gray-50 rounded border text-sm">
-                  {getPanelLabel()}
-                </div>
-              </div>
-            </div>
-
-            {/* Change Password Section */}
-            <div className="border-t pt-4">
-              <h4 className="text-sm font-medium mb-4">Change Password</h4>
+          
+          {/* Fixed height container to prevent layout shifts */}
+          <div className="min-h-[400px] space-y-4">
+            
+            {/* Display Mode - Default */}
+            {profileMode === 'display' && (
               <div className="space-y-4">
-                <div>
-                  <Label htmlFor="currentPassword">Current Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="currentPassword"
-                      type={showPasswords.current ? "text" : "password"}
-                      value={passwordForm.currentPassword}
-                      onChange={(e) => setPasswordForm(p => ({ ...p, currentPassword: e.target.value }))}
-                      placeholder="Enter your current password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPasswords(p => ({ ...p, current: !p.current }))}
-                    >
-                      {showPasswords.current ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
+                <div className="space-y-3">
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">First Name:</span>
+                    <p className="text-sm text-gray-900 mt-1">{profileForm.first_name || 'Not set'}</p>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Last Name:</span>
+                    <p className="text-sm text-gray-900 mt-1">{profileForm.last_name || 'Not set'}</p>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Email:</span>
+                    <p className="text-sm text-gray-900 mt-1">{profileForm.email}</p>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium text-gray-700">Role:</span>
+                    <p className="text-sm text-gray-900 mt-1">{getPanelLabel()}</p>
                   </div>
                 </div>
-                <div>
-                  <Label htmlFor="newPassword">New Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="newPassword"
-                      type={showPasswords.new ? "text" : "password"}
-                      value={passwordForm.newPassword}
-                      onChange={(e) => setPasswordForm(p => ({ ...p, newPassword: e.target.value }))}
-                      placeholder="Enter your new password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPasswords(p => ({ ...p, new: !p.new }))}
-                    >
-                      {showPasswords.new ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setProfileMode('edit')}
+                    className="flex-1"
+                  >
+                    <Edit className="h-4 w-4 mr-2" />
+                    Edit Profile
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setProfileMode('password')}
+                    className="flex-1"
+                  >
+                    <Shield className="h-4 w-4 mr-2" />
+                    Change Password
+                  </Button>
                 </div>
-                <div>
-                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="confirmPassword"
-                      type={showPasswords.confirm ? "text" : "password"}
-                      value={passwordForm.confirmPassword}
-                      onChange={(e) => setPasswordForm(p => ({ ...p, confirmPassword: e.target.value }))}
-                      placeholder="Confirm your new password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPasswords(p => ({ ...p, confirm: !p.confirm }))}
-                    >
-                      {showPasswords.confirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-                <Button 
-                  onClick={handlePasswordChange} 
-                  disabled={isChangingPassword}
-                  className="w-full"
-                >
-                  {isChangingPassword ? 'Changing...' : 'Change Password'}
-                </Button>
               </div>
-            </div>
+            )}
+
+            {/* Edit Mode */}
+            {profileMode === 'edit' && (
+              <div className="space-y-4">
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="first_name">First Name</Label>
+                    <Input 
+                      id="first_name" 
+                      value={profileForm.first_name} 
+                      onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} 
+                      placeholder="Enter your first name"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="last_name">Last Name</Label>
+                    <Input 
+                      id="last_name" 
+                      value={profileForm.last_name} 
+                      onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} 
+                      placeholder="Enter your last name"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="email">Email</Label>
+                    <Input 
+                      id="email" 
+                      value={profileForm.email} 
+                      disabled 
+                      className="bg-gray-50"
+                    />
+                  </div>
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setProfileMode('display')}
+                    className="flex-1"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel
+                  </Button>
+                  <Button 
+                    onClick={handleProfileSave} 
+                    disabled={isUpdatingProfile}
+                    className="flex-1"
+                  >
+                    <Save className="h-4 w-4 mr-2" />
+                    {isUpdatingProfile ? 'Saving...' : 'Save Changes'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Password Change Mode */}
+            {profileMode === 'password' && (
+              <div className="space-y-4">
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="currentPassword">Current Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="currentPassword"
+                        type={showPasswords.current ? "text" : "password"}
+                        value={passwordForm.currentPassword}
+                        onChange={(e) => setPasswordForm(p => ({ ...p, currentPassword: e.target.value }))}
+                        placeholder="Enter your current password"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                        onClick={() => setShowPasswords(p => ({ ...p, current: !p.current }))}
+                      >
+                        {showPasswords.current ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="newPassword">New Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="newPassword"
+                        type={showPasswords.new ? "text" : "password"}
+                        value={passwordForm.newPassword}
+                        onChange={(e) => setPasswordForm(p => ({ ...p, newPassword: e.target.value }))}
+                        placeholder="Enter your new password"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                        onClick={() => setShowPasswords(p => ({ ...p, new: !p.new }))}
+                      >
+                        {showPasswords.new ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="confirmPassword"
+                        type={showPasswords.confirm ? "text" : "password"}
+                        value={passwordForm.confirmPassword}
+                        onChange={(e) => setPasswordForm(p => ({ ...p, confirmPassword: e.target.value }))}
+                        placeholder="Confirm your new password"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                        onClick={() => setShowPasswords(p => ({ ...p, confirm: !p.confirm }))}
+                      >
+                        {showPasswords.confirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setProfileMode('display')}
+                    className="flex-1"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel
+                  </Button>
+                  <Button 
+                    onClick={handlePasswordChange} 
+                    disabled={isChangingPassword}
+                    className="flex-1"
+                  >
+                    <Shield className="h-4 w-4 mr-2" />
+                    {isChangingPassword ? 'Changing...' : 'Change Password'}
+                  </Button>
+                </div>
+              </div>
+            )}
+            
           </div>
         </DialogContent>
       </Dialog>

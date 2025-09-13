@@ -416,7 +416,7 @@ const Accounts = () => {
                                     onClick={() => handleApprove(profile.id)}
                                     className="bg-green-600 hover:bg-green-700 h-6 text-xs"
                                   >
-                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    <CheckCircle2 className="h-3 w-3 mr-1 text-black" />
                                     Approve
                                   </Button>
                                   <Button
@@ -425,7 +425,7 @@ const Accounts = () => {
                                     onClick={() => handleReject(profile.id)}
                                     className="text-red-600 border-red-200 hover:bg-red-50 h-6 text-xs"
                                   >
-                                    <XCircle className="h-3 w-3 mr-1" />
+                                    <XCircle className="h-3 w-3 mr-1 text-black" />
                                     Reject
                                   </Button>
                                 </div>

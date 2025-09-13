@@ -517,9 +517,9 @@ const Students = () => {
                       Student
                       <button type="button" onClick={() => handleSort('name')} className="p-0.5 text-gray-500 hover:text-black">
                         {sortKey === 'name' ? (
-                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black" /> : <ChevronsDown className="w-3.5 h-3.5 text-black" />
                         ) : (
-                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black" />
                         )}
                       </button>
                     </div>
@@ -529,9 +529,9 @@ const Students = () => {
                       ID
                       <button type="button" onClick={() => handleSort('student_id')} className="p-0.5 text-gray-500 hover:text-black">
                         {sortKey === 'student_id' ? (
-                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black" /> : <ChevronsDown className="w-3.5 h-3.5 text-black" />
                         ) : (
-                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black" />
                         )}
                       </button>
                     </div>
@@ -541,9 +541,9 @@ const Students = () => {
                       Program
                       <button type="button" onClick={() => handleSort('program')} className="p-0.5 text-gray-500 hover:text-black">
                         {sortKey === 'program' ? (
-                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black" /> : <ChevronsDown className="w-3.5 h-3.5 text-black" />
                         ) : (
-                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black" />
                         )}
                       </button>
                     </div>
@@ -553,9 +553,9 @@ const Students = () => {
                       Year & Section
                       <button type="button" onClick={() => handleSort('year_section')} className="p-0.5 text-gray-500 hover:text-black">
                         {sortKey === 'year_section' ? (
-                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5" /> : <ChevronsDown className="w-3.5 h-3.5" />
+                          sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black" /> : <ChevronsDown className="w-3.5 h-3.5 text-black" />
                         ) : (
-                          <ChevronsUp className="w-3.5 h-3.5 opacity-40" />
+                          <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black" />
                         )}
                       </button>
                     </div>

@@ -619,7 +619,7 @@ const ExcuseApplicationContent = () => {
                 <th scope="col" className="px-3 py-2 text-left font-semibold uppercase">
                   <div className="flex items-center gap-1">Name
                     <button type="button" onClick={() => handleSort('name')} className="p-0.5 text-gray-500 hover:text-black">
-                      {sortKey === 'name' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5"/> : <ChevronsDown className="w-3.5 h-3.5"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40"/>}
+                      {sortKey === 'name' ? (sortDir === 'asc' ? <ChevronsUp className="w-3.5 h-3.5 text-black"/> : <ChevronsDown className="w-3.5 h-3.5 text-black"/>) : <ChevronsUp className="w-3.5 h-3.5 opacity-40 text-black"/>}
                     </button>
                   </div>
                 </th>
@@ -706,7 +706,7 @@ const ExcuseApplicationContent = () => {
                               setIsViewOpen(true);
                             }}
                           >
-                            <Eye className="h-3 w-3" />
+                            <Eye className="h-3 w-3 text-black" />
                           </Button>
                           <Button
                             variant="outline"
@@ -725,7 +725,7 @@ const ExcuseApplicationContent = () => {
                               setIsFormOpen(true);
                             }}
                           >
-                            <Edit className="h-3 w-3" />
+                            <Edit className="h-3 w-3 text-black" />
                           </Button>
                           <Button
                             variant="outline"
@@ -736,7 +736,7 @@ const ExcuseApplicationContent = () => {
                               setShowDeleteConfirm(true);
                             }}
                           >
-                            <Trash2 className="h-3 w-3" />
+                            <Trash2 className="h-3 w-3 text-black" />
                           </Button>
                         </div>
                       </td>
