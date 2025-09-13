@@ -14,6 +14,18 @@ All colors MUST be HSL.
     outline: none;
   }
 
+  /* Remove blue focus borders globally */
+  *:focus,
+  *:focus-visible,
+  input:focus,
+  button:focus,
+  select:focus,
+  textarea:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: inherit !important;
+  }
+
   /* Smooth page transitions */
   body {
     overflow-x: hidden;
