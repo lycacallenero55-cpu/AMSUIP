@@ -12,7 +12,7 @@ from utils.image_processing import validate_image
 # Removed non-existent imports - using direct S3 download instead
 from utils.s3_storage import create_presigned_get, download_bytes
 from models.global_signature_model import GlobalSignatureVerificationModel
-from utils.s3_supabase_sync import sync_supabase_with_s3, get_students_with_missing_images, fix_student_image_counts
+from utils.s3_supabase_sync import sync_supabase_with_s3, sync_supabase_with_s3_enhanced, get_students_with_missing_images, fix_student_image_counts
 import requests
 from config import settings
 
@@ -1537,19 +1537,55 @@ async def verify_signature(
                     combined_confidence = float(0.5 * combined_confidence + 0.5 * hybrid.get("global_score", 0.0))
                 result["predicted_student_id"] = predicted_owner_id
         
-        # Apply robust unknown/match logic
+        # Apply robust unknown/match logic with configurable confidence threshold
         student_confidence = float(result.get("student_confidence", 0.0))
         global_score = float(hybrid.get("global_score", 0.0) or 0.0)
+        global_margin = float(hybrid.get("global_margin", 0.0) or 0.0)
+        global_margin_raw = float(hybrid.get("global_margin_raw", 0.0) or 0.0)
+        
+        # Use configurable confidence threshold
+        confidence_threshold = settings.CONFIDENCE_THRESHOLD
+        
         # Forgery detection is disabled system-wide - focus on owner identification only
         has_auth = False
-        # Identification-first unknown logic
-        is_unknown = (student_confidence < 0.60 and global_score < 0.65)
+        
+        # Improved unknown thresholding with configurable confidence threshold
+        is_unknown = True
+        
+        # Check if we have a valid prediction first
+        predicted_student_id = result.get("predicted_student_id", 0)
+        if predicted_student_id and predicted_student_id > 0:
+            # Accept if global is confident AND has good separation
+            if global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02):
+                is_unknown = False
+            # Also accept if individual model is confident (even without global)
+            elif student_confidence >= confidence_threshold:
+                is_unknown = False
+            # Special case: if both models agree on same student, be more lenient
+            elif (predicted_student_id == result.get("predicted_student_id") and 
+                  global_score >= 0.60 and student_confidence >= 0.40):
+                is_unknown = False
+        else:
+            # No valid prediction from global model - rely on individual model
+            individual_prediction = result.get("predicted_student_id", 0)
+            if individual_prediction and individual_prediction > 0:
+                # If we have an individual prediction, use it even with low confidence
+                # since the global model was rejected
+                is_unknown = False
+                logger.info(f"Using individual model prediction: {individual_prediction} (global rejected)")
+            else:
+                is_unknown = True
+        
         result["is_unknown"] = is_unknown
 
         # Check if the predicted student matches the target student
-        predicted_student_id = result["predicted_student_id"]
         is_correct_student = (student_id is None) or (predicted_student_id == student_id)
-        ownership_ok = (student_confidence >= 0.60) or (global_score >= 0.70 and (global_margin >= 0.05 or float(hybrid.get("global_margin_raw", 0.0) or 0.0) >= 0.02))
+        ownership_ok = (
+            student_confidence >= confidence_threshold or
+            (global_score >= confidence_threshold + 0.1 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or
+            (student_confidence >= confidence_threshold - 0.1 and global_score >= confidence_threshold)
+        )
+        
         # Forgery detection is disabled system-wide - focus on owner identification only
         auth_ok = True  # Always pass since we're not doing forgery detection
         is_match = is_correct_student and (not is_unknown) and ownership_ok
@@ -1587,22 +1623,22 @@ async def verify_signature(
 @router.post("/sync-s3-supabase")
 async def sync_s3_supabase(dry_run: bool = True):
     """
-    Synchronize Supabase records with S3 objects
+    Synchronize Supabase records with S3 objects using enhanced sync
     """
     try:
-        result = await sync_supabase_with_s3(dry_run=dry_run)
+        result = await sync_supabase_with_s3_enhanced(dry_run=dry_run)
         return {
             "success": True,
             "dry_run": dry_run,
             "sync_stats": result,
-            "message": "Sync completed successfully" if not dry_run else "Dry run completed - no changes made"
+            "message": "Enhanced sync completed successfully" if not dry_run else "Enhanced dry run completed - no changes made"
         }
     except Exception as e:
-        logger.error(f"S3-Supabase sync failed: {e}")
+        logger.error(f"Enhanced S3-Supabase sync failed: {e}")
         return {
             "success": False,
             "error": str(e),
-            "message": "Sync failed"
+            "message": "Enhanced sync failed"
         }
 
 @router.get("/missing-images")

@@ -1,7 +1,8 @@
-"""
-Production-Ready Signature Verification AI System
-Real deep learning with proper feature extraction and embedding networks
-"""
+    """
+    Production-Ready Signature Verification AI System
+    Real deep learning with proper feature extraction and embedding networks
+    Focus: Owner identification only (forgery detection disabled)
+    """
 
 import tensorflow as tf
 from tensorflow import keras
@@ -22,7 +23,7 @@ class SignatureEmbeddingModel:
     - Deep embedding networks for generalization
     - Multi-scale feature extraction
     - Attention mechanisms for stroke patterns
-    - Anti-spoofing capabilities
+    - Owner identification focus (forgery detection disabled)
     """
     
     def __init__(self, 
@@ -39,7 +40,7 @@ class SignatureEmbeddingModel:
         # Model components
         self.embedding_model = None
         self.classification_head = None
-        self.authenticity_head = None
+        # Note: authenticity_head removed - forgery detection is disabled
         self.siamese_model = None
         
         # Student mappings
@@ -71,6 +72,11 @@ class SignatureEmbeddingModel:
         
         # Freeze base model layers for transfer learning (prevents overfitting with small datasets)
         base_model.trainable = False
+        
+        # Add progressive unfreezing strategy for better fine-tuning
+        # Unfreeze the last few layers for fine-tuning
+        for layer in base_model.layers[-20:]:  # Unfreeze last 20 layers
+            layer.trainable = True
         
         # Get base model features
         base_features = base_model(x, training=False)
@@ -179,56 +185,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Created classification head with {self.classification_head.count_params():,} parameters")
         return self.classification_head
     
-    def create_authenticity_head(self) -> keras.Model:
-        """
-        Create authenticity detection head for genuine/forged classification
-        """
-        
-        if not self.embedding_model:
-            self.create_embedding_network()
-        
-        # Authenticity-specific layers
-        x = layers.Dense(256, activation='relu', name='auth_fc1')(self.embedding_model.output)
-        x = layers.BatchNormalization(name='auth_bn1')(x)
-        x = layers.Dropout(0.3, name='auth_dropout1')(x)
-        
-        x = layers.Dense(128, activation='relu', name='auth_fc2')(x)
-        x = layers.BatchNormalization(name='auth_bn2')(x)
-        x = layers.Dropout(0.2, name='auth_dropout2')(x)
-        
-        # Anti-spoofing features
-        x = layers.Dense(64, activation='relu', name='auth_fc3')(x)
-        x = layers.BatchNormalization(name='auth_bn3')(x)
-        
-        # Authenticity output
-        authenticity_output = layers.Dense(1, activation='sigmoid', name='authenticity_classification')(x)
-        
-        # Create authenticity model
-        self.authenticity_head = keras.Model(
-            self.embedding_model.input, 
-            authenticity_output, 
-            name='signature_authenticity'
-        )
-        
-        # Compile with focal loss for imbalanced data
-        optimizer = keras.optimizers.AdamW(
-            learning_rate=self.learning_rate,
-            weight_decay=0.01
-        )
-        
-        self.authenticity_head.compile(
-            optimizer=optimizer,
-            loss=self._focal_loss,
-            metrics=[
-                'accuracy',
-                keras.metrics.Precision(name='precision'),
-                keras.metrics.Recall(name='recall'),
-                keras.metrics.AUC(name='auc')
-            ]
-        )
-        
-        logger.info(f"Created authenticity head with {self.authenticity_head.count_params():,} parameters")
-        return self.authenticity_head
+    # Note: create_authenticity_head method removed - forgery detection is disabled
     
     def create_siamese_network(self) -> keras.Model:
         """
@@ -297,19 +254,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Created Siamese network with {self.siamese_model.count_params():,} parameters")
         return self.siamese_model
     
-    def _focal_loss(self, y_true, y_pred, alpha=0.25, gamma=2.0):
-        """
-        Focal loss for handling class imbalance in authenticity detection
-        """
-        epsilon = tf.keras.backend.epsilon()
-        y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-        
-        alpha_t = y_true * alpha + (1 - y_true) * (1 - alpha)
-        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
-        focal_weight = alpha_t * tf.pow((1 - p_t), gamma)
-        
-        focal_loss = -focal_weight * tf.math.log(p_t)
-        return tf.reduce_mean(focal_loss)
+    # Note: _focal_loss method removed - only used for authenticity detection which is disabled
     
     def _contrastive_loss(self, y_true, y_pred, margin=1.0):
         """
@@ -323,15 +268,15 @@ class SignatureEmbeddingModel:
         
         return tf.reduce_mean(positive_loss + negative_loss)
     
-    def prepare_training_data(self, training_data: Dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def prepare_training_data(self, training_data: Dict) -> Tuple[np.ndarray, np.ndarray]:
         """
         Prepare training data with proper preprocessing and augmentation
+        Focus: Owner identification only (forgery detection disabled)
         """
         logger.info("Preparing training data with signature-specific preprocessing and augmentation...")
         
         all_images = []
         student_labels = []
-        authenticity_labels = []
         
         # Import augmentation
         from utils.signature_preprocessing import SignatureAugmentation
@@ -355,7 +300,6 @@ class SignatureEmbeddingModel:
                 processed_img = self._preprocess_signature(img)
                 all_images.append(processed_img)
                 student_labels.append(student_id)
-                authenticity_labels.append(1)  # Genuine
                 
                 # Augmented versions (5x augmentation for small datasets like Teachable Machine)
                 for _ in range(5):
@@ -363,7 +307,6 @@ class SignatureEmbeddingModel:
                         augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
                         all_images.append(augmented_img)
                         student_labels.append(student_id)
-                        authenticity_labels.append(1)  # Genuine
                     except Exception as e:
                         logger.warning(f"Augmentation failed for {student_name}: {e}")
                         # Continue without this augmentation
@@ -375,12 +318,11 @@ class SignatureEmbeddingModel:
         # Use actual number of students for categorical encoding
         num_students = len(self.student_to_id)
         y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
-        y_authenticity = np.array(authenticity_labels, dtype=np.float32)
         
         logger.info(f"Prepared {len(all_images)} images (including augmentations) across {len(self.student_to_id)} students")
         logger.info(f"Student mappings: {self.student_to_id}")
         logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
-        return X, y_student, y_authenticity
+        return X, y_student
     
     def _preprocess_signature(self, image: Union[np.ndarray, Image.Image]) -> np.ndarray:
         """
@@ -405,32 +347,42 @@ class SignatureEmbeddingModel:
         
         return image.numpy()
     
-    def train_classification_only(self, training_data: Dict, epochs: int = 20) -> Dict:
+    def train_classification_only(self, training_data: Dict, epochs: int = 50) -> Dict:
         """
-        Train only the classification head for faster identification training
+        Train classification head with progressive unfreezing for better transfer learning
+        Focus: Owner identification with small datasets (like Teachable Machine)
         """
-        logger.info("Starting classification-only training for faster identification...")
+        logger.info("Starting classification training with progressive unfreezing...")
         
         # Prepare data first to set up student mappings
-        X, y_student, y_authenticity = self.prepare_training_data(training_data)
+        X, y_student = self.prepare_training_data(training_data)
         
         # Create only the classification model with correct number of students
         num_students = len(self.student_to_id)
         self.create_classification_head(num_students=num_students)
         
-        # Optimized callbacks for minimal signature training (like Teachable Machine)
+        # Phase 1: Train only the classification head (frozen backbone)
+        logger.info("Phase 1: Training classification head with frozen backbone...")
+        
+        # Freeze the backbone completely for phase 1
+        if hasattr(self.classification_head, 'layers'):
+            for layer in self.classification_head.layers:
+                if 'mobilenetv2' in layer.name.lower() or 'base_model' in layer.name.lower():
+                    layer.trainable = False
+        
+        # Optimized callbacks for small dataset training
         callbacks = [
             keras.callbacks.EarlyStopping(
                 monitor='val_accuracy',
-                patience=5,  # Increased patience for better convergence
+                patience=10,  # Increased patience for small datasets
                 restore_best_weights=True,
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=3,  # Increased patience for better convergence
-                min_lr=1e-6,
+                patience=5,  # Increased patience for small datasets
+                min_lr=1e-7,
                 verbose=1
             ),
             keras.callbacks.CSVLogger(
@@ -442,7 +394,6 @@ class SignatureEmbeddingModel:
         # Add real-time metrics callback if job_id is available
         try:
             from utils.training_callback import RealTimeMetricsCallback
-            # Try to get job_id from context (if available)
             import threading
             current_thread = threading.current_thread()
             job_id = getattr(current_thread, 'job_id', None)
@@ -452,22 +403,65 @@ class SignatureEmbeddingModel:
         except Exception as e:
             logger.warning(f"Could not add real-time metrics callback: {e}")
         
-        # Train classification model only
-        logger.info(f"Training student classification model with {num_students} classes...")
-        
         # Calculate appropriate batch size for small datasets
-        batch_size = min(32, max(4, len(X) // 4))  # Adaptive batch size for small datasets
+        batch_size = min(16, max(2, len(X) // 8))  # Smaller batch size for small datasets
         
-        logger.info(f"Training with batch size: {batch_size}, samples: {len(X)}")
+        logger.info(f"Phase 1 training with batch size: {batch_size}, samples: {len(X)}")
         
+        # Phase 1: Train with frozen backbone
+        phase1_epochs = min(epochs // 2, 25)  # Use half epochs for phase 1
         classification_history = self.classification_head.fit(
             X, y_student,
             batch_size=batch_size,
-            epochs=epochs,
+            epochs=phase1_epochs,
             validation_split=0.2,
             callbacks=callbacks,
             verbose=1
         )
+        
+        # Phase 2: Fine-tune with unfrozen backbone
+        logger.info("Phase 2: Fine-tuning with unfrozen backbone...")
+        
+        # Unfreeze the backbone for fine-tuning
+        if hasattr(self.classification_head, 'layers'):
+            for layer in self.classification_head.layers:
+                if 'mobilenetv2' in layer.name.lower() or 'base_model' in layer.name.lower():
+                    layer.trainable = True
+        
+        # Lower learning rate for fine-tuning
+        self.classification_head.compile(
+            optimizer=keras.optimizers.AdamW(
+                learning_rate=self.learning_rate * 0.1,  # Lower learning rate for fine-tuning
+                weight_decay=0.01,
+                beta_1=0.9,
+                beta_2=0.999
+            ),
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+                keras.metrics.Precision(name='precision'),
+                keras.metrics.Recall(name='recall'),
+                keras.metrics.AUC(name='auc')
+            ]
+        )
+        
+        # Phase 2: Fine-tune with unfrozen backbone
+        phase2_epochs = epochs - phase1_epochs
+        if phase2_epochs > 0:
+            fine_tune_history = self.classification_head.fit(
+                X, y_student,
+                batch_size=batch_size,
+                epochs=phase2_epochs,
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            # Combine histories
+            for key in classification_history.history:
+                if key in fine_tune_history.history:
+                    classification_history.history[key].extend(fine_tune_history.history[key])
         
         # Log detailed training metrics
         final_accuracy = classification_history.history['accuracy'][-1]
@@ -480,7 +474,7 @@ class SignatureEmbeddingModel:
         logger.info(f"Final training loss: {final_loss:.4f}")
         logger.info(f"Final validation accuracy: {val_accuracy:.4f}")
         logger.info(f"Final validation loss: {val_loss:.4f}")
-        logger.info(f"Epochs trained: {len(classification_history.history['accuracy'])}")
+        logger.info(f"Total epochs trained: {len(classification_history.history['accuracy'])}")
         
         return {
             'classification_history': classification_history.history,
@@ -492,16 +486,16 @@ class SignatureEmbeddingModel:
 
     def train_models(self, training_data: Dict, epochs: int = 100) -> Dict:
         """
-        Train all models with advanced training strategies
+        Train models with advanced training strategies
+        Focus: Owner identification only (forgery detection disabled)
         """
         logger.info("Starting comprehensive model training...")
         
         # Prepare data
-        X, y_student, y_authenticity = self.prepare_training_data(training_data)
+        X, y_student = self.prepare_training_data(training_data)
         
         # Create models
         self.create_classification_head()
-        self.create_authenticity_head()
         self.create_siamese_network()
         
         # Optimized callbacks for faster training
@@ -532,17 +526,6 @@ class SignatureEmbeddingModel:
             verbose=1
         )
         
-        # Train authenticity model
-        logger.info("Training authenticity detection model...")
-        authenticity_history = self.authenticity_head.fit(
-            X, y_authenticity,
-            batch_size=32,
-            epochs=epochs,
-            validation_split=0.2,
-            callbacks=callbacks,
-            verbose=1
-        )
-        
         # Train Siamese network with pair generation
         logger.info("Training Siamese network...")
         siamese_pairs, siamese_labels = self._generate_siamese_pairs(training_data)
@@ -559,7 +542,6 @@ class SignatureEmbeddingModel:
         
         return {
             'classification_history': classification_history.history,
-            'authenticity_history': authenticity_history.history,
             'siamese_history': siamese_history.history,
             'student_mappings': {
                 'student_to_id': self.student_to_id,
@@ -601,7 +583,6 @@ class SignatureEmbeddingModel:
         if not self.embedding_model:
             raise ValueError("Embedding model not loaded. Please load a trained model first.")
         has_classification = self.classification_head is not None
-        has_authenticity = False  # Forgery detection is disabled system-wide - focus on owner identification only
 
         # If the "classification" head is actually a 1-unit authenticity model, do not treat it as a classifier
         if has_classification:
@@ -663,12 +644,7 @@ class SignatureEmbeddingModel:
         actual_student_id = predicted_student_id
         
         # Calculate overall confidence
-        if has_classification and has_authenticity:
-            overall_confidence = (student_confidence + authenticity_score) / 2.0
-        elif has_authenticity:
-            overall_confidence = authenticity_score
-        else:
-            overall_confidence = student_confidence
+        overall_confidence = student_confidence
         
         # Determine if signature is unknown - stricter threshold to avoid false 100%
         is_unknown = (
@@ -701,9 +677,7 @@ class SignatureEmbeddingModel:
             self.classification_head.save(f"{base_path}_classification.keras")
             logger.info(f"Classification model saved to {base_path}_classification.keras")
         
-        if self.authenticity_head:
-            self.authenticity_head.save(f"{base_path}_authenticity.keras")
-            logger.info(f"Authenticity model saved to {base_path}_authenticity.keras")
+        # Note: authenticity_head saving removed - forgery detection is disabled
         
         if self.siamese_model:
             self.siamese_model.save(f"{base_path}_siamese.keras")
@@ -738,11 +712,7 @@ class SignatureEmbeddingModel:
                 self.classification_head = keras.models.load_model(classification_path)
                 logger.info(f"Classification model loaded from {classification_path}")
             
-            # Load authenticity model
-            authenticity_path = f"{base_path}_authenticity.keras"
-            if os.path.exists(authenticity_path):
-                self.authenticity_head = keras.models.load_model(authenticity_path)
-                logger.info(f"Authenticity model loaded from {authenticity_path}")
+            # Note: authenticity model loading removed - forgery detection is disabled
             
             # Load Siamese model
             siamese_path = f"{base_path}_siamese.keras"

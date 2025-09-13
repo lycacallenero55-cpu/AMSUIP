@@ -236,3 +236,115 @@ async def ensure_atomic_operations():
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         return False
+
+async def sync_supabase_with_s3_enhanced(dry_run: bool = True) -> Dict:
+    """
+    Enhanced S3-Supabase synchronization with better error handling and atomic operations
+    """
+    logger.info(f"Starting enhanced S3-Supabase sync (dry_run={dry_run})")
+    
+    sync_stats = {
+        'total_records_checked': 0,
+        'missing_s3_objects': 0,
+        'stale_db_records': 0,
+        'records_updated': 0,
+        'records_deleted': 0,
+        'errors': 0,
+        'sync_duration_seconds': 0
+    }
+    
+    start_time = datetime.utcnow()
+    
+    try:
+        # Ensure atomic operations are available
+        if not await ensure_atomic_operations():
+            raise Exception("Database connection not available for atomic operations")
+        
+        # Get all signature records from Supabase
+        all_signatures = await db_manager.list_all_signatures()
+        sync_stats['total_records_checked'] = len(all_signatures)
+        
+        logger.info(f"Checking {len(all_signatures)} signature records")
+        
+        # Process records in batches to avoid memory issues
+        batch_size = 100
+        for i in range(0, len(all_signatures), batch_size):
+            batch = all_signatures[i:i + batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1}/{(len(all_signatures) + batch_size - 1)//batch_size}")
+            
+            for signature in batch:
+                await _check_signature_record_enhanced(signature, dry_run, sync_stats)
+        
+        # Check for orphaned S3 objects (optional - can be expensive)
+        if not dry_run:
+            await _check_orphaned_s3_objects_enhanced(sync_stats)
+        
+        end_time = datetime.utcnow()
+        sync_stats['sync_duration_seconds'] = (end_time - start_time).total_seconds()
+        
+        logger.info(f"Enhanced sync completed: {sync_stats}")
+        return sync_stats
+        
+    except Exception as e:
+        logger.error(f"Enhanced sync failed: {e}")
+        sync_stats['errors'] += 1
+        raise
+
+async def _check_signature_record_enhanced(signature: Dict, dry_run: bool, sync_stats: Dict):
+    """Enhanced check for a single signature record against S3"""
+    try:
+        s3_key = signature.get('s3_key')
+        s3_url = signature.get('s3_url')
+        record_id = signature.get('id')
+        student_id = signature.get('student_id')
+        
+        if not s3_key:
+            logger.warning(f"Record {record_id} has no s3_key")
+            sync_stats['errors'] += 1
+            return
+        
+        # Check if S3 object exists
+        exists = object_exists(s3_key)
+        
+        if not exists:
+            logger.warning(f"S3 object missing for record {record_id}: {s3_key}")
+            sync_stats['missing_s3_objects'] += 1
+            
+            if not dry_run:
+                # Mark as missing_images=true or delete
+                await _handle_missing_s3_object_enhanced(record_id, student_id, s3_key, sync_stats)
+        else:
+            logger.debug(f"S3 object exists for record {record_id}: {s3_key}")
+            
+    except Exception as e:
+        logger.error(f"Error checking signature record {signature.get('id')}: {e}")
+        sync_stats['errors'] += 1
+
+async def _handle_missing_s3_object_enhanced(record_id: int, student_id: int, s3_key: str, sync_stats: Dict):
+    """Enhanced handling of missing S3 object by updating or deleting DB record"""
+    try:
+        # For now, delete the record since it's orphaned
+        success = await db_manager.delete_signature(record_id)
+        
+        if success:
+            logger.info(f"Deleted orphaned record {record_id} for student {student_id}")
+            sync_stats['records_deleted'] += 1
+        else:
+            logger.error(f"Failed to delete record {record_id}")
+            sync_stats['errors'] += 1
+            
+    except Exception as e:
+        logger.error(f"Error handling missing S3 object for record {record_id}: {e}")
+        sync_stats['errors'] += 1
+
+async def _check_orphaned_s3_objects_enhanced(sync_stats: Dict):
+    """Enhanced check for S3 objects that don't have corresponding DB records"""
+    try:
+        # This is expensive, so we'll do it in batches
+        # For now, we'll skip this to avoid high costs
+        logger.info("Skipping orphaned S3 object check (expensive operation)")
+        pass
+        
+    except Exception as e:
+        logger.error(f"Error checking orphaned S3 objects: {e}")
+        sync_stats['errors'] += 1

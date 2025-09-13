@@ -172,7 +172,7 @@ class SignaturePreprocessor:
         # Rotate image to correct orientation
         if abs(angle) > 1:  # Only rotate if significant angle
             h, w = image.shape[:2]
-            center = (w // 2, h // 2)
+            center = (float(w // 2), float(h // 2))  # Ensure center is float tuple
             rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
             image = cv2.warpAffine(image, rotation_matrix, (w, h), 
                                  flags=cv2.INTER_CUBIC, 
@@ -346,7 +346,7 @@ class SignatureAugmentation:
     def _rotate_signature(self, image: np.ndarray, angle: float) -> np.ndarray:
         """Rotate signature with proper boundary handling"""
         h, w = image.shape[:2]
-        center = (w // 2, h // 2)
+        center = (float(w // 2), float(h // 2))  # Ensure center is float tuple
         
         # Get rotation matrix
         rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
@@ -401,7 +401,12 @@ class SignatureAugmentation:
         table = np.array([((i / 255.0) ** inv_gamma) * 255 
                          for i in range(256)]).astype(np.uint8)
         
-        return cv2.LUT(image, table)
+        # Apply LUT to each channel separately to avoid OpenCV LUT errors
+        result = image.copy()
+        for c in range(image.shape[2]):
+            result[:, :, c] = cv2.LUT(image[:, :, c], table)
+        
+        return result
     
     def _add_noise(self, image: np.ndarray) -> np.ndarray:
         """Add realistic noise"""
@@ -428,7 +433,7 @@ class SignatureAugmentation:
         kernel[kernel_size // 2, :] = np.ones(kernel_size)
         kernel = kernel / kernel_size
         
-        center = (kernel_size // 2, kernel_size // 2)
+        center = (float(kernel_size // 2), float(kernel_size // 2))  # Ensure center is float tuple
         rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
         kernel = cv2.warpAffine(kernel, rotation_matrix, (kernel_size, kernel_size))
         
