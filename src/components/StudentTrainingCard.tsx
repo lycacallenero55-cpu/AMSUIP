@@ -80,6 +80,9 @@ const StudentTrainingCard: React.FC<StudentTrainingCardProps> = ({
           <div className="flex items-center gap-2 text-xs mr-1">
             <span className="text-green-600 font-medium">{card.genuineCount ?? card.genuineFiles.length}</span>
             <span className="text-red-600 font-medium">{card.forgedCount ?? card.forgedFiles.length}</span>
+            {(card.genuineFiles.some(f => f.placeholder) || card.forgedFiles.some(f => f.placeholder)) && (
+              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" title="Loading images..." />
+            )}
           </div>
           <Button
             variant="ghost"

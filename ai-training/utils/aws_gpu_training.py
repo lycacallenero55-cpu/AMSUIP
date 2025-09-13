@@ -163,7 +163,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
             genuine_images.append(processed)
         
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled, so we only process genuine signatures)
+        # (Forgery detection is disabled - focus on owner identification only)
         
         processed_data[student_name] = {{
             'genuine': genuine_images,

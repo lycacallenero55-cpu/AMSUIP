@@ -141,7 +141,7 @@ class GlobalSignatureVerificationModel:
                     all_labels.append(1)  # Similar
             
             # Skip negative pairs with forged signatures - not used for owner identification
-            # (Forgery detection is disabled, so we only use genuine signatures)
+            # (Forgery detection is disabled - focus on owner identification only)
             
             # Generate cross-student negative pairs
             for other_student_id, other_data in all_student_data.items():

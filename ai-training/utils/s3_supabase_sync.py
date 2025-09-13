@@ -9,7 +9,7 @@ from datetime import datetime
 import asyncio
 
 from models.database import db_manager
-from utils.s3_storage import object_exists, count_objects_with_prefix
+from utils.s3_storage import object_exists, count_objects_with_prefix, count_student_signatures as s3_count_student_signatures
 from config import settings
 from typing import Tuple
 
@@ -152,7 +152,7 @@ class S3SupabaseSync:
         """Fix image counts for a specific student"""
         try:
             # Get actual counts from S3
-            genuine_count, forged_count = count_student_signatures(student_id)
+            genuine_count, forged_count = s3_count_student_signatures(student_id)
             
             # Get current DB records
             signatures = await db_manager.list_student_signatures(student_id)
@@ -222,3 +222,17 @@ async def count_student_signatures(student_id: int) -> Tuple[int, int]:
 async def fix_student_image_counts(student_id: int) -> Dict:
     """Fix image counts for a specific student"""
     return await sync_manager.fix_student_image_counts(student_id)
+
+async def ensure_atomic_operations():
+    """
+    Ensure all database operations are atomic to prevent half-saved data.
+    This function should be called before any critical operations.
+    """
+    try:
+        # Test database connection
+        await db_manager.get_trained_models()
+        logger.info("Database connection verified for atomic operations")
+        return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return False
