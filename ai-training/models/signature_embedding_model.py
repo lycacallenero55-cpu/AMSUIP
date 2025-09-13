@@ -1,8 +1,8 @@
-    """
-    Production-Ready Signature Verification AI System
-    Real deep learning with proper feature extraction and embedding networks
-    Focus: Owner identification only (forgery detection disabled)
-    """
+"""
+Production-Ready Signature Verification AI System
+Real deep learning with proper feature extraction and embedding networks
+Focus: Owner identification only (forgery detection disabled)
+"""
 
 import tensorflow as tf
 from tensorflow import keras
