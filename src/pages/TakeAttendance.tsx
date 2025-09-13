@@ -10,7 +10,6 @@ import {
   Loader2, 
   Clock, 
   MapPin, 
-  Search, 
   Calendar as CalendarIcon,
   CalendarDays, 
   List, 
@@ -103,7 +102,6 @@ const TakeAttendanceContent: React.FC = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
   // Status filter removed as per user request
   // Remove date range state as we'll fetch all sessions
   const [dateRange] = useState<DateRange | undefined>(undefined);
@@ -208,22 +206,16 @@ const TakeAttendanceContent: React.FC = () => {
     fetchSessions();
   }, [fetchSessions]);
 
-  // Filter sessions based on search term
+  // Filter sessions based on session type only
   useEffect(() => {
     const filtered = sessions.filter(session => {
-      // Apply search term filter
-        return !searchTerm || 
-        session.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (session.description && session.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (session.creator && (
-          `${session.creator.first_name} ${session.creator.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          session.creator.role.toLowerCase().includes(searchTerm.toLowerCase())
-        ));
+      // Apply session type filter
+      return sessionTypeFilter === 'all' || session.type === sessionTypeFilter;
     });
     
     setFilteredSessions(filtered);
-    setCurrentPage(1); // Reset to first page when search term changes
-  }, [sessions, searchTerm, setFilteredSessions, setCurrentPage]);
+    setCurrentPage(1); // Reset to first page when filter changes
+  }, [sessions, sessionTypeFilter, setFilteredSessions, setCurrentPage]);
 
 
   // Categorize sessions
@@ -308,19 +300,7 @@ const TakeAttendanceContent: React.FC = () => {
       </div>
 
       <div className="flex items-center space-x-4">
-        <div className="flex-1">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 text-muted-foreground w-3.5 h-3.5" />
-            <Input
-              type="search"
-              placeholder="Search sessions..."
-              className="pl-8 h-9 w-full text-sm"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        {/* Status filter dropdown removed as per user request */}
+        {/* Search removed as per user request */}
       </div>
 
       <Tabs defaultValue="today" className="space-y-4">

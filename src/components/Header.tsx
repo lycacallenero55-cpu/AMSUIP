@@ -90,7 +90,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [profileMode, setProfileMode] = useState<'display' | 'edit' | 'password'>('display');
-  const [profileForm, setProfileForm] = useState<{ first_name: string; last_name: string; email: string }>({ first_name: '', last_name: '', email: '' });
+  const [profileForm, setProfileForm] = useState<{ full_name: string; email: string }>({ full_name: '', email: '' });
   const [passwordForm, setPasswordForm] = useState<{ currentPassword: string; newPassword: string; confirmPassword: string }>({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [showPasswords, setShowPasswords] = useState<{ current: boolean; new: boolean; confirm: boolean }>({ current: false, new: false, confirm: false });
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
@@ -213,9 +213,12 @@ const Header = ({ isMobile = false }: HeaderProps) => {
 
   const handleProfileClick = () => {
     // Prefill form from loaded profile
+    const fullName = userProfile?.first_name && userProfile?.last_name 
+      ? `${userProfile.first_name} ${userProfile.last_name}`
+      : userProfile?.first_name || userProfile?.last_name || '';
+    
     setProfileForm({
-      first_name: userProfile?.first_name || '',
-      last_name: userProfile?.last_name || '',
+      full_name: fullName,
       email: userProfile?.email || user?.email || ''
     });
     setProfileMode('display');
@@ -227,21 +230,26 @@ const Header = ({ isMobile = false }: HeaderProps) => {
       if (!user) return;
       setIsUpdatingProfile(true);
       
+      // Split full name into first and last name
+      const nameParts = profileForm.full_name.trim().split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
       // Update either admin or users table depending on where the profile came from
       if (userRole === 'admin') {
         const { error } = await supabase
           .from('admin')
-          .update({ first_name: profileForm.first_name, last_name: profileForm.last_name })
+          .update({ first_name: firstName, last_name: lastName })
           .eq('id', user.id);
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from('users')
-          .update({ first_name: profileForm.first_name, last_name: profileForm.last_name })
+          .update({ first_name: firstName, last_name: lastName })
           .eq('id', user.id);
         if (error) throw error;
       }
-      setUserProfile((prev: any) => ({ ...prev, first_name: profileForm.first_name, last_name: profileForm.last_name, email: profileForm.email }));
+      setUserProfile((prev: any) => ({ ...prev, first_name: firstName, last_name: lastName, email: profileForm.email }));
       setProfileMode('display');
     } catch (e) {
       console.error('Failed to save profile:', e);
@@ -354,7 +362,6 @@ const Header = ({ isMobile = false }: HeaderProps) => {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span>Current A.Y.:</span>
               <span>{academicYear.year}</span>
-              <span>•</span>
               <span>{academicYear.semester}</span>
             </div>
           )}
@@ -372,8 +379,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
           {/* User Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-12 w-12 rounded-full p-0 flex items-center justify-center bg-transparent hover:bg-transparent">
-                <UserCircle className="h-12 w-12 text-gray-600 hover:text-gray-800" />
+              <Button variant="ghost" className="relative h-8 w-8 rounded-lg bg-gradient-primary p-0 flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-105">
+                <UserCircle className="h-5 w-5 text-primary-foreground" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
@@ -411,12 +418,8 @@ const Header = ({ isMobile = false }: HeaderProps) => {
               <div className="space-y-4">
                 <div className="space-y-3">
                   <div>
-                    <span className="text-sm font-medium text-gray-700">First Name:</span>
-                    <p className="text-sm text-gray-900 mt-1">{profileForm.first_name || 'Not set'}</p>
-                  </div>
-                  <div>
-                    <span className="text-sm font-medium text-gray-700">Last Name:</span>
-                    <p className="text-sm text-gray-900 mt-1">{profileForm.last_name || 'Not set'}</p>
+                    <span className="text-sm font-medium text-gray-700">Full Name:</span>
+                    <p className="text-sm text-gray-900 mt-1">{profileForm.full_name || 'Not set'}</p>
                   </div>
                   <div>
                     <span className="text-sm font-medium text-gray-700">Email:</span>
@@ -428,7 +431,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
                   </div>
                 </div>
                 
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3">
                   <Button 
                     variant="outline" 
                     onClick={() => setProfileMode('edit')}
@@ -454,21 +457,12 @@ const Header = ({ isMobile = false }: HeaderProps) => {
               <div className="space-y-4">
                 <div className="space-y-4">
                   <div>
-                    <Label htmlFor="first_name">First Name</Label>
+                    <Label htmlFor="full_name">Full Name</Label>
                     <Input 
-                      id="first_name" 
-                      value={profileForm.first_name} 
-                      onChange={(e) => setProfileForm(p => ({ ...p, first_name: e.target.value }))} 
-                      placeholder="Enter your first name"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="last_name">Last Name</Label>
-                    <Input 
-                      id="last_name" 
-                      value={profileForm.last_name} 
-                      onChange={(e) => setProfileForm(p => ({ ...p, last_name: e.target.value }))} 
-                      placeholder="Enter your last name"
+                      id="full_name" 
+                      value={profileForm.full_name} 
+                      onChange={(e) => setProfileForm(p => ({ ...p, full_name: e.target.value }))} 
+                      placeholder="Enter your full name"
                     />
                   </div>
                   <div>
@@ -482,7 +476,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
                   </div>
                 </div>
                 
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3">
                   <Button 
                     variant="outline" 
                     onClick={() => setProfileMode('display')}
@@ -572,7 +566,7 @@ const Header = ({ isMobile = false }: HeaderProps) => {
                   </div>
                 </div>
                 
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3">
                   <Button 
                     variant="outline" 
                     onClick={() => setProfileMode('display')}
