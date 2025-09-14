@@ -187,7 +187,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # ACTUALLY TRAIN THE MODEL (this was missing!)
     logger.info(f"🚀 Starting individual model training for {student_name}")
-    history = local_manager.train_model(_X, _y_student, epochs=settings.MODEL_EPOCHS, batch_size=settings.MODEL_BATCH_SIZE)
+    history = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
     logger.info(f"✅ Individual model training completed for {student_name}")
 
     # Save models directly to S3 (no local files)
