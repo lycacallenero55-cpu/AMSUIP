@@ -1181,6 +1181,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         }
         if curl:
             payload["centroids_path"] = curl
+        model_record = None
         try:
             model_record = await db_manager.create_global_model(payload)
         except Exception as e:
@@ -1189,7 +1190,8 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
                 payload.pop("centroids_path", None)
                 model_record = await db_manager.create_global_model(payload)
             else:
-                raise
+                logger.error(f"Failed to create global model record: {e}")
+                model_record = None
         
         result = {
             "success": True,
@@ -1202,13 +1204,27 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         
         # Hybrid: also train and store individual models from the already preprocessed arrays (before completing job)
         individual_count = 0
+        logger.info(f"Starting individual training for {len(students)} students")
         try:
-            for s in students:
+            for i, s in enumerate(students):
                 sid = int(s["id"])  # type: ignore[index]
+                student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
                 bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
+                logger.info(f"Processing student {i+1}/{len(students)}: {student_name} (ID: {sid}) with {len(bucket['genuine_images'])} genuine images")
+                
                 if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                    await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
-                    individual_count += 1
+                    try:
+                        global_model_id = int(model_record.get("id")) if model_record and isinstance(model_record, dict) else None
+                        logger.info(f"Starting individual training for {student_name}")
+                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=global_model_id)
+                        individual_count += 1
+                        logger.info(f"✅ Completed individual training for {student_name}")
+                    except Exception as student_error:
+                        logger.error(f"❌ Individual training failed for {student_name}: {student_error}")
+                        # Continue with next student instead of failing completely
+                        continue
+                else:
+                    logger.warning(f"⚠️ Skipping {student_name} - no genuine images available")
         except Exception as e:
             logger.warning(f"Hybrid individual training (post-global local) encountered an error: {e}")
 
