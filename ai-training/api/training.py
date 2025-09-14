@@ -180,7 +180,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=150)
     # Create proper classification head for identification
-    _X, _y_student, _y_auth = local_manager.prepare_training_data(training_data)
+    _X, _y_student = local_manager.prepare_training_data(training_data)
     local_manager.create_embedding_network()
     num_students = len(local_manager.student_to_id)
     local_manager.create_classification_head(num_students=num_students)
@@ -989,7 +989,10 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         # Fetch and validate images from storage for only the selected students
         job_queue.update_job_progress(job.job_id, 12.0, "Fetching stored signatures for selected students...")
         sid_ints = [int(s.get("id")) for s in students]
+        logger.info(f"Training with {len(students)} students: {[s.get('firstname', '') + ' ' + s.get('surname', '') for s in students]}")
+        logger.info(f"Student IDs: {sid_ints}")
         per_student = await _fetch_and_validate_student_images(sid_ints)
+        logger.info(f"Successfully fetched data for {len(per_student)} students: {list(per_student.keys())}")
 
         # Validate minimum totals across all selected students
         total_genuine = sum(len(v["genuine_images"]) for v in per_student.values())

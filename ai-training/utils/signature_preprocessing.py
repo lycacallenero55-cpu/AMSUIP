@@ -403,8 +403,15 @@ class SignatureAugmentation:
         
         # Apply LUT to each channel separately to avoid OpenCV LUT errors
         result = image.copy()
+        # Ensure image is uint8 and has correct shape
+        if result.dtype != np.uint8:
+            result = result.astype(np.uint8)
+        
         for c in range(image.shape[2]):
-            result[:, :, c] = cv2.LUT(image[:, :, c], table)
+            channel = result[:, :, c]
+            if channel.dtype != np.uint8:
+                channel = channel.astype(np.uint8)
+            result[:, :, c] = cv2.LUT(channel, table)
         
         return result
     

@@ -157,6 +157,9 @@ class GlobalSignatureVerificationModel:
         labels_array = np.array(all_labels)
         
         logger.info(f"Generated {len(all_pairs)} training pairs from {len(all_student_data)} students")
+        logger.info(f"Student data keys: {list(all_student_data.keys())}")
+        for student_id, data in all_student_data.items():
+            logger.info(f"Student {student_id}: {len(data['genuine_images'])} genuine, {len(data['forged_images'])} forged")
         
         # Split data
         from sklearn.model_selection import train_test_split
