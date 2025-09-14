@@ -179,12 +179,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=150)
-    # Create proper classification head for identification
-    _X, _y_student = local_manager.prepare_training_data(training_data)
-    local_manager.create_embedding_network()
-    num_students = len(local_manager.student_to_id)
-    local_manager.create_classification_head(num_students=num_students)
-
+    
     # ACTUALLY TRAIN THE MODEL (this was missing!)
     logger.info(f"🚀 Starting individual model training for {student_name}")
     training_result = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
