@@ -187,8 +187,12 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # ACTUALLY TRAIN THE MODEL (this was missing!)
     logger.info(f"🚀 Starting individual model training for {student_name}")
-    history = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
+    training_result = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
     logger.info(f"✅ Individual model training completed for {student_name}")
+    
+    # Extract training history for database records
+    classification_history = training_result.get('classification_history', {})
+    siamese_history = training_result.get('siamese_history', {})
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
@@ -285,11 +289,11 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             "training_metrics": {
                 'model_type': 'ai_signature_verification_individual',
                 'architecture': 'signature_embedding_network',
-                'epochs_trained': len(history.history.get('loss', [])),
-                'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
-                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
-                'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
-                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None,
+                'epochs_trained': len(classification_history.get('loss', [])),
+                'final_accuracy': float(classification_history.get('accuracy', [0])[-1]) if classification_history.get('accuracy') else None,
+                'val_accuracy': float(classification_history.get('val_accuracy', [0])[-1]) if classification_history.get('val_accuracy') else None,
+                'final_loss': float(classification_history.get('loss', [0])[-1]) if classification_history.get('loss') else None,
+                'val_loss': float(classification_history.get('val_loss', [0])[-1]) if classification_history.get('val_loss') else None,
                 'embedding_dimension': local_manager.embedding_dim,
             }
         }
