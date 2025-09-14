@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 import logging
 import asyncio
-import keras
+from tensorflow import keras
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
@@ -151,10 +151,17 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     
     # Normalize arrays to float32 [H,W,3]
     def _normalize(img):
-        import numpy as np
-        arr = img
-        if getattr(arr, 'dtype', None) != np.float32:
+        # Ensure it's a numpy array first
+        if not isinstance(img, np.ndarray):
+            arr = np.array(img)
+        else:
+            arr = img
+        
+        # Convert to float32 if needed
+        if arr.dtype != np.float32:
             arr = arr.astype(np.float32)
+        
+        # Handle batched arrays
         if arr.ndim == 4:
             # If erroneously batched, squeeze first dim when size 1
             if arr.shape[0] == 1:

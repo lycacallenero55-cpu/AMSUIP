@@ -92,8 +92,8 @@ def _serialize_model_to_bytes(model: keras.Model) -> bytes:
         tmp_path = tmp_file.name
     
     try:
-        # Use save_format='tf' for faster serialization
-        model.save(tmp_path, save_format='tf')
+        # Use SavedModel format for TensorFlow serialization
+        model.save(tmp_path)
         save_time = time.time() - start_time
         logger.info(f"Model saved to temp file in {save_time:.2f} seconds")
         

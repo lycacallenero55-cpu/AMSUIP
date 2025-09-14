@@ -337,6 +337,9 @@ class SignatureEmbeddingModel:
         elif image.shape[-1] == 4:
             image = image[..., :3]
         
+        # Convert to tensor for TensorFlow operations
+        image = tf.convert_to_tensor(image)
+        
         # Resize to model input size
         image = tf.image.resize(image, [self.image_size, self.image_size])
         image = tf.cast(image, tf.float32)
@@ -615,9 +618,9 @@ class SignatureEmbeddingModel:
             genuine_images = signatures['genuine']
             forged_images = signatures['forged']
             
-            # Positive pairs (genuine-genuine)
+            # Positive pairs (genuine-genuine) - generate more pairs for better training
             for i in range(len(genuine_images)):
-                for j in range(i + 1, min(i + 3, len(genuine_images))):
+                for j in range(i + 1, len(genuine_images)):
                     img1 = self._preprocess_signature(genuine_images[i])
                     img2 = self._preprocess_signature(genuine_images[j])
                     pairs.append([img1, img2])

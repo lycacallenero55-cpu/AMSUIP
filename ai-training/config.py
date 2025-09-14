@@ -29,7 +29,7 @@ class Settings:
     MODEL_LEARNING_RATE = float(os.getenv("MODEL_LEARNING_RATE", 0.0001))  # Lower learning rate for transfer learning
     MODEL_FINE_TUNE_EPOCHS = int(os.getenv("MODEL_FINE_TUNE_EPOCHS", 10))  # Additional epochs for fine-tuning
 
-        # CPU Optimization
+    # CPU Optimization
     USE_CPU_OPTIMIZATION: bool = True
     CPU_THREADS: int = 6  # For Ryzen 5 3400G
     
@@ -50,7 +50,7 @@ class Settings:
     CONFIDENCE_THRESHOLD: float = 0.6  # Minimum confidence for positive match
     ENABLE_FORGERY_DETECTION: bool = False  # Disabled for owner detection focus
     
-        # Anti-Spoofing (disabled to prioritize identification flow)
+    # Anti-Spoofing (disabled to prioritize identification flow)
     ENABLE_ANTISPOOFING: bool = False
     SPOOFING_THRESHOLD: float = 0.6
     
