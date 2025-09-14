@@ -576,14 +576,22 @@ class SignatureEmbeddingModel:
         # Train Siamese network with pair generation
         logger.info("Training Siamese network...")
         siamese_pairs, siamese_labels = self._generate_siamese_pairs(training_data)
-        siamese_history = self.siamese_model.fit(
-            siamese_pairs, siamese_labels,
-            batch_size=32,
-            epochs=epochs,
-            validation_split=0.2,
-            callbacks=callbacks,
-            verbose=1
-        )
+        
+        # Split pairs into separate inputs for Siamese model
+        if len(siamese_pairs) > 0:
+            input_a = siamese_pairs[:, 0]  # First image of each pair
+            input_b = siamese_pairs[:, 1]  # Second image of each pair
+            siamese_history = self.siamese_model.fit(
+                [input_a, input_b], siamese_labels,
+                batch_size=32,
+                epochs=epochs,
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+        else:
+            # Create dummy history if no pairs generated
+            siamese_history = type('History', (), {'history': {}})()
         
         logger.info("Training completed successfully!")
         
@@ -618,6 +626,10 @@ class SignatureEmbeddingModel:
             # Skip negative pairs with forged signatures - not used for owner identification
             # (Forgery detection is disabled - focus on owner identification only)
         
+        if len(pairs) == 0:
+            return np.array([]), np.array([])
+        
+        # Convert pairs to numpy array and return as (n_pairs, 2, height, width, channels)
         return np.array(pairs), np.array(labels)
     
     def verify_signature(self, test_signature: Union[np.ndarray, Image.Image]) -> Dict:
