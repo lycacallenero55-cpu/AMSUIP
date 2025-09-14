@@ -146,15 +146,9 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
 
 async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None) -> dict:
     """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
-    # Build training_data in the format expected by SignatureEmbeddingModel
-    training_data = {
-        f"student_{student['id']}": {
-            'genuine': genuine_arrays,
-            'forged': forged_arrays
-        }
-    }
     if job:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
+    
     # Normalize arrays to float32 [H,W,3]
     def _normalize(img):
         import numpy as np
@@ -168,6 +162,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         return arr
     genuine_norm = [_normalize(a) for a in genuine_arrays]
     forged_norm = [_normalize(a) for a in forged_arrays]
+    
     # Use student name for consistent mapping
     student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
     training_data = {

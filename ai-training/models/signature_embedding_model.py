@@ -515,16 +515,63 @@ class SignatureEmbeddingModel:
             )
         ]
         
-        # Train classification model
-        logger.info("Training student classification model...")
+        # Train classification model using advanced two-phase approach
+        logger.info("Training student classification model with progressive unfreezing...")
+        
+        # Phase 1: Train with frozen backbone
+        phase1_epochs = min(epochs // 2, 25)  # Use half epochs for phase 1
         classification_history = self.classification_head.fit(
             X, y_student,
             batch_size=32,
-            epochs=epochs,
+            epochs=phase1_epochs,
             validation_split=0.2,
             callbacks=callbacks,
             verbose=1
         )
+        
+        # Phase 2: Fine-tune with unfrozen backbone
+        logger.info("Phase 2: Fine-tuning with unfrozen backbone...")
+        
+        # Unfreeze the backbone for fine-tuning
+        if hasattr(self.classification_head, 'layers'):
+            for layer in self.classification_head.layers:
+                if 'mobilenetv2' in layer.name.lower() or 'base_model' in layer.name.lower():
+                    layer.trainable = True
+        
+        # Lower learning rate for fine-tuning
+        self.classification_head.compile(
+            optimizer=keras.optimizers.AdamW(
+                learning_rate=self.learning_rate * 0.1,  # Lower learning rate for fine-tuning
+                weight_decay=0.01,
+                beta_1=0.9,
+                beta_2=0.999
+            ),
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+                keras.metrics.Precision(name='precision'),
+                keras.metrics.Recall(name='recall'),
+                keras.metrics.AUC(name='auc')
+            ]
+        )
+        
+        # Phase 2: Fine-tune with unfrozen backbone
+        phase2_epochs = epochs - phase1_epochs
+        if phase2_epochs > 0:
+            fine_tune_history = self.classification_head.fit(
+                X, y_student,
+                batch_size=32,
+                epochs=phase2_epochs,
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            # Combine histories
+            for key in classification_history.history:
+                if key in fine_tune_history.history:
+                    classification_history.history[key].extend(fine_tune_history.history[key])
         
         # Train Siamese network with pair generation
         logger.info("Training Siamese network...")
