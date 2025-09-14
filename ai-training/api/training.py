@@ -185,6 +185,11 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     num_students = len(local_manager.student_to_id)
     local_manager.create_classification_head(num_students=num_students)
 
+    # ACTUALLY TRAIN THE MODEL (this was missing!)
+    logger.info(f"🚀 Starting individual model training for {student_name}")
+    history = local_manager.train_model(_X, _y_student, epochs=settings.MODEL_EPOCHS, batch_size=settings.MODEL_BATCH_SIZE)
+    logger.info(f"✅ Individual model training completed for {student_name}")
+
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
     try:
@@ -248,63 +253,65 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
                 cleanup_local_file(file_path)
         cleanup_local_file(f"{base_path}_mappings.json")
 
-        # Atomic DB write - only create record after successful S3 upload
-        model_record = None
-        try:
-            # Ensure atomic operations
-            from utils.s3_supabase_sync import ensure_atomic_operations
-            if not await ensure_atomic_operations():
-                raise Exception("Database connection not available for atomic operations")
-            
-            # Verify S3 uploads were successful
-            for model_type, file_info in uploaded_files.items():
-                if 'key' in file_info:
-                    from utils.s3_storage import object_exists
-                    if not object_exists(file_info['key']):
-                        raise Exception(f"S3 upload verification failed for {model_type}")
-            
-            # Record in DB (with optional global_model_id linkage)
-            payload = {
-                "student_id": int(student["id"]),
-                # Store classification model as primary path for student identification
-                "model_path": s3_urls.get("classification", ""),
-                "embedding_model_path": s3_urls.get("embedding", ""),
-                "s3_key": s3_keys.get("classification", ""),
-                "model_uuid": model_uuid,
-                "status": "completed",
-                "sample_count": len(genuine_arrays) + len(forged_arrays),
-                "genuine_count": len(genuine_arrays),
-                "forged_count": len(forged_arrays),
-                "training_date": datetime.utcnow().isoformat(),
-                "accuracy": None,
-                "training_metrics": {
-                    'model_type': 'ai_signature_verification_individual',
-                    'architecture': 'signature_embedding_network',
-                    'epochs_trained': None,
-                    'final_accuracy': None,
-                    'val_accuracy': None,
-                    'embedding_dimension': local_manager.embedding_dim,
-                }
+    # Atomic DB write - only create record after successful S3 upload
+    model_record = None
+    try:
+        # Ensure atomic operations
+        from utils.s3_supabase_sync import ensure_atomic_operations
+        if not await ensure_atomic_operations():
+            raise Exception("Database connection not available for atomic operations")
+        
+        # Verify S3 uploads were successful
+        for model_type, file_info in uploaded_files.items():
+            if 'key' in file_info:
+                from utils.s3_storage import object_exists
+                if not object_exists(file_info['key']):
+                    raise Exception(f"S3 upload verification failed for {model_type}")
+        
+        # Record in DB (with optional global_model_id linkage)
+        payload = {
+            "student_id": int(student["id"]),
+            # Store classification model as primary path for student identification
+            "model_path": s3_urls.get("classification", ""),
+            "embedding_model_path": s3_urls.get("embedding", ""),
+            "s3_key": s3_keys.get("classification", ""),
+            "model_uuid": model_uuid,
+            "status": "completed",
+            "sample_count": len(genuine_arrays) + len(forged_arrays),
+            "genuine_count": len(genuine_arrays),
+            "forged_count": len(forged_arrays),
+            "training_date": datetime.utcnow().isoformat(),
+            "accuracy": None,
+            "training_metrics": {
+                'model_type': 'ai_signature_verification_individual',
+                'architecture': 'signature_embedding_network',
+                'epochs_trained': len(history.history.get('loss', [])),
+                'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+                'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
+                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None,
+                'embedding_dimension': local_manager.embedding_dim,
             }
-            if global_model_id is not None:
-                payload["global_model_id"] = int(global_model_id)
-            
-            model_record = await db_manager.create_trained_model(payload)
-            logger.info(f"✅ Atomic DB write successful for student {student['id']}")
-            
-        except Exception as e:
-            logger.error(f"❌ Atomic DB write failed for student {student['id']}: {e}")
-            # If the column global_model_id doesn't exist yet, retry without it
-            if "global_model_id" in payload:
-                payload.pop("global_model_id", None)
-                try:
-                    model_record = await db_manager.create_trained_model(payload)
-                    logger.info(f"✅ Atomic DB write successful (retry) for student {student['id']}")
-                except Exception as retry_error:
-                    logger.error(f"❌ Atomic DB write retry failed for student {student['id']}: {retry_error}")
-                    model_record = None
-            else:
+        }
+        if global_model_id is not None:
+            payload["global_model_id"] = int(global_model_id)
+        
+        model_record = await db_manager.create_trained_model(payload)
+        logger.info(f"✅ Atomic DB write successful for student {student['id']}")
+        
+    except Exception as e:
+        logger.error(f"❌ Atomic DB write failed for student {student['id']}: {e}")
+        # If the column global_model_id doesn't exist yet, retry without it
+        if "global_model_id" in payload:
+            payload.pop("global_model_id", None)
+            try:
+                model_record = await db_manager.create_trained_model(payload)
+                logger.info(f"✅ Atomic DB write successful (retry) for student {student['id']}")
+            except Exception as retry_error:
+                logger.error(f"❌ Atomic DB write retry failed for student {student['id']}: {retry_error}")
                 model_record = None
+        else:
+            model_record = None
 
     # Reduce pauses by clearing TF session and triggering GC
     try:

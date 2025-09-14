@@ -61,7 +61,10 @@ def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str = "applicati
             Key=s3_key,
             Body=data,
             ContentType=content_type,
-            ACL=acl
+            ACL=acl,
+            # Add performance optimizations
+            ServerSideEncryption='AES256',
+            StorageClass='STANDARD'
         )
         
         upload_time = time.time() - start_time
