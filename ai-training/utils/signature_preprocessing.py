@@ -345,51 +345,63 @@ class SignatureAugmentation:
     
     def _rotate_signature(self, image: np.ndarray, angle: float) -> np.ndarray:
         """Rotate signature with proper boundary handling"""
-        h, w = image.shape[:2]
-        center = (float(w // 2), float(h // 2))  # Ensure center is float tuple
-        
-        # Get rotation matrix
-        rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-        
-        # Calculate new boundaries
-        cos = np.abs(rotation_matrix[0, 0])
-        sin = np.abs(rotation_matrix[0, 1])
-        new_w = int(h * sin + w * cos)
-        new_h = int(h * cos + w * sin)
-        
-        # Adjust rotation matrix for translation
-        rotation_matrix[0, 2] += (new_w / 2) - center[0]
-        rotation_matrix[1, 2] += (new_h / 2) - center[1]
-        
-        # Apply rotation
-        rotated = cv2.warpAffine(image, rotation_matrix, (new_w, new_h),
-                               flags=cv2.INTER_CUBIC,
-                               borderMode=cv2.BORDER_CONSTANT,
-                               borderValue=255)
-        
-        # Resize back to original size
-        return cv2.resize(rotated, (w, h), interpolation=cv2.INTER_CUBIC)
+        try:
+            h, w = image.shape[:2]
+            center = (float(w // 2), float(h // 2))  # Ensure center is float tuple
+            
+            # Get rotation matrix
+            rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+            
+            # Calculate new boundaries
+            cos = np.abs(rotation_matrix[0, 0])
+            sin = np.abs(rotation_matrix[0, 1])
+            new_w = int(h * sin + w * cos)
+            new_h = int(h * cos + w * sin)
+            
+            # Adjust rotation matrix for translation
+            rotation_matrix[0, 2] += (new_w / 2) - center[0]
+            rotation_matrix[1, 2] += (new_h / 2) - center[1]
+            
+            # Apply rotation
+            rotated = cv2.warpAffine(image, rotation_matrix, (new_w, new_h),
+                                   flags=cv2.INTER_CUBIC,
+                                   borderMode=cv2.BORDER_CONSTANT,
+                                   borderValue=255)
+            
+            # Resize back to original size
+            return cv2.resize(rotated, (w, h), interpolation=cv2.INTER_CUBIC)
+        except Exception as e:
+            logger.warning(f"Rotation failed: {e}, returning original image")
+            return image
     
     def _scale_signature(self, image: np.ndarray, scale: float) -> np.ndarray:
         """Scale signature with proper centering"""
-        h, w = image.shape[:2]
-        new_h, new_w = int(h * scale), int(w * scale)
-        
-        # Resize
-        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        
-        if scale > 1.0:
-            # Center crop
-            start_h = (new_h - h) // 2
-            start_w = (new_w - w) // 2
-            return resized[start_h:start_h + h, start_w:start_w + w]
-        else:
-            # Pad with white
-            result = np.full((h, w, 3), 255, dtype=np.uint8)
-            start_h = (h - new_h) // 2
-            start_w = (w - new_w) // 2
-            result[start_h:start_h + new_h, start_w:start_w + new_w] = resized
-            return result
+        try:
+            h, w = image.shape[:2]
+            new_h, new_w = int(h * scale), int(w * scale)
+            
+            # Ensure minimum size
+            new_h = max(1, new_h)
+            new_w = max(1, new_w)
+            
+            # Resize
+            resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+            
+            if scale > 1.0:
+                # Center crop
+                start_h = (new_h - h) // 2
+                start_w = (new_w - w) // 2
+                return resized[start_h:start_h + h, start_w:start_w + w]
+            else:
+                # Pad with white
+                result = np.full((h, w, 3), 255, dtype=np.uint8)
+                start_h = (h - new_h) // 2
+                start_w = (w - new_w) // 2
+                result[start_h:start_h + new_h, start_w:start_w + new_w] = resized
+                return result
+        except Exception as e:
+            logger.warning(f"Scaling failed: {e}, returning original image")
+            return image
     
     def _adjust_brightness(self, image: np.ndarray, factor: float) -> np.ndarray:
         """Adjust brightness with gamma correction"""
