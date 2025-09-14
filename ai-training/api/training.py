@@ -631,7 +631,7 @@ async def start_gpu_training(
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
-                forged_data = [await f.read() for f in forged_files]
+                forged_data = [await f.read() for f in forged_files] if forged_files else []
             
             if use_gpu and gpu_training_manager.is_available():
                 # Use GPU training
@@ -666,7 +666,7 @@ async def start_gpu_training(
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
-                forged_data = [await f.read() for f in forged_files]
+                forged_data = [await f.read() for f in forged_files] if forged_files else []
             
             if use_gpu and gpu_training_manager.is_available():
                 asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data))
@@ -749,7 +749,7 @@ async def start_async_training(
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
-                forged_data = [await f.read() for f in forged_files]
+                forged_data = [await f.read() for f in forged_files] if forged_files else []
             asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
         
@@ -766,7 +766,7 @@ async def start_async_training(
                     raise HTTPException(status_code=400, detail=f"Minimum {settings.MIN_GENUINE_SAMPLES} genuine samples required")
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
-                forged_data = [await f.read() for f in forged_files]
+                forged_data = [await f.read() for f in forged_files] if forged_files else []
             asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
             return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
             
