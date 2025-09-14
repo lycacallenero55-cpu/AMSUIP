@@ -73,14 +73,24 @@ def _serialize_model_to_bytes(model: keras.Model) -> bytes:
     logger.info("Using file-based serialization for model (Lambda layers detected)")
     import tempfile
     import os
+    import time
+    
+    start_time = time.time()
     
     with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
         tmp_path = tmp_file.name
     
     try:
-        model.save(tmp_path)
+        # Use save_format='tf' for faster serialization
+        model.save(tmp_path, save_format='tf')
+        save_time = time.time() - start_time
+        logger.info(f"Model saved to temp file in {save_time:.2f} seconds")
+        
         with open(tmp_path, 'rb') as f:
-            return f.read()
+            data = f.read()
+            read_time = time.time() - start_time - save_time
+            logger.info(f"Model data read in {read_time:.2f} seconds, total size: {len(data) / 1024 / 1024:.2f} MB")
+            return data
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
