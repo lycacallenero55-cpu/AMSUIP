@@ -249,6 +249,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         cleanup_local_file(f"{base_path}_mappings.json")
 
         # Atomic DB write - only create record after successful S3 upload
+        model_record = None
         try:
             # Ensure atomic operations
             from utils.s3_supabase_sync import ensure_atomic_operations
@@ -301,9 +302,9 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
                     logger.info(f"✅ Atomic DB write successful (retry) for student {student['id']}")
                 except Exception as retry_error:
                     logger.error(f"❌ Atomic DB write retry failed for student {student['id']}: {retry_error}")
-                    raise
+                    model_record = None
             else:
-                raise
+                model_record = None
 
     # Reduce pauses by clearing TF session and triggering GC
     try:
