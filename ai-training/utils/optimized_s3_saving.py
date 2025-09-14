@@ -49,7 +49,12 @@ def _generate_s3_key(model_type: str, model_uuid: str, file_type: str) -> str:
 
 def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str = "application/keras") -> Tuple[str, str]:
     """Upload bytes directly to S3"""
+    import time
+    start_time = time.time()
+    file_size_mb = len(data) / 1024 / 1024
+    
     try:
+        logger.info(f"📤 Starting S3 upload: {s3_key} ({file_size_mb:.2f} MB)")
         acl = "private" if settings.S3_USE_PRESIGNED_GET else "public-read"
         _s3.put_object(
             Bucket=settings.S3_BUCKET,
@@ -59,12 +64,15 @@ def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str = "applicati
             ACL=acl
         )
         
+        upload_time = time.time() - start_time
+        upload_speed = file_size_mb / upload_time if upload_time > 0 else 0
         public_url = f"{_resolve_public_base_url()}/{s3_key}"
-        logger.info(f"✅ Data uploaded to S3: {s3_key}")
+        logger.info(f"✅ Data uploaded to S3: {s3_key} ({file_size_mb:.2f} MB in {upload_time:.2f}s, {upload_speed:.2f} MB/s)")
         return s3_key, public_url
         
     except Exception as e:
-        logger.error(f"❌ Failed to upload to S3: {e}")
+        upload_time = time.time() - start_time
+        logger.error(f"❌ Failed to upload to S3: {s3_key} after {upload_time:.2f}s: {e}")
         raise
 
 def _serialize_model_to_bytes(model: keras.Model) -> bytes:
