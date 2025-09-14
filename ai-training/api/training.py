@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 import logging
 import asyncio
-import keras
+from tensorflow import keras
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
@@ -31,10 +31,8 @@ from utils.storage import cleanup_local_file
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Global model instance - can handle up to 150 students
-signature_ai_manager = SignatureEmbeddingModel(max_students=150)
-preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
-augmenter = SignatureAugmentation()
+# Global instances removed - each training session creates its own instances
+# This prevents state contamination between different training requests
 
 @router.get("/gpu-available")
 async def gpu_available():
@@ -78,6 +76,9 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
     import io
 
     results: dict[int, dict[str, list]] = {}
+    
+    # Create fresh preprocessor instance for this function
+    preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
     import asyncio as _asyncio
     import functools as _functools
@@ -146,21 +147,22 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
 
 async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None) -> dict:
     """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
-    # Build training_data in the format expected by SignatureEmbeddingModel
-    training_data = {
-        f"student_{student['id']}": {
-            'genuine': genuine_arrays,
-            'forged': forged_arrays
-        }
-    }
     if job:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
+    
     # Normalize arrays to float32 [H,W,3]
     def _normalize(img):
-        import numpy as np
-        arr = img
-        if getattr(arr, 'dtype', None) != np.float32:
+        # Ensure it's a numpy array first
+        if not isinstance(img, np.ndarray):
+            arr = np.array(img)
+        else:
+            arr = img
+        
+        # Convert to float32 if needed
+        if arr.dtype != np.float32:
             arr = arr.astype(np.float32)
+        
+        # Handle batched arrays
         if arr.ndim == 4:
             # If erroneously batched, squeeze first dim when size 1
             if arr.shape[0] == 1:
@@ -168,6 +170,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         return arr
     genuine_norm = [_normalize(a) for a in genuine_arrays]
     forged_norm = [_normalize(a) for a in forged_arrays]
+    
     # Use student name for consistent mapping
     student_name = f"{student.get('firstname', '')} {student.get('surname', '')}".strip() or f"Student_{student['id']}"
     training_data = {
@@ -179,16 +182,15 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
 
     # Use a fresh model manager per student to avoid cross-contamination across sequential trainings
     local_manager = SignatureEmbeddingModel(max_students=150)
-    # Create proper classification head for identification
-    _X, _y_student = local_manager.prepare_training_data(training_data)
-    local_manager.create_embedding_network()
-    num_students = len(local_manager.student_to_id)
-    local_manager.create_classification_head(num_students=num_students)
-
+    
     # ACTUALLY TRAIN THE MODEL (this was missing!)
     logger.info(f"🚀 Starting individual model training for {student_name}")
-    history = local_manager.train_model(_X, _y_student, epochs=settings.MODEL_EPOCHS, batch_size=settings.MODEL_BATCH_SIZE)
+    training_result = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
     logger.info(f"✅ Individual model training completed for {student_name}")
+    
+    # Extract training history for database records
+    classification_history = training_result.get('classification_history', {})
+    siamese_history = training_result.get('siamese_history', {})
 
     # Save models directly to S3 (no local files)
     model_uuid = str(uuid.uuid4())
@@ -285,11 +287,11 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             "training_metrics": {
                 'model_type': 'ai_signature_verification_individual',
                 'architecture': 'signature_embedding_network',
-                'epochs_trained': len(history.history.get('loss', [])),
-                'final_accuracy': float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
-                'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
-                'final_loss': float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
-                'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None,
+                'epochs_trained': len(classification_history.get('loss', [])),
+                'final_accuracy': float(classification_history.get('accuracy', [0])[-1]) if classification_history.get('accuracy') else None,
+                'val_accuracy': float(classification_history.get('val_accuracy', [0])[-1]) if classification_history.get('val_accuracy') else None,
+                'final_loss': float(classification_history.get('loss', [0])[-1]) if classification_history.get('loss') else None,
+                'val_loss': float(classification_history.get('val_loss', [0])[-1]) if classification_history.get('val_loss') else None,
                 'embedding_dimension': local_manager.embedding_dim,
             }
         }
@@ -330,6 +332,10 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
     try:
         if job:
             job_queue.update_job_progress(job.job_id, 5.0, "Initializing AI training system...")
+        
+        # Create fresh instances for this training session to prevent state contamination
+        local_manager = SignatureEmbeddingModel(max_students=150)
+        preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
         
         # Process and preprocess images with advanced signature preprocessing
         genuine_images = []
@@ -375,7 +381,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             current_thread = threading.current_thread()
             current_thread.job_id = job.job_id
         
-        result_models = signature_ai_manager.train_classification_only(training_data, epochs=settings.MODEL_EPOCHS)
+        result_models = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
             job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
@@ -386,7 +392,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         try:
             # Use optimized S3 saving first (JSON serialization)
             uploaded_files = save_signature_models_optimized(
-                signature_ai_manager, 
+                local_manager, 
                 "individual", 
                 model_uuid
             )
@@ -406,7 +412,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             try:
                 # Fallback to direct S3 saving
                 uploaded_files = save_signature_models_directly(
-                    signature_ai_manager, 
+                    local_manager, 
                     "individual", 
                     model_uuid
                 )
@@ -424,11 +430,11 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             except Exception as e2:
                 logger.error(f"❌ Both optimized and direct S3 saving failed: {e2}")
                 # Final fallback to original method
-            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
-            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+                base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
+                os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
 
             # Save all models
-            signature_ai_manager.save_models(base_path)
+            local_manager.save_models(base_path)
 
             # Upload models to S3 (only classification and embedding for faster training)
             model_files = [
@@ -476,11 +482,11 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 'student_recognition_accuracy': _cls_acc,
                 'siamese_accuracy': _sia_acc,
                 'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
-                'embedding_dimension': signature_ai_manager.embedding_dim,
+                'embedding_dimension': local_manager.embedding_dim,
                 'model_parameters': sum([
-                    signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
-                    signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
-                    signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
+                    local_manager.embedding_model.count_params() if local_manager.embedding_model else 0,
+                    local_manager.classification_head.count_params() if local_manager.classification_head else 0,
+                    local_manager.siamese_model.count_params() if local_manager.siamese_model else 0
                 ])
             }
         })

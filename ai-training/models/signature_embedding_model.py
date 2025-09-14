@@ -337,6 +337,9 @@ class SignatureEmbeddingModel:
         elif image.shape[-1] == 4:
             image = image[..., :3]
         
+        # Convert to tensor for TensorFlow operations
+        image = tf.convert_to_tensor(image)
+        
         # Resize to model input size
         image = tf.image.resize(image, [self.image_size, self.image_size])
         image = tf.cast(image, tf.float32)
@@ -515,28 +518,83 @@ class SignatureEmbeddingModel:
             )
         ]
         
-        # Train classification model
-        logger.info("Training student classification model...")
+        # Train classification model using advanced two-phase approach
+        logger.info("Training student classification model with progressive unfreezing...")
+        
+        # Phase 1: Train with frozen backbone
+        phase1_epochs = min(epochs // 2, 25)  # Use half epochs for phase 1
         classification_history = self.classification_head.fit(
             X, y_student,
             batch_size=32,
-            epochs=epochs,
+            epochs=phase1_epochs,
             validation_split=0.2,
             callbacks=callbacks,
             verbose=1
         )
         
+        # Phase 2: Fine-tune with unfrozen backbone
+        logger.info("Phase 2: Fine-tuning with unfrozen backbone...")
+        
+        # Unfreeze the backbone for fine-tuning
+        if hasattr(self.classification_head, 'layers'):
+            for layer in self.classification_head.layers:
+                if 'mobilenetv2' in layer.name.lower() or 'base_model' in layer.name.lower():
+                    layer.trainable = True
+        
+        # Lower learning rate for fine-tuning
+        self.classification_head.compile(
+            optimizer=keras.optimizers.AdamW(
+                learning_rate=self.learning_rate * 0.1,  # Lower learning rate for fine-tuning
+                weight_decay=0.01,
+                beta_1=0.9,
+                beta_2=0.999
+            ),
+            loss='categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+                keras.metrics.Precision(name='precision'),
+                keras.metrics.Recall(name='recall'),
+                keras.metrics.AUC(name='auc')
+            ]
+        )
+        
+        # Phase 2: Fine-tune with unfrozen backbone
+        phase2_epochs = epochs - phase1_epochs
+        if phase2_epochs > 0:
+            fine_tune_history = self.classification_head.fit(
+                X, y_student,
+                batch_size=32,
+                epochs=phase2_epochs,
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            # Combine histories
+            for key in classification_history.history:
+                if key in fine_tune_history.history:
+                    classification_history.history[key].extend(fine_tune_history.history[key])
+        
         # Train Siamese network with pair generation
         logger.info("Training Siamese network...")
         siamese_pairs, siamese_labels = self._generate_siamese_pairs(training_data)
-        siamese_history = self.siamese_model.fit(
-            siamese_pairs, siamese_labels,
-            batch_size=32,
-            epochs=epochs,
-            validation_split=0.2,
-            callbacks=callbacks,
-            verbose=1
-        )
+        
+        # Split pairs into separate inputs for Siamese model
+        if len(siamese_pairs) > 0:
+            input_a = siamese_pairs[:, 0]  # First image of each pair
+            input_b = siamese_pairs[:, 1]  # Second image of each pair
+            siamese_history = self.siamese_model.fit(
+                [input_a, input_b], siamese_labels,
+                batch_size=32,
+                epochs=epochs,
+                validation_split=0.2,
+                callbacks=callbacks,
+                verbose=1
+            )
+        else:
+            # Create dummy history if no pairs generated
+            siamese_history = type('History', (), {'history': {}})()
         
         logger.info("Training completed successfully!")
         
@@ -560,9 +618,9 @@ class SignatureEmbeddingModel:
             genuine_images = signatures['genuine']
             forged_images = signatures['forged']
             
-            # Positive pairs (genuine-genuine)
+            # Positive pairs (genuine-genuine) - generate more pairs for better training
             for i in range(len(genuine_images)):
-                for j in range(i + 1, min(i + 3, len(genuine_images))):
+                for j in range(i + 1, len(genuine_images)):
                     img1 = self._preprocess_signature(genuine_images[i])
                     img2 = self._preprocess_signature(genuine_images[j])
                     pairs.append([img1, img2])
@@ -571,6 +629,10 @@ class SignatureEmbeddingModel:
             # Skip negative pairs with forged signatures - not used for owner identification
             # (Forgery detection is disabled - focus on owner identification only)
         
+        if len(pairs) == 0:
+            return np.array([]), np.array([])
+        
+        # Convert pairs to numpy array and return as (n_pairs, 2, height, width, channels)
         return np.array(pairs), np.array(labels)
     
     def verify_signature(self, test_signature: Union[np.ndarray, Image.Image]) -> Dict:
