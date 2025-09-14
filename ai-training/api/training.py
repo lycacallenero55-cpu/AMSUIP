@@ -1119,9 +1119,8 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
         for s in students:
             sid = int(s["id"])  # type: ignore[index]
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-            # Use student name for consistent mapping
-            student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
-            training_data[student_name] = {
+            # Use student ID as key (not name) to match GlobalSignatureVerificationModel expectations
+            training_data[sid] = {
                 'genuine_images': bucket['genuine_images'],
                 'forged_images': bucket['forged_images']
             }
