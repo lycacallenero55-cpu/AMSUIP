@@ -31,10 +31,8 @@ from utils.storage import cleanup_local_file
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Global model instance - can handle up to 150 students
-signature_ai_manager = SignatureEmbeddingModel(max_students=150)
-preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
-augmenter = SignatureAugmentation()
+# Global instances removed - each training session creates its own instances
+# This prevents state contamination between different training requests
 
 @router.get("/gpu-available")
 async def gpu_available():
@@ -78,6 +76,9 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
     import io
 
     results: dict[int, dict[str, list]] = {}
+    
+    # Create fresh preprocessor instance for this function
+    preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
     import asyncio as _asyncio
     import functools as _functools
@@ -332,6 +333,10 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         if job:
             job_queue.update_job_progress(job.job_id, 5.0, "Initializing AI training system...")
         
+        # Create fresh instances for this training session to prevent state contamination
+        local_manager = SignatureEmbeddingModel(max_students=150)
+        preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
+        
         # Process and preprocess images with advanced signature preprocessing
         genuine_images = []
         forged_images = []
@@ -376,7 +381,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             current_thread = threading.current_thread()
             current_thread.job_id = job.job_id
         
-        result_models = signature_ai_manager.train_classification_only(training_data, epochs=settings.MODEL_EPOCHS)
+        result_models = local_manager.train_models(training_data, epochs=settings.MODEL_EPOCHS)
 
         if job:
             job_queue.update_job_progress(job.job_id, 85.0, "Saving trained models...")
@@ -387,7 +392,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         try:
             # Use optimized S3 saving first (JSON serialization)
             uploaded_files = save_signature_models_optimized(
-                signature_ai_manager, 
+                local_manager, 
                 "individual", 
                 model_uuid
             )
@@ -407,7 +412,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             try:
                 # Fallback to direct S3 saving
                 uploaded_files = save_signature_models_directly(
-                    signature_ai_manager, 
+                    local_manager, 
                     "individual", 
                     model_uuid
                 )
@@ -425,11 +430,11 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             except Exception as e2:
                 logger.error(f"❌ Both optimized and direct S3 saving failed: {e2}")
                 # Final fallback to original method
-            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
-            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+                base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"signature_model_{model_uuid}")
+                os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
 
             # Save all models
-            signature_ai_manager.save_models(base_path)
+            local_manager.save_models(base_path)
 
             # Upload models to S3 (only classification and embedding for faster training)
             model_files = [
@@ -477,11 +482,11 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                 'student_recognition_accuracy': _cls_acc,
                 'siamese_accuracy': _sia_acc,
                 'epochs_trained': len(result_models['classification_history'].get('accuracy', [])) if 'classification_history' in result_models else None,
-                'embedding_dimension': signature_ai_manager.embedding_dim,
+                'embedding_dimension': local_manager.embedding_dim,
                 'model_parameters': sum([
-                    signature_ai_manager.embedding_model.count_params() if signature_ai_manager.embedding_model else 0,
-                    signature_ai_manager.classification_head.count_params() if signature_ai_manager.classification_head else 0,
-                    signature_ai_manager.siamese_model.count_params() if signature_ai_manager.siamese_model else 0
+                    local_manager.embedding_model.count_params() if local_manager.embedding_model else 0,
+                    local_manager.classification_head.count_params() if local_manager.classification_head else 0,
+                    local_manager.siamese_model.count_params() if local_manager.siamese_model else 0
                 ])
             }
         })
