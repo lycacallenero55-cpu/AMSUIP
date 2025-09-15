@@ -863,7 +863,15 @@ async def identify_signature_owner(
                 "is_unknown": False,
                 "model_type": "ai_signature_verification",
                 "ai_architecture": "signature_embedding_network",
-                "success": True
+                "success": True,
+                "decision": "match",
+                "candidates": [
+                    {
+                        "id": int(predicted_owner_id),
+                        "name": predicted_block["name"],
+                        "confidence": float(combined_confidence)
+                    }
+                ]
             }
             # Back-compat
             response_obj["predicted_student_id"] = int(predicted_owner_id)
@@ -1092,6 +1100,18 @@ async def identify_signature_owner(
             "name": "Unknown" if is_unknown or not is_match else result["predicted_student_name"],
         }
 
+        # Build decision and candidates
+        decision = "match" if is_match else "no_match"
+        top_id = int(result.get("predicted_student_id") or 0)
+        top_name = signature_ai_manager.id_to_student.get(top_id, "Unknown") if top_id else "Unknown"
+        candidates = []
+        if top_id:
+            candidates.append({
+                "id": top_id,
+                "name": top_name,
+                "confidence": float(combined_confidence)
+            })
+
         response_obj = {
             "predicted_student": predicted_block,
             "is_match": is_match,
@@ -1105,7 +1125,9 @@ async def identify_signature_owner(
             "model_type": "ai_signature_verification",
             "ai_architecture": "signature_embedding_network",
             "success": True,
-            "message": "Match found" if is_match else "No match found"
+            "message": "Match found" if is_match else "No match found",
+            "decision": decision,
+            "candidates": candidates
         }
         # Back-compat fields for UI
         response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
@@ -1596,6 +1618,17 @@ async def verify_signature(
             "name": "Unknown" if is_unknown or not is_match else result["predicted_student_name"],
         }
 
+        decision = "match" if is_match else "no_match"
+        top_id = int(result.get("predicted_student_id") or 0)
+        top_name = signature_ai_manager.id_to_student.get(top_id, "Unknown") if top_id else "Unknown"
+        candidates = []
+        if top_id:
+            candidates.append({
+                "id": top_id,
+                "name": top_name,
+                "confidence": float(combined_confidence)
+            })
+
         return {
             "is_match": is_match,
             "confidence": float(combined_confidence),
@@ -1611,7 +1644,9 @@ async def verify_signature(
             "model_type": "ai_signature_verification",
             "ai_architecture": "signature_embedding_network",
             "success": True,
-            "message": "Match found" if is_match else "No match found"
+            "message": "Match found" if is_match else "No match found",
+            "decision": decision,
+            "candidates": candidates
         }
         
     except HTTPException:
