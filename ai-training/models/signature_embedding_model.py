@@ -280,7 +280,13 @@ class SignatureEmbeddingModel:
         
         # Import augmentation
         from utils.signature_preprocessing import SignatureAugmentation
-        augmenter = SignatureAugmentation()
+        augmenter = SignatureAugmentation(
+            rotation_range=10.0,  # Reduced for signature stability
+            scale_range=(0.9, 1.1),  # Conservative scaling
+            brightness_range=0.2,  # Subtle brightness changes
+            noise_std=3.0,  # Reduced noise
+            blur_probability=0.2  # Reduced blur probability
+        )
         
         for student_name, signatures in training_data.items():
             if student_name not in self.student_to_id:
@@ -296,23 +302,32 @@ class SignatureEmbeddingModel:
             logger.info(f"Processing {len(genuine_images)} genuine signatures for {student_name}")
             
             for img in genuine_images:
-                # Original image
-                processed_img = self._preprocess_signature(img)
-                all_images.append(processed_img)
-                student_labels.append(student_id)
-                
-                # Augmented versions (5x augmentation for small datasets like Teachable Machine)
-                for _ in range(5):
-                    try:
-                        augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
-                        all_images.append(augmented_img)
-                        student_labels.append(student_id)
-                    except Exception as e:
-                        logger.warning(f"Augmentation failed for {student_name}: {e}")
-                        # Continue without this augmentation
+                try:
+                    # Original image
+                    processed_img = self._preprocess_signature(img)
+                    all_images.append(processed_img)
+                    student_labels.append(student_id)
+                    
+                    # Augmented versions (3x augmentation for better balance)
+                    for _ in range(3):
+                        try:
+                            augmented_img = augmenter.augment_signature(processed_img, is_genuine=True)
+                            # Validate augmented image
+                            if augmented_img is not None and augmented_img.shape == processed_img.shape:
+                                all_images.append(augmented_img)
+                                student_labels.append(student_id)
+                        except Exception as e:
+                            logger.warning(f"Augmentation failed for {student_name}: {e}")
+                            # Continue without this augmentation
+                except Exception as e:
+                    logger.warning(f"Preprocessing failed for {student_name}: {e}")
+                    continue
             
             # Skip forged signatures - not used for owner identification training
             # (Forgery detection is disabled system-wide - focus on owner identification only)
+        
+        if not all_images:
+            raise ValueError("No valid training images found")
         
         X = np.array(all_images, dtype=np.float32)
         # Use actual number of students for categorical encoding
@@ -328,27 +343,36 @@ class SignatureEmbeddingModel:
         """
         Signature-specific preprocessing pipeline
         """
-        if hasattr(image, 'convert'):
-            image = np.array(image.convert('RGB'))
-        
-        # Ensure proper format
-        if image.ndim == 2:
-            image = np.stack([image, image, image], axis=-1)
-        elif image.shape[-1] == 4:
-            image = image[..., :3]
-        
-        # Convert to tensor for TensorFlow operations
-        image = tf.convert_to_tensor(image)
-        
-        # Resize to model input size
-        image = tf.image.resize(image, [self.image_size, self.image_size])
-        image = tf.cast(image, tf.float32)
-        
-        # Normalize to [0, 1]
-        if tf.reduce_max(image) > 1.0:
-            image = image / 255.0
-        
-        return image.numpy()
+        try:
+            if hasattr(image, 'convert'):
+                image = np.array(image.convert('RGB'))
+            
+            # Ensure proper format
+            if image.ndim == 2:
+                image = np.stack([image, image, image], axis=-1)
+            elif image.shape[-1] == 4:
+                image = image[..., :3]
+            
+            # Validate image dimensions
+            if len(image.shape) != 3 or image.shape[2] != 3:
+                raise ValueError(f"Invalid image shape: {image.shape}")
+            
+            # Convert to tensor for TensorFlow operations
+            image = tf.convert_to_tensor(image)
+            
+            # Resize to model input size
+            image = tf.image.resize(image, [self.image_size, self.image_size])
+            image = tf.cast(image, tf.float32)
+            
+            # Normalize to [0, 1]
+            if tf.reduce_max(image) > 1.0:
+                image = image / 255.0
+            
+            return image.numpy()
+        except Exception as e:
+            logger.error(f"Preprocessing failed: {e}")
+            # Return a blank white image as fallback
+            return np.ones((self.image_size, self.image_size, 3), dtype=np.float32)
     
     def train_classification_only(self, training_data: Dict, epochs: int = 50) -> Dict:
         """
@@ -357,12 +381,24 @@ class SignatureEmbeddingModel:
         """
         logger.info("Starting classification training with progressive unfreezing...")
         
-        # Prepare data first to set up student mappings
-        X, y_student = self.prepare_training_data(training_data)
-        
-        # Create only the classification model with correct number of students
-        num_students = len(self.student_to_id)
-        self.create_classification_head(num_students=num_students)
+        try:
+            # Validate training data
+            if not training_data:
+                raise ValueError("No training data provided")
+            
+            # Prepare data first to set up student mappings
+            X, y_student = self.prepare_training_data(training_data)
+            
+            # Validate prepared data
+            if X.shape[0] == 0:
+                raise ValueError("No valid training images after preprocessing")
+            
+            if y_student.shape[1] < 2:
+                raise ValueError("Need at least 2 students for classification training")
+            
+            # Create only the classification model with correct number of students
+            num_students = len(self.student_to_id)
+            self.create_classification_head(num_students=num_students)
         
         # Phase 1: Train only the classification head (frozen backbone)
         logger.info("Phase 1: Training classification head with frozen backbone...")
