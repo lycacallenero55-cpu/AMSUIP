@@ -460,12 +460,30 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             # Clean up mappings file
             cleanup_local_file(f"{base_path}_mappings.json")
 
+        # Upload training logs (metrics) to S3 as JSON for auditability
+        try:
+            import json
+            logs_payload = {
+                "classification_history": result_models.get('classification_history', {}),
+                "siamese_history": result_models.get('siamese_history', {}),
+                "student_mappings": result_models.get('student_mappings', {}),
+                "created_at": datetime.utcnow().isoformat(),
+                "model_uuid": model_uuid,
+                "student_id": int(student["id"]),
+            }
+            logs_bytes = json.dumps(logs_payload).encode("utf-8")
+            from utils.s3_storage import upload_model_file as _upload_generic
+            # Reuse model namespace for grouping; store logs alongside models
+            _logs_key, logs_url = _upload_generic(logs_bytes, "individual", f"training_logs_{model_uuid}", "json")
+        except Exception:
+            logs_url = None
+
         # Create model record with comprehensive metrics
         # Prefer classification accuracy; fallback to authenticity, then siamese
         _cls_acc = float(result_models['classification_history'].get('accuracy', [0])[-1]) if 'classification_history' in result_models else None
         _sia_acc = float(result_models['siamese_history'].get('accuracy', [0])[-1]) if 'siamese_history' in result_models else None
         top_level_accuracy = next((a for a in [_cls_acc, _sia_acc] if a is not None), None)
-        model_record = await db_manager.create_trained_model({
+        payload = {
             "student_id": int(student["id"]),
             "model_path": s3_urls.get("classification", ""),
             "embedding_model_path": s3_urls.get("embedding", ""),
@@ -489,7 +507,22 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
                     local_manager.siamese_model.count_params() if local_manager.siamese_model else 0
                 ])
             }
-        })
+        }
+        if logs_url:
+            # Optional field; ignore if DB schema lacks it
+            try:
+                payload["training_logs_path"] = logs_url
+            except Exception:
+                pass
+        try:
+            model_record = await db_manager.create_trained_model(payload)
+        except Exception as e:
+            # Retry without optional field if column missing
+            if "training_logs_path" in payload:
+                payload.pop("training_logs_path", None)
+                model_record = await db_manager.create_trained_model(payload)
+            else:
+                raise e
 
         train_time = time.time() - t0
         result = {
