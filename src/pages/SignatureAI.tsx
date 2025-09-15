@@ -1957,21 +1957,12 @@ const SignatureAI = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="flex items-center gap-2 hover:bg-transparent hover:text-foreground"
-                          onClick={() => {
-                            const input = document.createElement('input');
-                            input.type = 'file';
-                            input.accept = 'image/*';
-                            input.multiple = true;
-                            input.onchange = (e) => {
-                              const files = Array.from((e.target as HTMLInputElement).files || []);
-                              handleTrainingFilesChange(files, 'forged', card.id);
-                            };
-                            input.click();
-                          }}
+                          className="flex items-center gap-2 hover:bg-transparent hover:text-foreground opacity-50 cursor-not-allowed"
+                          disabled={true}
+                          title="Forgery detection is disabled - focus on owner identification only"
                         >
                           <Upload className="w-4 h-4" />
-                          Forged
+                          Forged (Disabled)
                         </Button>
                         <Button
                           variant="default"
@@ -2003,7 +1994,7 @@ const SignatureAI = () => {
                           <div className="text-xs text-muted-foreground">
                             <span className={`${trainingImagesSet==='genuine' ? 'font-semibold' : ''}`}>Genuine ({card.genuineFiles.length})</span>
                             <span className="mx-1">/</span>
-                            <span className={`${trainingImagesSet==='forged' ? 'font-semibold' : ''}`}>Forged ({card.forgedFiles.length})</span>
+                            <span className={`${trainingImagesSet==='forged' ? 'font-semibold' : ''} opacity-50`}>Forged ({card.forgedFiles.length}) - Disabled</span>
                           </div>
                         </div>
                         <div className="relative w-full h-[480px] border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 group overflow-hidden">
@@ -2065,18 +2056,22 @@ const SignatureAI = () => {
                           )}
                           {/* Chevron controls on hover to toggle between sets */}
                           <button
-                            className="hidden group-hover:flex absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center"
-                            onClick={() => setTrainingImagesSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
+                            className="hidden group-hover:flex absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center opacity-50 cursor-not-allowed"
+                            onClick={() => setTrainingImagesSet('genuine')}
                             aria-label="Previous"
                             type="button"
+                            disabled={true}
+                            title="Forgery detection disabled - only genuine signatures allowed"
                           >
                             <ChevronLeft className="w-4 h-4" />
                           </button>
                           <button
-                            className="hidden group-hover:flex absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center"
-                            onClick={() => setTrainingImagesSet(prev => prev === 'genuine' ? 'forged' : 'genuine')}
+                            className="hidden group-hover:flex absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white rounded-full w-8 h-8 items-center justify-center opacity-50 cursor-not-allowed"
+                            onClick={() => setTrainingImagesSet('genuine')}
                             aria-label="Next"
                             type="button"
+                            disabled={true}
+                            title="Forgery detection disabled - only genuine signatures allowed"
                           >
                             <ChevronRight className="w-4 h-4" />
                           </button>
