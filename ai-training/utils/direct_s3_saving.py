@@ -152,7 +152,7 @@ class DirectS3ModelSaver:
     def save_global_model(self, model: keras.Model) -> Tuple[str, str]:
         """Save global model directly to S3"""
         s3_key = _generate_s3_key(self.model_type, self.model_uuid, "global")
-        s3_key, s3_url = _upload_model_to_s3(model, s3_url)
+        s3_key, s3_url = _upload_model_to_s3(model, s3_key)
         self.uploaded_files['global'] = {'key': s3_key, 'url': s3_url}
         return s3_key, s3_url
     
