@@ -270,6 +270,27 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
                 if not object_exists(file_info['key']):
                     raise Exception(f"S3 upload verification failed for {model_type}")
         
+        # Upload training logs to S3 for auditability
+        logs_url = None
+        try:
+            import json
+            logs_payload = {
+                "classification_history": classification_history,
+                "siamese_history": siamese_history,
+                "student_mappings": {
+                    'student_to_id': local_manager.student_to_id,
+                    'id_to_student': local_manager.id_to_student
+                },
+                "created_at": datetime.utcnow().isoformat(),
+                "model_uuid": model_uuid,
+                "student_id": int(student["id"]),
+            }
+            logs_bytes = json.dumps(logs_payload).encode("utf-8")
+            from utils.s3_storage import upload_model_file as _upload_generic
+            _logs_key, logs_url = _upload_generic(logs_bytes, "individual", f"training_logs_{model_uuid}", "json")
+        except Exception as e:
+            logger.warning(f"Failed to upload training logs: {e}")
+        
         # Record in DB (with optional global_model_id linkage)
         payload = {
             "student_id": int(student["id"]),
@@ -297,6 +318,8 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         }
         if global_model_id is not None:
             payload["global_model_id"] = int(global_model_id)
+        if logs_url:
+            payload["training_logs_path"] = logs_url
         
         model_record = await db_manager.create_trained_model(payload)
         logger.info(f"✅ Atomic DB write successful for student {student['id']}")

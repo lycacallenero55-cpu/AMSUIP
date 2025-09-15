@@ -250,7 +250,9 @@ async def sync_supabase_with_s3_enhanced(dry_run: bool = True) -> Dict:
         'records_updated': 0,
         'records_deleted': 0,
         'errors': 0,
-        'sync_duration_seconds': 0
+        'sync_duration_seconds': 0,
+        'students_fixed': 0,
+        'image_counts_updated': 0
     }
     
     start_time = datetime.utcnow()
@@ -274,6 +276,23 @@ async def sync_supabase_with_s3_enhanced(dry_run: bool = True) -> Dict:
             
             for signature in batch:
                 await _check_signature_record_enhanced(signature, dry_run, sync_stats)
+        
+        # Fix student image counts for affected students
+        if not dry_run:
+            affected_students = set()
+            for signature in all_signatures:
+                if signature.get('student_id'):
+                    affected_students.add(signature['student_id'])
+            
+            for student_id in affected_students:
+                try:
+                    result = await fix_student_image_counts(student_id)
+                    if result.get('records_deleted', 0) > 0:
+                        sync_stats['students_fixed'] += 1
+                        sync_stats['image_counts_updated'] += result.get('records_deleted', 0)
+                except Exception as e:
+                    logger.error(f"Failed to fix student {student_id}: {e}")
+                    sync_stats['errors'] += 1
         
         # Check for orphaned S3 objects (optional - can be expensive)
         if not dry_run:

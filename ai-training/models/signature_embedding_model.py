@@ -78,6 +78,15 @@ class SignatureEmbeddingModel:
         for layer in base_model.layers[-20:]:  # Unfreeze last 20 layers
             layer.trainable = True
         
+        # Add data augmentation layers for better generalization
+        augmentation_layers = [
+            layers.RandomRotation(0.1, fill_mode='constant', fill_value=1.0),
+            layers.RandomZoom(0.1, fill_mode='constant', fill_value=1.0),
+            layers.RandomTranslation(0.1, 0.1, fill_mode='constant', fill_value=1.0),
+            layers.RandomBrightness(0.2),
+            layers.RandomContrast(0.2),
+        ]
+        
         # Get base model features
         base_features = base_model(x, training=False)
         
@@ -381,24 +390,23 @@ class SignatureEmbeddingModel:
         """
         logger.info("Starting classification training with progressive unfreezing...")
         
-        try:
-            # Validate training data
-            if not training_data:
-                raise ValueError("No training data provided")
-            
-            # Prepare data first to set up student mappings
-            X, y_student = self.prepare_training_data(training_data)
-            
-            # Validate prepared data
-            if X.shape[0] == 0:
-                raise ValueError("No valid training images after preprocessing")
-            
-            if y_student.shape[1] < 2:
-                raise ValueError("Need at least 2 students for classification training")
-            
-            # Create only the classification model with correct number of students
-            num_students = len(self.student_to_id)
-            self.create_classification_head(num_students=num_students)
+        # Validate training data
+        if not training_data:
+            raise ValueError("No training data provided")
+        
+        # Prepare data first to set up student mappings
+        X, y_student = self.prepare_training_data(training_data)
+        
+        # Validate prepared data
+        if X.shape[0] == 0:
+            raise ValueError("No valid training images after preprocessing")
+        
+        if y_student.shape[1] < 2:
+            raise ValueError("Need at least 2 students for classification training")
+        
+        # Create only the classification model with correct number of students
+        num_students = len(self.student_to_id)
+        self.create_classification_head(num_students=num_students)
         
         # Phase 1: Train only the classification head (frozen backbone)
         logger.info("Phase 1: Training classification head with frozen backbone...")
