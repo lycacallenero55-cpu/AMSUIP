@@ -32,9 +32,9 @@ class AWSGPUTrainingManager:
         self.key_name = os.getenv('AWS_KEY_NAME', 'your-key-pair')
         self.security_group_id = os.getenv('AWS_SECURITY_GROUP_ID', 'sg-xxxxxxxxx')
         self.subnet_id = os.getenv('AWS_SUBNET_ID', 'subnet-xxxxxxxxx')
-        # Spot instances support
-        self.use_spot = (os.getenv('AWS_USE_SPOT', 'false').lower() == 'true')
-        self.spot_max_price = os.getenv('AWS_SPOT_MAX_PRICE', '').strip()
+        # Reuse existing instance if provided
+        self.existing_instance_id = (os.getenv('AWS_GPU_EXISTING_INSTANCE_ID', '').strip() or None)
+        # Spot instances disabled (use On-Demand only)
         
         # Training configuration
         self.training_script_path = '/home/ubuntu/ai-training'
@@ -121,6 +121,10 @@ class AWSGPUTrainingManager:
     async def _launch_gpu_instance(self, job_id: str) -> Optional[str]:
         """Launch GPU instance for training"""
         try:
+            # Reuse mode: skip provisioning, use existing instance
+            if self.existing_instance_id:
+                logger.info(f"Reusing existing GPU instance: {self.existing_instance_id}")
+                return self.existing_instance_id
             user_data = f"""#!/bin/bash
 # Update system
 apt-get update -y
@@ -331,13 +335,6 @@ echo "GPU instance setup complete" > /tmp/setup_complete
                 }
             )
 
-            if self.use_spot:
-                spot = {'MarketType': 'spot'}
-                if self.spot_max_price:
-                    spot['SpotOptions'] = {'MaxPrice': self.spot_max_price}
-                run_args['InstanceMarketOptions'] = spot
-                logger.info("Requesting Spot instance for GPU training")
-
             response = self.ec2_client.run_instances(**run_args)
             
             instance_id = response['Instances'][0]['InstanceId']
@@ -362,13 +359,20 @@ echo "GPU instance setup complete" > /tmp/setup_complete
                 if state == 'running':
                     # Check if setup is complete
                     try:
-                        response = self.ssm_client.send_command(
-                            InstanceIds=[instance_id],
-                            DocumentName='AWS-RunShellScript',
-                            Parameters={
-                                'commands': ['test -f /tmp/setup_complete && echo "ready" || echo "not ready"']
-                            }
-                        )
+                        if self.existing_instance_id and instance_id == self.existing_instance_id:
+                            response = self.ssm_client.send_command(
+                                InstanceIds=[instance_id],
+                                DocumentName='AWS-RunShellScript',
+                                Parameters={'commands': ['echo ready']}
+                            )
+                        else:
+                            response = self.ssm_client.send_command(
+                                InstanceIds=[instance_id],
+                                DocumentName='AWS-RunShellScript',
+                                Parameters={
+                                    'commands': ['test -f /tmp/setup_complete && echo "ready" || echo "not ready"']
+                                }
+                            )
                         
                         command_id = response['Command']['CommandId']
                         
@@ -426,11 +430,19 @@ echo "GPU instance setup complete" > /tmp/setup_complete
         """Start training on remote GPU instance"""
         try:
             # Use SSM to run training command
+            bootstrap = [
+                f'if [ ! -d {self.training_script_path} ]; then mkdir -p {self.training_script_path}; fi',
+                f'cd {self.training_script_path}',
+                f'if [ ! -d {self.training_script_path}/ai-training ]; then git clone {self.github_repo} .; fi',
+                f'cd {self.training_script_path}/ai-training',
+                'python3 -m pip install -r requirements.txt || pip3 install -r requirements.txt'
+            ] if (self.existing_instance_id and instance_id == self.existing_instance_id) else []
+
             response = self.ssm_client.send_command(
                 InstanceIds=[instance_id],
                 DocumentName='AWS-RunShellScript',
                 Parameters={
-                    'commands': [
+                    'commands': bootstrap + [
                         f'cd {self.training_script_path}/ai-training',
                         f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
                     ]
@@ -483,6 +495,9 @@ echo "GPU instance setup complete" > /tmp/setup_complete
     async def _terminate_instance(self, instance_id: str):
         """Terminate GPU instance"""
         try:
+            if self.existing_instance_id and instance_id == self.existing_instance_id:
+                logger.info(f"Reused instance {instance_id}: skipping termination")
+                return
             self.ec2_client.terminate_instances(InstanceIds=[instance_id])
             logger.info(f"Terminated GPU instance: {instance_id}")
         except Exception as e:
