@@ -201,15 +201,29 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     classification_history = training_result.get('classification_history', {})
     siamese_history = training_result.get('siamese_history', {})
 
-    # Save models directly to S3 (no local files)
+    # Save models - choose between S3 or local storage
     model_uuid = str(uuid.uuid4())
     try:
-        # Use optimized S3 saving first (JSON serialization)
-        uploaded_files = save_signature_models_optimized(
-            local_manager, 
-            "individual", 
-            model_uuid
-        )
+        # Check if local storage is enabled
+        use_local_storage = os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+        
+        if use_local_storage:
+            # Use local storage (INSTANT - no S3 upload)
+            from utils.local_model_saving import save_signature_models_locally
+            uploaded_files = save_signature_models_locally(
+                local_manager, 
+                "individual", 
+                model_uuid
+            )
+            logger.info("🚀 Using LOCAL storage (no S3 upload - INSTANT!)")
+        else:
+            # Use optimized S3 saving with parallel uploads
+            uploaded_files = save_signature_models_optimized(
+                local_manager, 
+                "individual", 
+                model_uuid
+            )
+            logger.info("☁️ Using S3 storage with parallel uploads")
         
         # Extract URLs and keys from uploaded files
         s3_urls = {}
@@ -444,14 +458,28 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
 
         model_uuid = str(uuid.uuid4())
         
-        # Save models directly to S3 (no local files)
+        # Save models - choose between S3 or local storage
         try:
-            # Use optimized S3 saving first (JSON serialization)
-            uploaded_files = save_signature_models_optimized(
-                local_manager, 
-                "individual", 
-                model_uuid
-            )
+            # Check if local storage is enabled
+            use_local_storage = os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+            
+            if use_local_storage:
+                # Use local storage (INSTANT - no S3 upload)
+                from utils.local_model_saving import save_signature_models_locally
+                uploaded_files = save_signature_models_locally(
+                    local_manager, 
+                    "individual", 
+                    model_uuid
+                )
+                logger.info("🚀 Using LOCAL storage (no S3 upload - INSTANT!)")
+            else:
+                # Use optimized S3 saving with parallel uploads
+                uploaded_files = save_signature_models_optimized(
+                    local_manager, 
+                    "individual", 
+                    model_uuid
+                )
+                logger.info("☁️ Using S3 storage with parallel uploads")
             
             # Extract URLs and KEYS from uploaded files
             s3_urls = {}
