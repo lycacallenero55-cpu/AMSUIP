@@ -6,11 +6,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Initialize Supabase client
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+# Initialize Supabase client (with offline mode support)
+try:
+    if settings.SUPABASE_URL:
+        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+    else:
+        supabase = None
+        logger.warning("Supabase URL not configured - running in offline mode")
+except Exception as e:
+    supabase = None
+    logger.warning(f"Failed to initialize Supabase client: {e} - running in offline mode")
 
 async def save_to_supabase(local_file_path: str, supabase_path: str) -> str:
     """Upload a file to Supabase Storage"""
+    if not supabase:
+        raise Exception("Supabase client not available - running in offline mode")
+    
     try:
         with open(local_file_path, 'rb') as f:
             file_data = f.read()
@@ -38,6 +49,9 @@ async def save_to_supabase(local_file_path: str, supabase_path: str) -> str:
 
 async def download_from_supabase(supabase_path: str) -> str:
     """Download a file from Supabase Storage to local temp file"""
+    if not supabase:
+        raise Exception("Supabase client not available - running in offline mode")
+    
     try:
         response = supabase.storage.from_(settings.SUPABASE_BUCKET).download(supabase_path)
         
@@ -61,6 +75,9 @@ async def download_from_supabase(supabase_path: str) -> str:
 
 async def load_model_from_supabase(supabase_path: str):
     """Load a model directly from Supabase Storage into memory without saving to disk"""
+    if not supabase:
+        raise Exception("Supabase client not available - running in offline mode")
+    
     try:
         response = supabase.storage.from_(settings.SUPABASE_BUCKET).download(supabase_path)
         

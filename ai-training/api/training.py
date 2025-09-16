@@ -11,7 +11,16 @@ import logging
 import asyncio
 from tensorflow import keras
 
-from models.database import db_manager
+try:
+    from models.database import db_manager
+except Exception as e:
+    print(f"Warning: Database manager not available: {e}")
+    db_manager = None
+
+def check_database_available():
+    """Check if database is available for operations"""
+    if db_manager is None or db_manager.client is None:
+        raise HTTPException(status_code=503, detail="Database not available - running in offline mode")
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 # Removed unused Supabase imports - using S3 directly
@@ -648,6 +657,7 @@ async def start_gpu_training(
     forged_files: List[UploadFile] | None = File(None),
     use_gpu: bool = Form(True)
 ):
+    check_database_available()
     """
     Start AI training on AWS GPU instance for faster training
     """
@@ -769,6 +779,7 @@ async def start_async_training(
     genuine_files: List[UploadFile] | None = File(None),
     forged_files: List[UploadFile] | None = File(None)
 ):
+    check_database_available()
     try:
         # Handle multiple students (comma-separated) or single student
         student_ids = [sid.strip() for sid in student_id.split(',') if sid.strip()]
