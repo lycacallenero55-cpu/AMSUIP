@@ -27,7 +27,8 @@ import {
   Trash2,
   AlertTriangle,
   X,
-  MoreVertical
+  MoreVertical,
+  ChevronUp
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { aiService, AI_CONFIG } from '@/lib/aiService';
@@ -163,6 +164,8 @@ const SignatureAI = () => {
   
   // Training mode (hybrid by design; no label shown)
   const [useGPU, setUseGPU] = useState(true);
+  const [useS3Upload, setUseS3Upload] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   // Generate mock models with hybrid training data
   const generateMockHybridModels = React.useCallback((): Record<string, { global?: TrainedModel; individual: TrainedModel[] }> => {
@@ -693,7 +696,8 @@ const SignatureAI = () => {
             studentIds.join(','),
             allGenuineFiles,
             allForgedFiles,
-            true
+            true,
+            useS3Upload
           )
         : await aiService.startAsyncTraining(
             studentIds.join(','),
@@ -1448,47 +1452,89 @@ const SignatureAI = () => {
             {/* Train Model Button at Bottom */}
             <div className="pt-4 border-t">
               <div className="flex flex-col items-center space-y-4">
-                {/* Hybrid mode only + GPU toggle */}
+                {/* Training Options Dropdown + Button */}
                 {!isViewingModels && (
-                  <div className="flex flex-col items-center gap-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      {/* Intentionally no visible training mode label */}
-                    </div>
-                    {/* GPU Training Toggle */}
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="use-gpu"
-                        checked={useGPU}
-                        onChange={(e) => { if (!isLocked) setUseGPU(e.target.checked); }}
-                        disabled={isLocked}
-                        className="rounded border-gray-300"
-                      />
-                      <Label htmlFor="use-gpu" className="text-muted-foreground">
-                        🚀 Use AWS GPU (10-50x faster)
-                      </Label>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    {/* Training Options Dropdown */}
+                    <DropdownMenu open={isDropdownOpen} onOpenChange={setIsDropdownOpen}>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-10 w-10 p-0"
+                          disabled={isLocked}
+                        >
+                          {isDropdownOpen ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-64">
+                        <div className="p-2">
+                          <div className="text-sm font-medium mb-2">Training Options</div>
+                          <div className="space-y-2">
+                            {/* GPU Training Option */}
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                id="use-gpu"
+                                checked={useGPU}
+                                onChange={(e) => { if (!isLocked) setUseGPU(e.target.checked); }}
+                                disabled={isLocked}
+                                className="rounded border-gray-300"
+                              />
+                              <Label htmlFor="use-gpu" className="text-sm cursor-pointer">
+                                🚀 GPU Training (10-50x faster)
+                              </Label>
+                            </div>
+                            
+                            {/* S3 Upload Option */}
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                id="use-s3"
+                                checked={useS3Upload}
+                                onChange={(e) => { if (!isLocked) setUseS3Upload(e.target.checked); }}
+                                disabled={isLocked}
+                                className="rounded border-gray-300"
+                              />
+                              <Label htmlFor="use-s3" className="text-sm cursor-pointer">
+                                ☁️ S3 Upload (slower but cloud storage)
+                              </Label>
+                            </div>
+                            
+                            {/* Info text */}
+                            <div className="text-xs text-muted-foreground pt-1 border-t">
+                              {!useS3Upload ? "Models saved locally (instant)" : "Models uploaded to S3 (slower)"}
+                            </div>
+                          </div>
+                        </div>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    
+                    {/* Train Model Button */}
+                    <Button
+                      onClick={handleTrainModel}
+                      disabled={isViewingModels || !canTrainModel() || isTraining}
+                      className="flex-1 max-w-[240px]"
+                      size="lg"
+                    >
+                      {isTraining ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Training... {Math.round(trainingProgress)}%
+                        </>
+                      ) : (
+                        <>
+                          <Brain className="w-4 h-4 mr-2" />
+                          Train Model
+                        </>
+                      )}
+                    </Button>
                   </div>
                 )}
-                
-                <Button
-                  onClick={handleTrainModel}
-                  disabled={isViewingModels || !canTrainModel() || isTraining}
-                  className="w-full max-w-[280px]"
-                  size="lg"
-                >
-                  {isTraining ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Training... {Math.round(trainingProgress)}%
-                    </>
-                  ) : (
-                    <>
-                      <Brain className="w-4 h-4 mr-2" />
-                      Train Model
-                    </>
-                  )}
-                </Button>
                 
                 <div className="text-center text-sm text-muted-foreground">
                   {studentCards.filter(c => c.student).length} students • {getTotalTrainingData().genuine + getTotalTrainingData().forged} samples ready

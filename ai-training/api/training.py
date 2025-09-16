@@ -154,7 +154,7 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
     return results
 
 
-async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None) -> dict:
+async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None, use_s3_upload: bool = False) -> dict:
     """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
     if job:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
@@ -204,8 +204,8 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     # Save models - choose between S3 or local storage
     model_uuid = str(uuid.uuid4())
     try:
-        # Check if local storage is enabled
-        use_local_storage = os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+        # Check if local storage is enabled (override with parameter)
+        use_local_storage = not use_s3_upload and os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
         
         if use_local_storage:
             # Use local storage (INSTANT - no S3 upload)
@@ -460,8 +460,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         
         # Save models - choose between S3 or local storage
         try:
-            # Check if local storage is enabled
-            use_local_storage = os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+            # Check if local storage is enabled (override with parameter)
+            use_local_storage = not use_s3_upload and os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
             
             if use_local_storage:
                 # Use local storage (INSTANT - no S3 upload)
@@ -725,7 +725,8 @@ async def start_gpu_training(
     student_id: str = Form(...),
     genuine_files: List[UploadFile] | None = File(None),
     forged_files: List[UploadFile] | None = File(None),
-    use_gpu: bool = Form(True)
+    use_gpu: bool = Form(True),
+    use_s3_upload: bool = Form(False)
 ):
     """
     Start AI training on AWS GPU instance for faster training
@@ -803,7 +804,7 @@ async def start_gpu_training(
             
             if use_gpu and gpu_training_manager.is_available():
                 # Use GPU training
-                asyncio.create_task(run_gpu_training(job, student, genuine_data, forged_data))
+                asyncio.create_task(run_gpu_training(job, student, genuine_data, forged_data, use_s3_upload))
                 return {
                     "success": True, 
                     "job_id": job.job_id, 
@@ -837,7 +838,7 @@ async def start_gpu_training(
                 forged_data = [await f.read() for f in forged_files] if forged_files else []
             
             if use_gpu and gpu_training_manager.is_available():
-                asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data))
+                asyncio.create_task(run_global_gpu_training(job, student_ids, genuine_data, forged_data, use_s3_upload))
                 return {
                     "success": True, 
                     "job_id": job.job_id, 
@@ -846,7 +847,7 @@ async def start_gpu_training(
                     "training_type": "global_gpu"
                 }
             else:
-                asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+                asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data, use_s3_upload))
                 return {
                     "success": True, 
                     "job_id": job.job_id, 
@@ -936,7 +937,7 @@ async def start_async_training(
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files] if forged_files else []
-            asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+            asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data, use_s3_upload))
             return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
             
     except HTTPException:
@@ -1044,7 +1045,7 @@ async def run_async_training(job, student, genuine_data, forged_data):
         job_queue.fail_job(job.job_id, str(e))
 
 
-async def run_gpu_training(job, student, genuine_data, forged_data):
+async def run_gpu_training(job, student, genuine_data, forged_data, use_s3_upload=False):
     """
     Run training on AWS GPU instance
     """
@@ -1139,7 +1140,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
         if job:
             job_queue.fail_job(job.job_id, str(e))
 
-async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
+async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, use_s3_upload=False):
     """
     Run global training on AWS GPU instance
     """
@@ -1249,7 +1250,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                     sid = int(s["id"])  # type: ignore[index]
                     bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
                     if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None)
+                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None, use_s3_upload=use_s3_upload)
                         individual_count += 1
             except Exception as e:
                 logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
@@ -1269,7 +1270,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         if job:
             job_queue.fail_job(job.job_id, str(e))
 
-async def run_global_async_training(job, student_ids, genuine_data, forged_data):
+async def run_global_async_training(job, student_ids, genuine_data, forged_data, use_s3_upload=False):
     """Run global training for multiple students using uploaded files"""
     try:
         job_queue.start_job(job.job_id)
@@ -1402,7 +1403,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data)
                     try:
                         global_model_id = int(model_record.get("id")) if model_record and isinstance(model_record, dict) else None
                         logger.info(f"Starting individual training for {student_name}")
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=global_model_id)
+                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=global_model_id, use_s3_upload=use_s3_upload)
                         individual_count += 1
                         logger.info(f"✅ Completed individual training for {student_name}")
                     except Exception as student_error:
