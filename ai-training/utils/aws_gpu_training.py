@@ -90,6 +90,7 @@ class AWSGPUTrainingManager:
             # Step 6: Download results
             job_queue.update_job_progress(job_id, 85.0, "Downloading training results...")
             model_urls = await self._download_training_results(job_id)
+            job_queue.update_job_progress(job_id, 90.0, "Training results downloaded successfully")
             
             # Step 7: Terminate instance
             job_queue.update_job_progress(job_id, 95.0, "Cleaning up GPU instance...")
@@ -148,7 +149,7 @@ import os
 sys.path.append('/home/ubuntu/ai-training')
 
 from models.signature_embedding_model import SignatureEmbeddingModel
-from utils.signature_preprocessing import SignaturePreprocessor
+from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 import json
 import boto3
 import numpy as np
@@ -166,11 +167,20 @@ def train_on_gpu(training_data_key, job_id, student_id):
     with open('/tmp/training_data.json', 'r') as f:
         training_data = json.load(f)
     
-    # Initialize AI system
-    ai_model = SignatureEmbeddingModel(max_students=150)
-    preprocessor = SignaturePreprocessor(target_size=224)
+    # Initialize AI system with proper configuration
+    image_size = 224
+    embedding_dim = 256
+    max_students = 150
     
-    # Process training data
+    ai_model = SignatureEmbeddingModel(
+        image_size=image_size,
+        embedding_dim=embedding_dim,
+        max_students=max_students
+    )
+    preprocessor = SignaturePreprocessor(target_size=image_size)
+    augmenter = SignatureAugmentation()
+    
+    # Process training data with proper preprocessing and augmentation
     processed_data = {{}}
     for student_name, signatures in training_data.items():
         genuine_images = []
@@ -179,7 +189,9 @@ def train_on_gpu(training_data_key, job_id, student_id):
         for img_data in signatures['genuine']:
             img = Image.open(io.BytesIO(bytes(img_data)))
             processed = preprocessor.preprocess_signature(img)
-            genuine_images.append(processed)
+            # Apply data augmentation for better generalization
+            augmented = augmenter.augment_signature(processed)
+            genuine_images.append(augmented)
         
         # Skip forged signature processing - not used for owner identification training
         # (Forgery detection is disabled - focus on owner identification only)
@@ -188,6 +200,9 @@ def train_on_gpu(training_data_key, job_id, student_id):
             'genuine': genuine_images,
             'forged': forged_images
         }}
+    
+    # Prepare training data using the same method as CPU training
+    X, y = ai_model.prepare_training_data(processed_data)
     
     # Train classification-only model for owner identification with real-time metrics
     result = ai_model.train_classification_only(processed_data, epochs=50)
