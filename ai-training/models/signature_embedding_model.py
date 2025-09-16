@@ -158,11 +158,11 @@ class SignatureEmbeddingModel:
         # Student classification output - use provided num_students or actual count
         if num_students is None:
             num_students = len(self.student_to_id) if self.student_to_id else self.max_students
-        student_output = layers.Dense(
-            num_students, 
-            activation='softmax', 
-            name='student_classification'
-        )(x)
+        # For single-student datasets, use a binary head to avoid degenerate softmax
+        if num_students == 1:
+            student_output = layers.Dense(1, activation='sigmoid', name='student_classification')(x)
+        else:
+            student_output = layers.Dense(num_students, activation='softmax', name='student_classification')(x)
         
         # Create classification model
         self.classification_head = keras.Model(
@@ -179,17 +179,25 @@ class SignatureEmbeddingModel:
             beta_2=0.999
         )
         
-        self.classification_head.compile(
-            optimizer=optimizer,
-            loss='categorical_crossentropy',
-            metrics=[
-                'accuracy',
-                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
-                keras.metrics.Precision(name='precision'),
-                keras.metrics.Recall(name='recall'),
-                keras.metrics.AUC(name='auc')
-            ]
-        )
+        # Choose safe loss/metrics based on number of classes
+        if num_students == 1:
+            self.classification_head.compile(
+                optimizer=optimizer,
+                loss='binary_crossentropy',
+                metrics=['accuracy']
+            )
+        else:
+            self.classification_head.compile(
+                optimizer=optimizer,
+                loss='categorical_crossentropy',
+                metrics=[
+                    'accuracy',
+                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+                    keras.metrics.Precision(name='precision'),
+                    keras.metrics.Recall(name='recall'),
+                    keras.metrics.AUC(name='auc')
+                ]
+            )
         
         logger.info(f"Created classification head with {self.classification_head.count_params():,} parameters")
         return self.classification_head
@@ -254,10 +262,11 @@ class SignatureEmbeddingModel:
             weight_decay=0.01
         )
         
+        # Use safe metrics to avoid TF/Keras metric type issues
         self.siamese_model.compile(
             optimizer=optimizer,
             loss=self._contrastive_loss,
-            metrics=['accuracy', 'auc']
+            metrics=['accuracy']
         )
         
         logger.info(f"Created Siamese network with {self.siamese_model.count_params():,} parameters")
@@ -501,22 +510,35 @@ class SignatureEmbeddingModel:
                     layer.trainable = True
         
         # Lower learning rate for fine-tuning
-        self.classification_head.compile(
-            optimizer=keras.optimizers.AdamW(
-                learning_rate=self.learning_rate * 0.1,  # Lower learning rate for fine-tuning
-                weight_decay=0.01,
-                beta_1=0.9,
-                beta_2=0.999
-            ),
-            loss='categorical_crossentropy',
-            metrics=[
-                'accuracy',
-                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
-                keras.metrics.Precision(name='precision'),
-                keras.metrics.Recall(name='recall'),
-                keras.metrics.AUC(name='auc')
-            ]
-        )
+        # Re-compile with appropriate loss/metrics for fine-tuning
+        if y_student.shape[1] == 1:
+            self.classification_head.compile(
+                optimizer=keras.optimizers.AdamW(
+                    learning_rate=self.learning_rate * 0.1,
+                    weight_decay=0.01,
+                    beta_1=0.9,
+                    beta_2=0.999
+                ),
+                loss='binary_crossentropy',
+                metrics=['accuracy']
+            )
+        else:
+            self.classification_head.compile(
+                optimizer=keras.optimizers.AdamW(
+                    learning_rate=self.learning_rate * 0.1,
+                    weight_decay=0.01,
+                    beta_1=0.9,
+                    beta_2=0.999
+                ),
+                loss='categorical_crossentropy',
+                metrics=[
+                    'accuracy',
+                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+                    keras.metrics.Precision(name='precision'),
+                    keras.metrics.Recall(name='recall'),
+                    keras.metrics.AUC(name='auc')
+                ]
+            )
         
         # Phase 2: Fine-tune with unfrozen backbone
         phase2_epochs = epochs - phase1_epochs
