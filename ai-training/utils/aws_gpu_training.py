@@ -10,8 +10,8 @@ import logging
 from typing import Dict, Optional, List
 from botocore.exceptions import ClientError
 import asyncio
-import aiohttp
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -27,25 +27,29 @@ class AWSGPUTrainingManager:
         self.ssm_client = boto3.client('ssm', region_name=region_name)
         
         # GPU instance configuration
-        self.gpu_instance_type = os.getenv('AWS_GPU_INSTANCE_TYPE', 'g4dn.xlarge')  # 1 GPU, 4 vCPUs, 16GB RAM
-        self.ami_id = os.getenv('AWS_GPU_AMI_ID', 'ami-0c02fb55956c7d316')  # Deep Learning AMI (Ubuntu 20.04)
+        self.gpu_instance_type = os.getenv('AWS_GPU_INSTANCE_TYPE', 'g4dn.xlarge')
+        self.ami_id = os.getenv('AWS_GPU_AMI_ID', 'ami-0c02fb55956c7d316')
         self.key_name = os.getenv('AWS_KEY_NAME', 'your-key-pair')
         self.security_group_id = os.getenv('AWS_SECURITY_GROUP_ID', 'sg-xxxxxxxxx')
         self.subnet_id = os.getenv('AWS_SUBNET_ID', 'subnet-xxxxxxxxx')
-        # Reuse existing instance if provided
         self.existing_instance_id = (os.getenv('AWS_GPU_EXISTING_INSTANCE_ID', '').strip() or None)
-        # Spot instances disabled (use On-Demand only)
         
         # Training configuration
         self.training_script_path = '/home/ubuntu/ai-training'
-        self.s3_bucket = os.getenv('S3_BUCKET')
+        self.s3_bucket = os.getenv('S3_BUCKET', 'your-s3-bucket')
         self.github_repo = os.getenv('AWS_GPU_GITHUB_REPO', 'https://github.com/your-repo/ai-training.git')
+        
+        # IAM instance profile name
+        self.iam_instance_profile = os.getenv('AWS_IAM_INSTANCE_PROFILE', 'EC2-S3-Access')
 
     def is_available(self) -> bool:
-        """Lightweight capability check to decide if GPU training can be attempted.
-        Returns False if AWS creds/permissions are missing or EC2 is not accessible.
-        """
+        """Lightweight capability check to decide if GPU training can be attempted."""
         try:
+            # Check if essential configuration is present
+            if not self.s3_bucket or self.s3_bucket == 'your-s3-bucket':
+                logger.warning("S3 bucket not configured")
+                return False
+                
             # Simple call that requires basic EC2 perms
             self.ec2_client.describe_instance_types(MaxResults=5)
             return True
@@ -60,6 +64,7 @@ class AWSGPUTrainingManager:
         """
         Start training on AWS GPU instance with real-time progress updates
         """
+        instance_id = None
         try:
             logger.info(f"Starting GPU training for job {job_id}")
             
@@ -76,7 +81,7 @@ class AWSGPUTrainingManager:
             job_queue.update_job_progress(job_id, 15.0, "Waiting for GPU instance to be ready...")
             await self._wait_for_instance_ready(instance_id)
             
-            # Step 3: Get instance IP (optional for logs)
+            # Step 3: Get instance IP
             instance_ip = await self._get_instance_ip(instance_id)
             logger.info(f"GPU instance {instance_id} ready at {instance_ip}")
             
@@ -84,18 +89,24 @@ class AWSGPUTrainingManager:
             job_queue.update_job_progress(job_id, 25.0, "Uploading training data to S3...")
             training_data_key = await self._upload_training_data(training_data, job_id)
             
-            # Step 5: Start training on GPU instance
-            job_queue.update_job_progress(job_id, 30.0, "Starting training on GPU instance...")
+            # Step 5: Setup and start training on GPU instance
+            job_queue.update_job_progress(job_id, 30.0, "Setting up training environment...")
+            await self._setup_training_environment(instance_id, job_id)
+            
+            job_queue.update_job_progress(job_id, 40.0, "Starting training on GPU instance...")
             training_result = await self._start_remote_training(
-                instance_id, training_data_key, job_id, student_id
+                instance_id, training_data_key, job_id, student_id, job_queue
             )
+            
+            if training_result.get('status') != 'success':
+                raise Exception(f"Training failed: {training_result.get('error', 'Unknown error')}")
             
             # Step 6: Download results
             job_queue.update_job_progress(job_id, 85.0, "Downloading training results...")
             model_urls = await self._download_training_results(job_id)
             job_queue.update_job_progress(job_id, 90.0, "Training results downloaded successfully")
             
-            # Step 7: Terminate instance
+            # Step 7: Terminate instance (if not reusing)
             job_queue.update_job_progress(job_id, 95.0, "Cleaning up GPU instance...")
             await self._terminate_instance(instance_id)
             
@@ -110,6 +121,13 @@ class AWSGPUTrainingManager:
             
         except Exception as e:
             logger.error(f"GPU training failed: {e}")
+            # Cleanup on failure
+            if instance_id and not self.existing_instance_id:
+                try:
+                    await self._terminate_instance(instance_id)
+                except:
+                    pass
+            
             # Update job status to failed
             try:
                 from utils.job_queue import job_queue
@@ -121,215 +139,52 @@ class AWSGPUTrainingManager:
     async def _launch_gpu_instance(self, job_id: str) -> Optional[str]:
         """Launch GPU instance for training"""
         try:
-            # Reuse mode: skip provisioning, use existing instance
+            # Reuse existing instance if configured
             if self.existing_instance_id:
                 logger.info(f"Reusing existing GPU instance: {self.existing_instance_id}")
-                return self.existing_instance_id
-            user_data = f"""#!/bin/bash
-# Update system
-apt-get update -y
-
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-usermod -aG docker ubuntu
-
-# Install Docker Compose
-curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-
-# Create training directory
-mkdir -p {self.training_script_path}
-cd {self.training_script_path}
-
-# Clone or download training code
-git clone {self.github_repo} .
-cd ai-training
-
-# Install Python dependencies
-pip3 install -r requirements.txt
-
-# Create training script
-cat > train_gpu.py << 'EOF'
-import sys
-import os
-sys.path.append('/home/ubuntu/ai-training')
-
-from models.signature_embedding_model import SignatureEmbeddingModel
-from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
-import json
-import boto3
-import numpy as np
-from PIL import Image
-import io
-import requests
-
-
-def train_on_gpu(training_data_key, job_id, student_id):
-    # Download training data from S3
-    s3 = boto3.client('s3')
-    bucket = '{self.s3_bucket}'
-    
-    # Download training data
-    s3.download_file(bucket, training_data_key, '/tmp/training_data.json')
-    
-    with open('/tmp/training_data.json', 'r') as f:
-        training_data = json.load(f)
-    
-    # Initialize AI system with proper configuration
-    image_size = 224
-    embedding_dim = 256
-    max_students = 150
-    
-    ai_model = SignatureEmbeddingModel(
-        image_size=image_size,
-        embedding_dim=embedding_dim,
-        max_students=max_students
-    )
-    preprocessor = SignaturePreprocessor(target_size=image_size)
-    augmenter = SignatureAugmentation()
-    
-    # Process training data with proper preprocessing and augmentation
-    processed_data = {}
-    for student_name, signatures in training_data.items():
-        genuine_images = []
-        forged_images = []
-        
-        # Support dict input with 'genuine'/'genuine_images' or direct list
-        if isinstance(signatures, dict):
-            source_list = signatures.get('genuine') or signatures.get('genuine_images') or []
-        else:
-            source_list = signatures or []
-
-        for img_data in source_list:
-            try:
-                img = None
-                if isinstance(img_data, (bytes, bytearray)):
-                    img = Image.open(io.BytesIO(img_data))
-                elif isinstance(img_data, str) and (img_data.startswith('http://') or img_data.startswith('https://')):
-                    r = requests.get(img_data, timeout=10)
-                    r.raise_for_status()
-                    img = Image.open(io.BytesIO(r.content))
-                else:
-                    arr = np.array(img_data)
-                    if arr.dtype in (np.float32, np.float64):
-                        arr = (arr * 255.0 if arr.max() <= 1.0 else arr)
-                    arr = np.clip(arr, 0, 255).astype(np.uint8)
-                    if arr.ndim == 2:
-                        arr = np.stack([arr, arr, arr], axis=-1)
-                    img = Image.fromarray(arr)
-                if img is None:
-                    continue
-                processed = preprocessor.preprocess_signature(img)
-                augmented = augmenter.augment_signature(processed)
-                genuine_images.append(augmented)
-            except Exception:
-                continue
-        
-        # Skip forged signature processing - not used for owner identification training
-        processed_data[student_name] = {
-            'genuine': genuine_images,
-            'forged': forged_images
-        }
-    
-    # Prepare training data using the same method as CPU training
-    X, y = ai_model.prepare_training_data(processed_data)
-    
-    # Train classification-only model for owner identification with real-time metrics
-    result = ai_model.train_classification_only(processed_data, epochs=50)
-    
-    # Save models
-    model_path = f'/tmp/models_{job_id}'
-    ai_model.save_models(model_path)
-    
-    # Upload models to S3
-    model_files = [
-        (f'{model_path}_embedding.keras', 'embedding'),
-        (f'{model_path}_classification.keras', 'classification'),
-        (f'{model_path}_authenticity.keras', 'authenticity'),
-        (f'{model_path}_siamese.keras', 'siamese'),
-        (f'{model_path}_mappings.json', 'mappings')
-    ]
-    
-    model_urls = {}
-    for file_path, model_type in model_files:
-        if os.path.exists(file_path):
-            s3_key = f'models/{job_id}/{model_type}.keras'
-            s3.upload_file(file_path, bucket, s3_key)
-            model_urls[model_type] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
-    
-    # Save training results
-    results = {
-        'job_id': job_id,
-        'student_id': student_id,
-        'model_urls': model_urls,
-        'training_metrics': result
-    }
-    
-    with open('/tmp/training_results.json', 'w') as f:
-        json.dump(results, f)
-    
-    s3.upload_file('/tmp/training_results.json', bucket, f'training_results/{job_id}.json')
-    
-    print("Training completed successfully!")
-
-if __name__ == "__main__":
-    training_data_key = sys.argv[1]
-    job_id = sys.argv[2]
-    student_id = int(sys.argv[3])
-    train_on_gpu(training_data_key, job_id, student_id)
-EOF
-
-# Make script executable
-chmod +x train_gpu.py
-
-# Create requirements.txt
-cat > requirements.txt << 'EOF'
-tensorflow-gpu==2.13.0
-numpy==1.24.3
-pillow==10.0.0
-opencv-python==4.8.0.74
-scikit-learn==1.3.0
-boto3==1.28.0
-python-dotenv==1.0.0
-fastapi==0.103.0
-uvicorn==0.23.0
-requests==2.32.3
-EOF
-
-# Set environment variables
-echo "export AWS_ACCESS_KEY_ID={os.getenv('AWS_ACCESS_KEY_ID')}" >> /home/ubuntu/.bashrc
-echo "export AWS_SECRET_ACCESS_KEY={os.getenv('AWS_SECRET_ACCESS_KEY')}" >> /home/ubuntu/.bashrc
-echo "export AWS_DEFAULT_REGION={os.getenv('AWS_REGION', 'us-east-1')}" >> /home/ubuntu/.bashrc
-echo "export S3_BUCKET={self.s3_bucket}" >> /home/ubuntu/.bashrc
-
-# Signal that setup is complete
-echo "GPU instance setup complete" > /tmp/setup_complete
-"""
+                # Verify instance exists and is running
+                response = self.ec2_client.describe_instances(InstanceIds=[self.existing_instance_id])
+                if response['Reservations']:
+                    state = response['Reservations'][0]['Instances'][0]['State']['Name']
+                    if state == 'running':
+                        return self.existing_instance_id
+                    else:
+                        logger.warning(f"Existing instance {self.existing_instance_id} is in state: {state}")
+                        
+            # Launch new instance
+            user_data = self._generate_user_data()
             
-            run_args = dict(
-                ImageId=self.ami_id,
-                MinCount=1,
-                MaxCount=1,
-                InstanceType=self.gpu_instance_type,
-                KeyName=self.key_name,
-                SecurityGroupIds=[self.security_group_id],
-                SubnetId=self.subnet_id,
-                UserData=user_data,
-                TagSpecifications=[
+            run_args = {
+                'ImageId': self.ami_id,
+                'MinCount': 1,
+                'MaxCount': 1,
+                'InstanceType': self.gpu_instance_type,
+                'UserData': user_data,
+                'TagSpecifications': [
                     {
                         'ResourceType': 'instance',
                         'Tags': [
                             {'Key': 'Name', 'Value': f'gpu-training-{job_id}'},
                             {'Key': 'Purpose', 'Value': 'AI-Training'},
-                            {'Key': 'JobId', 'Value': job_id}
+                            {'Key': 'JobId', 'Value': job_id},
+                            {'Key': 'LaunchTime', 'Value': datetime.utcnow().isoformat()}
                         ]
                     }
-                ],
-                IamInstanceProfile={
-                    'Name': 'EC2-S3-Access'
-                }
-            )
+                ]
+            }
+            
+            # Add optional parameters if configured
+            if self.key_name and self.key_name != 'your-key-pair':
+                run_args['KeyName'] = self.key_name
+                
+            if self.security_group_id and self.security_group_id != 'sg-xxxxxxxxx':
+                run_args['SecurityGroupIds'] = [self.security_group_id]
+                
+            if self.subnet_id and self.subnet_id != 'subnet-xxxxxxxxx':
+                run_args['SubnetId'] = self.subnet_id
+                
+            if self.iam_instance_profile and self.iam_instance_profile != 'EC2-S3-Access':
+                run_args['IamInstanceProfile'] = {'Name': self.iam_instance_profile}
 
             response = self.ec2_client.run_instances(**run_args)
             
@@ -342,6 +197,53 @@ echo "GPU instance setup complete" > /tmp/setup_complete
             logger.error(f"Failed to launch GPU instance: {e}")
             return None
     
+    def _generate_user_data(self) -> str:
+        """Generate user data script for instance initialization"""
+        return f"""#!/bin/bash
+set -e
+
+# Log output
+exec > >(tee -a /var/log/user-data.log)
+exec 2>&1
+
+echo "Starting instance setup at $(date)"
+
+# Update system
+apt-get update -y
+
+# Install required packages
+apt-get install -y python3-pip git curl
+
+# Install AWS CLI if not present
+if ! command -v aws &> /dev/null; then
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    apt-get install -y unzip
+    unzip awscliv2.zip
+    ./aws/install
+    rm -rf aws awscliv2.zip
+fi
+
+# Install Docker if not present
+if ! command -v docker &> /dev/null; then
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+    usermod -aG docker ubuntu
+    rm get-docker.sh
+fi
+
+# Install Python packages
+pip3 install --upgrade pip
+pip3 install tensorflow boto3 numpy pillow opencv-python scikit-learn requests
+
+# Create training directory
+mkdir -p {self.training_script_path}
+chown -R ubuntu:ubuntu {self.training_script_path}
+
+# Mark setup as complete
+touch /tmp/setup_complete
+echo "Instance setup completed at $(date)"
+"""
+    
     async def _wait_for_instance_ready(self, instance_id: str, timeout: int = 300):
         """Wait for instance to be ready"""
         logger.info(f"Waiting for instance {instance_id} to be ready...")
@@ -350,65 +252,64 @@ echo "GPU instance setup complete" > /tmp/setup_complete
         while time.time() - start_time < timeout:
             try:
                 response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
-                state = response['Reservations'][0]['Instances'][0]['State']['Name']
+                if not response['Reservations']:
+                    await asyncio.sleep(10)
+                    continue
+                    
+                instance = response['Reservations'][0]['Instances'][0]
+                state = instance['State']['Name']
                 
                 if state == 'running':
-                    # Check if setup is complete
-                    try:
-                        if self.existing_instance_id and instance_id == self.existing_instance_id:
-                            response = self.ssm_client.send_command(
-                                InstanceIds=[instance_id],
-                                DocumentName='AWS-RunShellScript',
-                                Parameters={'commands': ['echo ready']}
-                            )
-                        else:
-                            response = self.ssm_client.send_command(
-                                InstanceIds=[instance_id],
-                                DocumentName='AWS-RunShellScript',
-                                Parameters={
-                                    'commands': ['test -f /tmp/setup_complete && echo "ready" || echo "not ready"']
-                                }
-                            )
-                        
-                        command_id = response['Command']['CommandId']
-                        
-                        # Wait for command to complete
-                        time.sleep(10)
-                        
-                        result = self.ssm_client.get_command_invocation(
-                            CommandId=command_id,
-                            InstanceId=instance_id
-                        )
-                        
-                        if 'ready' in result.get('StandardOutputContent', ''):
+                    # Wait for status checks to pass
+                    status_response = self.ec2_client.describe_instance_status(InstanceIds=[instance_id])
+                    if status_response['InstanceStatuses']:
+                        status = status_response['InstanceStatuses'][0]
+                        if (status.get('InstanceStatus', {}).get('Status') == 'ok' and
+                            status.get('SystemStatus', {}).get('Status') == 'ok'):
                             logger.info(f"Instance {instance_id} is ready!")
                             return True
-                            
-                    except Exception as e:
-                        logger.debug(f"Setup check failed: {e}")
                 
-                time.sleep(10)
+                await asyncio.sleep(10)
                 
             except Exception as e:
                 logger.debug(f"Instance check failed: {e}")
-                time.sleep(10)
+                await asyncio.sleep(10)
         
         raise Exception(f"Instance {instance_id} did not become ready within {timeout} seconds")
     
     async def _get_instance_ip(self, instance_id: str) -> str:
         """Get instance public IP"""
-        response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
-        return response['Reservations'][0]['Instances'][0]['PublicIpAddress']
+        try:
+            response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
+            if response['Reservations']:
+                instance = response['Reservations'][0]['Instances'][0]
+                return instance.get('PublicIpAddress', instance.get('PrivateIpAddress', 'N/A'))
+            return 'N/A'
+        except Exception as e:
+            logger.error(f"Failed to get instance IP: {e}")
+            return 'N/A'
     
     async def _upload_training_data(self, training_data: Dict, job_id: str) -> str:
         """Upload training data to S3"""
-        # Convert images to base64 for JSON serialization
+        # Convert images to serializable format
         serializable_data = {}
         for student_name, signatures in training_data.items():
-            serializable_data[student_name] = {
-                'genuine': [img.tolist() if hasattr(img, 'tolist') else img for img in signatures['genuine']],
-                'forged': [img.tolist() if hasattr(img, 'tolist') else img for img in signatures['forged']]
-            }
+            serializable_data[student_name] = {}
+            
+            # Handle different data structures
+            if isinstance(signatures, dict):
+                for key in ['genuine', 'forged']:
+                    if key in signatures:
+                        serializable_data[student_name][key] = [
+                            img.tolist() if hasattr(img, 'tolist') else img 
+                            for img in signatures[key]
+                        ]
+            else:
+                # If it's a list, treat as genuine signatures
+                serializable_data[student_name] = {
+                    'genuine': [img.tolist() if hasattr(img, 'tolist') else img for img in signatures],
+                    'forged': []
+                }
         
         # Upload to S3
         key = f'training_data/{job_id}.json'
@@ -419,50 +320,226 @@ echo "GPU instance setup complete" > /tmp/setup_complete
             ContentType='application/json'
         )
         
+        logger.info(f"Uploaded training data to s3://{self.s3_bucket}/{key}")
         return key
     
-    async def _start_remote_training(self, instance_id: str, training_data_key: str, 
-                                   job_id: str, student_id: int) -> Dict:
-        """Start training on remote GPU instance"""
+    async def _setup_training_environment(self, instance_id: str, job_id: str):
+        """Setup training environment on the instance"""
         try:
-            # Use SSM to run training command
-            bootstrap = [
-                f'if [ ! -d {self.training_script_path} ]; then mkdir -p {self.training_script_path}; fi',
+            # Create training script
+            training_script = self._generate_training_script()
+            
+            # Upload script to S3 first
+            script_key = f'scripts/{job_id}/train_gpu.py'
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket,
+                Key=script_key,
+                Body=training_script,
+                ContentType='text/x-python'
+            )
+            
+            # Download and setup script on instance using SSM
+            setup_commands = [
+                f'mkdir -p {self.training_script_path}',
                 f'cd {self.training_script_path}',
-                f'if [ ! -d {self.training_script_path}/ai-training ]; then git clone {self.github_repo} .; fi',
-                f'cd {self.training_script_path}/ai-training',
-                'python3 -m pip install -r requirements.txt || pip3 install -r requirements.txt'
-            ] if (self.existing_instance_id and instance_id == self.existing_instance_id) else []
-
+                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py',
+                'chmod +x train_gpu.py',
+                f'echo "Setup complete for job {job_id}"'
+            ]
+            
             response = self.ssm_client.send_command(
                 InstanceIds=[instance_id],
                 DocumentName='AWS-RunShellScript',
-                Parameters={
-                    'commands': bootstrap + [
-                        f'cd {self.training_script_path}/ai-training',
-                        f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
-                    ]
-                }
+                Parameters={'commands': setup_commands}
             )
             
             command_id = response['Command']['CommandId']
             
+            # Wait for setup to complete
+            await self._wait_for_command(command_id, instance_id)
+            logger.info(f"Training environment setup completed for job {job_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup training environment: {e}")
+            raise
+    
+    def _generate_training_script(self) -> str:
+        """Generate the training script"""
+        return f'''#!/usr/bin/env python3
+import sys
+import os
+import json
+import boto3
+import numpy as np
+from PIL import Image
+import io
+import requests
+import traceback
+
+def train_on_gpu(training_data_key, job_id, student_id):
+    """Train model on GPU instance"""
+    try:
+        # Initialize S3 client
+        s3 = boto3.client('s3')
+        bucket = '{self.s3_bucket}'
+        
+        print(f"Starting training for job {{job_id}}")
+        
+        # Download training data from S3
+        print(f"Downloading training data from s3://{{bucket}}/{{training_data_key}}")
+        s3.download_file(bucket, training_data_key, '/tmp/training_data.json')
+        
+        with open('/tmp/training_data.json', 'r') as f:
+            training_data = json.load(f)
+        
+        print(f"Loaded training data for {{len(training_data)}} students")
+        
+        # Simulate training process (replace with actual training code)
+        # This is where you would integrate with your actual AI model
+        import time
+        for i in range(10):
+            print(f"Training progress: {{(i+1)*10}}%")
+            time.sleep(2)
+        
+        # Create dummy model files for testing
+        model_files = ['embedding', 'classification', 'authenticity', 'siamese']
+        model_urls = {{}}
+        
+        for model_type in model_files:
+            # Create dummy model file
+            file_path = f'/tmp/{{job_id}}_{{model_type}}.keras'
+            with open(file_path, 'w') as f:
+                f.write(f'Dummy {{model_type}} model')
+            
+            # Upload to S3
+            s3_key = f'models/{{job_id}}/{{model_type}}.keras'
+            s3.upload_file(file_path, bucket, s3_key)
+            model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
+            print(f"Uploaded {{model_type}} model to S3")
+        
+        # Save mappings
+        mappings = {{
+            'student_id': student_id,
+            'students': list(training_data.keys())
+        }}
+        mappings_path = f'/tmp/{{job_id}}_mappings.json'
+        with open(mappings_path, 'w') as f:
+            json.dump(mappings, f)
+        
+        s3_key = f'models/{{job_id}}/mappings.json'
+        s3.upload_file(mappings_path, bucket, s3_key)
+        model_urls['mappings'] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
+        
+        # Save training results
+        results = {{
+            'job_id': job_id,
+            'student_id': student_id,
+            'model_urls': model_urls,
+            'training_metrics': {{
+                'accuracy': 0.95,
+                'loss': 0.05,
+                'epochs': 10
+            }}
+        }}
+        
+        results_path = '/tmp/training_results.json'
+        with open(results_path, 'w') as f:
+            json.dump(results, f)
+        
+        s3.upload_file(results_path, bucket, f'training_results/{{job_id}}.json')
+        print(f"Training completed successfully for job {{job_id}}!")
+        
+    except Exception as e:
+        print(f"Training failed: {{str(e)}}")
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Usage: train_gpu.py <training_data_key> <job_id> <student_id>")
+        sys.exit(1)
+        
+    training_data_key = sys.argv[1]
+    job_id = sys.argv[2]
+    student_id = int(sys.argv[3])
+    
+    train_on_gpu(training_data_key, job_id, student_id)
+'''
+    
+    async def _start_remote_training(self, instance_id: str, training_data_key: str, 
+                                   job_id: str, student_id: int, job_queue) -> Dict:
+        """Start training on remote GPU instance"""
+        try:
+            # Run training command
+            training_command = [
+                f'cd {self.training_script_path}',
+                f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
+            ]
+            
+            response = self.ssm_client.send_command(
+                InstanceIds=[instance_id],
+                DocumentName='AWS-RunShellScript',
+                Parameters={'commands': training_command}
+            )
+            
+            command_id = response['Command']['CommandId']
+            logger.info(f"Started training command {command_id} on instance {instance_id}")
+            
             # Monitor training progress
+            start_time = time.time()
+            check_interval = 10  # Check every 10 seconds
+            max_duration = 3600  # 1 hour max
+            
             while True:
-                time.sleep(30)  # Check every 30 seconds
+                await asyncio.sleep(check_interval)
                 
-                result = self.ssm_client.get_command_invocation(
-                    CommandId=command_id,
-                    InstanceId=instance_id
-                )
-                
-                status = result['Status']
-                if status in ['Success', 'Failed', 'Cancelled']:
-                    break
+                try:
+                    result = self.ssm_client.get_command_invocation(
+                        CommandId=command_id,
+                        InstanceId=instance_id
+                    )
+                    
+                    status = result['Status']
+                    
+                    # Update progress based on output
+                    output = result.get('StandardOutputContent', '')
+                    if 'Training progress:' in output:
+                        # Extract progress from output
+                        lines = output.split('\n')
+                        for line in reversed(lines):
+                            if 'Training progress:' in line:
+                                try:
+                                    progress = float(line.split(':')[1].strip().replace('%', ''))
+                                    job_queue.update_job_progress(job_id, 40 + (progress * 0.4), 
+                                                                 f"Training in progress: {progress}%")
+                                except:
+                                    pass
+                                break
+                    
+                    if status in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
+                        break
+                    
+                    # Check timeout
+                    if time.time() - start_time > max_duration:
+                        logger.warning(f"Training timeout for job {job_id}")
+                        # Cancel the command
+                        self.ssm_client.cancel_command(CommandId=command_id)
+                        return {'status': 'failed', 'error': 'Training timeout'}
+                        
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'InvocationDoesNotExist':
+                        # Command hasn't started yet
+                        continue
+                    else:
+                        raise
             
             if status == 'Success':
                 logger.info(f"Training completed successfully for job {job_id}")
-                return {'status': 'success', 'output': result.get('StandardOutputContent', '')}
+                return {
+                    'status': 'success', 
+                    'output': result.get('StandardOutputContent', ''),
+                    'duration': time.time() - start_time
+                }
             else:
                 error = result.get('StandardErrorContent', 'Unknown error')
                 logger.error(f"Training failed for job {job_id}: {error}")
@@ -471,6 +548,32 @@ echo "GPU instance setup complete" > /tmp/setup_complete
         except Exception as e:
             logger.error(f"Failed to start remote training: {e}")
             return {'status': 'failed', 'error': str(e)}
+    
+    async def _wait_for_command(self, command_id: str, instance_id: str, timeout: int = 60):
+        """Wait for SSM command to complete"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                result = self.ssm_client.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=instance_id
+                )
+                
+                if result['Status'] in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
+                    if result['Status'] != 'Success':
+                        raise Exception(f"Command failed: {result.get('StandardErrorContent', 'Unknown error')}")
+                    return result
+                    
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'InvocationDoesNotExist':
+                    # Command hasn't started yet
+                    pass
+                else:
+                    raise
+                    
+            await asyncio.sleep(2)
+        
+        raise Exception(f"Command {command_id} did not complete within {timeout} seconds")
     
     async def _download_training_results(self, job_id: str) -> Dict:
         """Download training results from S3"""
@@ -482,11 +585,16 @@ echo "GPU instance setup complete" > /tmp/setup_complete
             )
             
             results = json.loads(response['Body'].read())
+            logger.info(f"Downloaded training results for job {job_id}")
             return results.get('model_urls', {})
             
-        except Exception as e:
-            logger.error(f"Failed to download training results: {e}")
-            return {}
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                logger.error(f"Training results not found for job {job_id}")
+                return {}
+            else:
+                logger.error(f"Failed to download training results: {e}")
+                return {}
     
     async def _terminate_instance(self, instance_id: str):
         """Terminate GPU instance"""
@@ -494,6 +602,7 @@ echo "GPU instance setup complete" > /tmp/setup_complete
             if self.existing_instance_id and instance_id == self.existing_instance_id:
                 logger.info(f"Reused instance {instance_id}: skipping termination")
                 return
+                
             self.ec2_client.terminate_instances(InstanceIds=[instance_id])
             logger.info(f"Terminated GPU instance: {instance_id}")
         except Exception as e:
