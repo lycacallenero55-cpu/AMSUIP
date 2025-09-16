@@ -32,6 +32,9 @@ class AWSGPUTrainingManager:
         self.key_name = os.getenv('AWS_KEY_NAME', 'your-key-pair')
         self.security_group_id = os.getenv('AWS_SECURITY_GROUP_ID', 'sg-xxxxxxxxx')
         self.subnet_id = os.getenv('AWS_SUBNET_ID', 'subnet-xxxxxxxxx')
+        # Spot instances support
+        self.use_spot = (os.getenv('AWS_USE_SPOT', 'false').lower() == 'true')
+        self.spot_max_price = os.getenv('AWS_SPOT_MAX_PRICE', '').strip()
         
         # Training configuration
         self.training_script_path = '/home/ubuntu/ai-training'
@@ -304,7 +307,7 @@ echo "export S3_BUCKET={self.s3_bucket}" >> /home/ubuntu/.bashrc
 echo "GPU instance setup complete" > /tmp/setup_complete
 """
             
-            response = self.ec2_client.run_instances(
+            run_args = dict(
                 ImageId=self.ami_id,
                 MinCount=1,
                 MaxCount=1,
@@ -324,9 +327,18 @@ echo "GPU instance setup complete" > /tmp/setup_complete
                     }
                 ],
                 IamInstanceProfile={
-                    'Name': 'EC2-S3-Access'  # IAM role for S3 access
+                    'Name': 'EC2-S3-Access'
                 }
             )
+
+            if self.use_spot:
+                spot = {'MarketType': 'spot'}
+                if self.spot_max_price:
+                    spot['SpotOptions'] = {'MaxPrice': self.spot_max_price}
+                run_args['InstanceMarketOptions'] = spot
+                logger.info("Requesting Spot instance for GPU training")
+
+            response = self.ec2_client.run_instances(**run_args)
             
             instance_id = response['Instances'][0]['InstanceId']
             logger.info(f"Launched GPU instance: {instance_id}")
