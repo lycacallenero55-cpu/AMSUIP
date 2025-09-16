@@ -282,7 +282,7 @@ def save_signature_models_optimized(
     model_uuid: str = None
 ) -> Dict[str, Dict[str, str]]:
     """
-    Save all signature models using optimized serialization
+    Save all signature models using optimized serialization with PARALLEL UPLOADS
     
     Args:
         signature_manager: SignatureEmbeddingModel instance
@@ -292,34 +292,62 @@ def save_signature_models_optimized(
     Returns:
         Dictionary with uploaded file information
     """
+    import concurrent.futures
+    import threading
+    
     saver = OptimizedS3ModelSaver(model_type, model_uuid)
     
+    # Prepare all models for parallel upload
+    upload_tasks = []
+    
+    # Collect all models that need to be saved
+    if hasattr(signature_manager, 'embedding_model') and signature_manager.embedding_model:
+        upload_tasks.append(('embedding', lambda: saver.save_embedding_model(signature_manager.embedding_model)))
+    
+    if hasattr(signature_manager, 'classification_head') and signature_manager.classification_head:
+        upload_tasks.append(('classification', lambda: saver.save_classification_model(signature_manager.classification_head)))
+    
+    if hasattr(signature_manager, 'authenticity_head') and signature_manager.authenticity_head:
+        upload_tasks.append(('authenticity', lambda: saver.save_authenticity_model(signature_manager.authenticity_head)))
+    
+    if hasattr(signature_manager, 'siamese_model') and signature_manager.siamese_model:
+        upload_tasks.append(('siamese', lambda: saver.save_siamese_model(signature_manager.siamese_model)))
+    
+    if (hasattr(signature_manager, 'student_to_id') and 
+        hasattr(signature_manager, 'id_to_student') and
+        signature_manager.student_to_id and signature_manager.id_to_student):
+        upload_tasks.append(('mappings', lambda: saver.save_mappings(signature_manager.student_to_id, signature_manager.id_to_student)))
+    
+    if not upload_tasks:
+        logger.warning("No models to save")
+        return {}
+    
+    # Execute all uploads in parallel using ThreadPoolExecutor
+    logger.info(f"🚀 Starting PARALLEL upload of {len(upload_tasks)} model files...")
+    start_time = time.time()
+    
     try:
-        # Save embedding model if available
-        if hasattr(signature_manager, 'embedding_model') and signature_manager.embedding_model:
-            saver.save_embedding_model(signature_manager.embedding_model)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(upload_tasks))) as executor:
+            # Submit all tasks
+            future_to_task = {executor.submit(task[1]): task[0] for task in upload_tasks}
+            
+            # Wait for all uploads to complete
+            completed_tasks = 0
+            for future in concurrent.futures.as_completed(future_to_task):
+                task_name = future_to_task[future]
+                try:
+                    future.result()
+                    completed_tasks += 1
+                    logger.info(f"✅ Completed parallel upload ({completed_tasks}/{len(upload_tasks)}): {task_name}")
+                except Exception as e:
+                    logger.error(f"❌ Parallel upload failed for {task_name}: {e}")
+                    raise
         
-        # Save classification model if available
-        if hasattr(signature_manager, 'classification_head') and signature_manager.classification_head:
-            saver.save_classification_model(signature_manager.classification_head)
+        total_time = time.time() - start_time
+        logger.info(f"🎉 All {len(upload_tasks)} parallel uploads completed in {total_time:.2f}s")
         
-        # Save authenticity model if available
-        if hasattr(signature_manager, 'authenticity_head') and signature_manager.authenticity_head:
-            saver.save_authenticity_model(signature_manager.authenticity_head)
-        
-        # Save siamese model if available
-        if hasattr(signature_manager, 'siamese_model') and signature_manager.siamese_model:
-            saver.save_siamese_model(signature_manager.siamese_model)
-        
-        # Save mappings if available
-        if (hasattr(signature_manager, 'student_to_id') and 
-            hasattr(signature_manager, 'id_to_student') and
-            signature_manager.student_to_id and signature_manager.id_to_student):
-            saver.save_mappings(signature_manager.student_to_id, signature_manager.id_to_student)
-        
-        logger.info(f"✅ All models saved with optimized serialization for {model_type} model {model_uuid}")
         return saver.get_uploaded_files()
         
     except Exception as e:
-        logger.error(f"❌ Failed to save models with optimized serialization: {e}")
+        logger.error(f"❌ Failed to save models with parallel upload: {e}")
         raise

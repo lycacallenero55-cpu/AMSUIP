@@ -103,7 +103,7 @@ class AWSGPUTrainingManager:
             
             # Step 6: Download results
             job_queue.update_job_progress(job_id, 85.0, "Downloading training results...")
-            model_urls = await self._download_training_results(job_id)
+            results = await self._download_training_results(job_id)
             job_queue.update_job_progress(job_id, 90.0, "Training results downloaded successfully")
             
             # Step 7: Terminate instance (if not reusing)
@@ -115,7 +115,9 @@ class AWSGPUTrainingManager:
             return {
                 'success': True,
                 'instance_id': instance_id,
-                'model_urls': model_urls,
+                'model_urls': results.get('model_urls', {}),
+                'accuracy': results.get('accuracy'),
+                'training_metrics': results.get('training_metrics', {}),
                 'training_result': training_result
             }
             
@@ -511,6 +513,22 @@ from PIL import Image
 import io
 import requests
 import traceback
+import tensorflow as tf
+from tensorflow import keras
+import tempfile
+import shutil
+
+# Set up TensorFlow to use GPU
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Found {{len(gpus)}} GPU(s), using GPU acceleration")
+    except RuntimeError as e:
+        print(f"GPU setup error: {{e}}")
+else:
+    print("No GPU found, using CPU")
 
 def train_on_gpu(training_data_key, job_id, student_id):
     """Train model on GPU instance"""
@@ -519,7 +537,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
         s3 = boto3.client('s3')
         bucket = '{self.s3_bucket}'
         
-        print(f"Starting training for job {{job_id}}")
+        print(f"Starting REAL training for job {{job_id}}")
         
         # Download training data from S3
         print(f"Downloading training data from s3://{{bucket}}/{{training_data_key}}")
@@ -530,33 +548,106 @@ def train_on_gpu(training_data_key, job_id, student_id):
         
         print(f"Loaded training data for {{len(training_data)}} students")
         
-        # Simulate training process (replace with actual training code)
-        # This is where you would integrate with your actual AI model
-        import time
-        for i in range(10):
-            print(f"Training progress: {{(i+1)*10}}%")
-            time.sleep(2)
+        # Install required packages
+        print("Installing required packages...")
+        os.system("pip install tensorflow pillow numpy scikit-learn")
         
-        # Create dummy model files for testing
-        model_files = ['embedding', 'classification', 'authenticity', 'siamese']
+        # Import training modules
+        sys.path.append('/home/ubuntu/ai-training')
+        try:
+            from models.signature_embedding_model import SignatureEmbeddingModel
+            from utils.signature_preprocessing import SignaturePreprocessor
+            print("Successfully imported training modules")
+        except ImportError as e:
+            print(f"Import error: {{e}}")
+            # Fallback: create a simple model
+            print("Creating fallback model...")
+            
+        # Process training data
+        print("Processing training data...")
+        processed_data = {{}}
+        preprocessor = SignaturePreprocessor(target_size=(224, 224))
+        
+        for student_name, data in training_data.items():
+            print(f"Processing {{student_name}}...")
+            genuine_images = []
+            forged_images = []
+            
+            # Process genuine images
+            for img_data in data.get('genuine_images', []):
+                try:
+                    # Convert base64 or array to image
+                    if isinstance(img_data, str):
+                        # Base64 encoded
+                        import base64
+                        img_bytes = base64.b64decode(img_data)
+                        img = Image.open(io.BytesIO(img_bytes))
+                    else:
+                        # Already processed array
+                        img = Image.fromarray((img_data * 255).astype(np.uint8))
+                    
+                    processed_img = preprocessor.preprocess_signature(img)
+                    genuine_images.append(processed_img)
+                except Exception as e:
+                    print(f"Error processing image: {{e}}")
+                    continue
+            
+            # Process forged images
+            for img_data in data.get('forged_images', []):
+                try:
+                    if isinstance(img_data, str):
+                        import base64
+                        img_bytes = base64.b64decode(img_data)
+                        img = Image.open(io.BytesIO(img_bytes))
+                    else:
+                        img = Image.fromarray((img_data * 255).astype(np.uint8))
+                    
+                    processed_img = preprocessor.preprocess_signature(img)
+                    forged_images.append(processed_img)
+                except Exception as e:
+                    print(f"Error processing forged image: {{e}}")
+                    continue
+            
+            processed_data[student_name] = {{
+                'genuine': genuine_images,
+                'forged': forged_images
+            }}
+            print(f"{{student_name}}: {{len(genuine_images)}} genuine, {{len(forged_images)}} forged")
+        
+        # Train the model
+        print("Starting model training...")
+        model_manager = SignatureEmbeddingModel(max_students=150)
+        
+        # Train with progress updates
+        training_result = model_manager.train_models(processed_data, epochs=25)
+        
+        print("Training completed! Saving models...")
+        
+        # Save models to temporary directory
+        temp_dir = f'/tmp/{{job_id}}_models'
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Save all models
+        model_manager.save_models(f'{{temp_dir}}/signature_model')
+        
+        # Upload models to S3
+        model_files = ['embedding', 'classification', 'siamese']
         model_urls = {{}}
         
         for model_type in model_files:
-            # Create dummy model file
-            file_path = f'/tmp/{{job_id}}_{{model_type}}.keras'
-            with open(file_path, 'w') as f:
-                f.write(f'Dummy {{model_type}} model')
-            
-            # Upload to S3
-            s3_key = f'models/{{job_id}}/{{model_type}}.keras'
-            s3.upload_file(file_path, bucket, s3_key)
-            model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-            print(f"Uploaded {{model_type}} model to S3")
+            file_path = f'{{temp_dir}}/signature_model_{{model_type}}.keras'
+            if os.path.exists(file_path):
+                s3_key = f'models/{{job_id}}/{{model_type}}.keras'
+                s3.upload_file(file_path, bucket, s3_key)
+                model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
+                print(f"Uploaded {{model_type}} model to S3")
         
         # Save mappings
         mappings = {{
             'student_id': student_id,
-            'students': list(training_data.keys())
+            'students': list(training_data.keys()),
+            'student_to_id': model_manager.student_to_id,
+            'id_to_student': model_manager.id_to_student
         }}
         mappings_path = f'/tmp/{{job_id}}_mappings.json'
         with open(mappings_path, 'w') as f:
@@ -566,15 +657,33 @@ def train_on_gpu(training_data_key, job_id, student_id):
         s3.upload_file(mappings_path, bucket, s3_key)
         model_urls['mappings'] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
         
+        # Extract training metrics
+        classification_history = training_result.get('classification_history', {{}})
+        siamese_history = training_result.get('siamese_history', {{}})
+        
+        # Calculate final accuracy
+        final_accuracy = None
+        if classification_history.get('accuracy'):
+            final_accuracy = float(classification_history['accuracy'][-1])
+        elif classification_history.get('val_accuracy'):
+            final_accuracy = float(classification_history['val_accuracy'][-1])
+        elif siamese_history.get('accuracy'):
+            final_accuracy = float(siamese_history['accuracy'][-1])
+        
         # Save training results
         results = {{
             'job_id': job_id,
             'student_id': student_id,
             'model_urls': model_urls,
+            'accuracy': final_accuracy,
             'training_metrics': {{
-                'accuracy': 0.95,
-                'loss': 0.05,
-                'epochs': 10
+                'accuracy': final_accuracy,
+                'classification_history': classification_history,
+                'siamese_history': siamese_history,
+                'epochs_trained': len(classification_history.get('loss', [])),
+                'final_loss': float(classification_history.get('loss', [0])[-1]) if classification_history.get('loss') else None,
+                'val_accuracy': float(classification_history.get('val_accuracy', [0])[-1]) if classification_history.get('val_accuracy') else None,
+                'val_loss': float(classification_history.get('val_loss', [0])[-1]) if classification_history.get('val_loss') else None
             }}
         }}
         
@@ -583,7 +692,10 @@ def train_on_gpu(training_data_key, job_id, student_id):
             json.dump(results, f)
         
         s3.upload_file(results_path, bucket, f'training_results/{{job_id}}.json')
-        print(f"Training completed successfully for job {{job_id}}!")
+        print(f"Training completed successfully for job {{job_id}}! Final accuracy: {{final_accuracy}}")
+        
+        # Cleanup
+        shutil.rmtree(temp_dir, ignore_errors=True)
         
     except Exception as e:
         print(f"Training failed: {{str(e)}}")
@@ -722,15 +834,21 @@ if __name__ == "__main__":
             
             results = json.loads(response['Body'].read())
             logger.info(f"Downloaded training results for job {job_id}")
-            return results.get('model_urls', {})
+            
+            # Return both model URLs and accuracy metrics
+            return {
+                'model_urls': results.get('model_urls', {}),
+                'accuracy': results.get('accuracy'),
+                'training_metrics': results.get('training_metrics', {})
+            }
             
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 logger.error(f"Training results not found for job {job_id}")
-                return {}
+                return {'model_urls': {}, 'accuracy': None, 'training_metrics': {}}
             else:
                 logger.error(f"Failed to download training results: {e}")
-                return {}
+                return {'model_urls': {}, 'accuracy': None, 'training_metrics': {}}
     
     async def _terminate_instance(self, instance_id: str):
         """Terminate GPU instance"""
