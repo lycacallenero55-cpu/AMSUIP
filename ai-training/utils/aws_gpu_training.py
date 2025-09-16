@@ -1,5 +1,5 @@
 """
-AWS GPU Training Manager
+AWS GPU Training Manager - Fixed Instance Ready Check
 Automatically provisions GPU instances for AI training
 """
 
@@ -142,14 +142,39 @@ class AWSGPUTrainingManager:
             # Reuse existing instance if configured
             if self.existing_instance_id:
                 logger.info(f"Reusing existing GPU instance: {self.existing_instance_id}")
-                # Verify instance exists and is running
-                response = self.ec2_client.describe_instances(InstanceIds=[self.existing_instance_id])
-                if response['Reservations']:
-                    state = response['Reservations'][0]['Instances'][0]['State']['Name']
-                    if state == 'running':
-                        return self.existing_instance_id
+                # Verify instance exists and check its state
+                try:
+                    response = self.ec2_client.describe_instances(InstanceIds=[self.existing_instance_id])
+                    if response['Reservations']:
+                        instance = response['Reservations'][0]['Instances'][0]
+                        state = instance['State']['Name']
+                        
+                        if state == 'running':
+                            logger.info(f"Instance {self.existing_instance_id} is already running")
+                            return self.existing_instance_id
+                        elif state == 'stopped':
+                            logger.info(f"Starting stopped instance {self.existing_instance_id}")
+                            self.ec2_client.start_instances(InstanceIds=[self.existing_instance_id])
+                            return self.existing_instance_id
+                        elif state == 'stopping':
+                            logger.warning(f"Instance {self.existing_instance_id} is stopping, waiting...")
+                            # Wait for it to stop then start it
+                            waiter = self.ec2_client.get_waiter('instance_stopped')
+                            await asyncio.get_event_loop().run_in_executor(
+                                None, 
+                                lambda: waiter.wait(InstanceIds=[self.existing_instance_id])
+                            )
+                            self.ec2_client.start_instances(InstanceIds=[self.existing_instance_id])
+                            return self.existing_instance_id
+                        else:
+                            logger.warning(f"Cannot use instance {self.existing_instance_id} in state: {state}")
                     else:
-                        logger.warning(f"Existing instance {self.existing_instance_id} is in state: {state}")
+                        logger.warning(f"Instance {self.existing_instance_id} not found")
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                        logger.warning(f"Instance {self.existing_instance_id} not found")
+                    else:
+                        logger.error(f"Error checking existing instance: {e}")
                         
             # Launch new instance
             user_data = self._generate_user_data()
@@ -189,7 +214,7 @@ class AWSGPUTrainingManager:
             response = self.ec2_client.run_instances(**run_args)
             
             instance_id = response['Instances'][0]['InstanceId']
-            logger.info(f"Launched GPU instance: {instance_id}")
+            logger.info(f"Launched new GPU instance: {instance_id}")
             
             return instance_id
             
@@ -245,37 +270,148 @@ echo "Instance setup completed at $(date)"
 """
     
     async def _wait_for_instance_ready(self, instance_id: str, timeout: int = 300):
-        """Wait for instance to be ready"""
+        """Wait for instance to be ready - Fixed version with proper status handling"""
         logger.info(f"Waiting for instance {instance_id} to be ready...")
         
         start_time = time.time()
+        last_state = None
+        status_check_passed = False
+        
         while time.time() - start_time < timeout:
             try:
+                # First check instance state
                 response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
                 if not response['Reservations']:
-                    await asyncio.sleep(10)
+                    logger.debug(f"Instance {instance_id} not found yet, waiting...")
+                    await asyncio.sleep(5)
                     continue
                     
                 instance = response['Reservations'][0]['Instances'][0]
                 state = instance['State']['Name']
                 
-                if state == 'running':
-                    # Wait for status checks to pass
-                    status_response = self.ec2_client.describe_instance_status(InstanceIds=[instance_id])
-                    if status_response['InstanceStatuses']:
-                        status = status_response['InstanceStatuses'][0]
-                        if (status.get('InstanceStatus', {}).get('Status') == 'ok' and
-                            status.get('SystemStatus', {}).get('Status') == 'ok'):
-                            logger.info(f"Instance {instance_id} is ready!")
+                if state != last_state:
+                    logger.info(f"Instance {instance_id} state: {state}")
+                    last_state = state
+                
+                # For existing instances that are already running
+                if self.existing_instance_id and instance_id == self.existing_instance_id:
+                    if state == 'running':
+                        # For reused instances, check if SSM is available
+                        try:
+                            # Try to send a simple command to check if SSM is ready
+                            test_response = self.ssm_client.send_command(
+                                InstanceIds=[instance_id],
+                                DocumentName='AWS-RunShellScript',
+                                Parameters={'commands': ['echo "SSM Ready"']}
+                            )
+                            logger.info(f"Instance {instance_id} is ready (SSM available)!")
                             return True
+                        except ClientError as e:
+                            if e.response['Error']['Code'] in ['InvalidInstanceId', 'InvalidInstanceInformationFilterValue']:
+                                logger.debug(f"SSM not ready yet for instance {instance_id}")
+                                # Instance is running but SSM agent might not be ready
+                                await asyncio.sleep(10)
+                                continue
+                            else:
+                                # Some other error - log but continue
+                                logger.debug(f"SSM check error: {e}")
+                                await asyncio.sleep(10)
+                                continue
+                    elif state == 'pending':
+                        # Wait for it to become running
+                        await asyncio.sleep(10)
+                        continue
+                    else:
+                        # Unexpected state
+                        raise Exception(f"Instance {instance_id} in unexpected state: {state}")
+                
+                # For new instances
+                if state == 'pending':
+                    await asyncio.sleep(10)
+                    continue
+                elif state == 'running':
+                    # Wait for status checks only for new instances
+                    if not self.existing_instance_id or instance_id != self.existing_instance_id:
+                        if not status_check_passed:
+                            try:
+                                status_response = self.ec2_client.describe_instance_status(
+                                    InstanceIds=[instance_id]
+                                )
+                                if status_response['InstanceStatuses']:
+                                    status = status_response['InstanceStatuses'][0]
+                                    instance_status = status.get('InstanceStatus', {}).get('Status')
+                                    system_status = status.get('SystemStatus', {}).get('Status')
+                                    
+                                    logger.debug(f"Instance status: {instance_status}, System status: {system_status}")
+                                    
+                                    if instance_status == 'ok' and system_status == 'ok':
+                                        status_check_passed = True
+                                        logger.info(f"Status checks passed for instance {instance_id}")
+                                    elif instance_status == 'initializing' or system_status == 'initializing':
+                                        logger.debug("Status checks initializing...")
+                                        await asyncio.sleep(10)
+                                        continue
+                                else:
+                                    logger.debug("No status information available yet")
+                                    await asyncio.sleep(10)
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Error checking instance status: {e}")
+                                await asyncio.sleep(10)
+                                continue
+                    
+                    # Check if SSM is available (final check for readiness)
+                    try:
+                        test_response = self.ssm_client.send_command(
+                            InstanceIds=[instance_id],
+                            DocumentName='AWS-RunShellScript',
+                            Parameters={'commands': ['echo "SSM Ready"']}
+                        )
+                        logger.info(f"Instance {instance_id} is fully ready!")
+                        return True
+                    except ClientError as e:
+                        if e.response['Error']['Code'] in ['InvalidInstanceId', 'InvalidInstanceInformationFilterValue']:
+                            logger.debug(f"SSM agent not ready on instance {instance_id}, waiting...")
+                            await asyncio.sleep(10)
+                            continue
+                        else:
+                            raise
+                elif state in ['terminated', 'terminating', 'shutting-down']:
+                    raise Exception(f"Instance {instance_id} is {state}")
                 
                 await asyncio.sleep(10)
                 
             except Exception as e:
-                logger.debug(f"Instance check failed: {e}")
-                await asyncio.sleep(10)
+                if "InvalidInstanceID.NotFound" in str(e):
+                    logger.debug(f"Instance {instance_id} not found yet, waiting...")
+                    await asyncio.sleep(10)
+                else:
+                    logger.error(f"Error checking instance {instance_id}: {e}")
+                    raise
         
-        raise Exception(f"Instance {instance_id} did not become ready within {timeout} seconds")
+        # Timeout reached - provide helpful error message
+        try:
+            response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
+            if response['Reservations']:
+                instance = response['Reservations'][0]['Instances'][0]
+                state = instance['State']['Name']
+                error_msg = f"Instance {instance_id} did not become ready within {timeout} seconds. Current state: {state}"
+                
+                # Check status checks for more info
+                try:
+                    status_response = self.ec2_client.describe_instance_status(InstanceIds=[instance_id])
+                    if status_response['InstanceStatuses']:
+                        status = status_response['InstanceStatuses'][0]
+                        error_msg += f", Instance status: {status.get('InstanceStatus', {}).get('Status', 'unknown')}"
+                        error_msg += f", System status: {status.get('SystemStatus', {}).get('Status', 'unknown')}"
+                except:
+                    pass
+                    
+                raise Exception(error_msg)
+            else:
+                raise Exception(f"Instance {instance_id} not found after {timeout} seconds")
+        except:
+            raise Exception(f"Instance {instance_id} did not become ready within {timeout} seconds")
     
     async def _get_instance_ip(self, instance_id: str) -> str:
         """Get instance public IP"""
@@ -607,6 +743,163 @@ if __name__ == "__main__":
             logger.info(f"Terminated GPU instance: {instance_id}")
         except Exception as e:
             logger.error(f"Failed to terminate instance {instance_id}: {e}")
+
+    async def check_instance_health(self, instance_id: str) -> Dict:
+        """Check the health and status of an instance"""
+        try:
+            # Get instance details
+            response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
+            if not response['Reservations']:
+                return {'healthy': False, 'error': 'Instance not found'}
+            
+            instance = response['Reservations'][0]['Instances'][0]
+            state = instance['State']['Name']
+            
+            # Get status checks
+            status_response = self.ec2_client.describe_instance_status(InstanceIds=[instance_id])
+            
+            health_info = {
+                'instance_id': instance_id,
+                'state': state,
+                'instance_type': instance.get('InstanceType'),
+                'launch_time': str(instance.get('LaunchTime')),
+                'public_ip': instance.get('PublicIpAddress'),
+                'private_ip': instance.get('PrivateIpAddress'),
+                'healthy': False,
+                'ssm_available': False
+            }
+            
+            if status_response['InstanceStatuses']:
+                status = status_response['InstanceStatuses'][0]
+                health_info['instance_status'] = status.get('InstanceStatus', {}).get('Status')
+                health_info['system_status'] = status.get('SystemStatus', {}).get('Status')
+                health_info['status_checks_passed'] = (
+                    health_info['instance_status'] == 'ok' and 
+                    health_info['system_status'] == 'ok'
+                )
+            
+            # Check SSM availability
+            if state == 'running':
+                try:
+                    # Try to get SSM instance information
+                    ssm_response = self.ssm_client.describe_instance_information(
+                        Filters=[
+                            {'Key': 'InstanceIds', 'Values': [instance_id]}
+                        ]
+                    )
+                    if ssm_response['InstanceInformationList']:
+                        ssm_info = ssm_response['InstanceInformationList'][0]
+                        health_info['ssm_available'] = ssm_info.get('PingStatus') == 'Online'
+                        health_info['ssm_ping_status'] = ssm_info.get('PingStatus')
+                        health_info['ssm_last_ping'] = str(ssm_info.get('LastPingDateTime', ''))
+                        health_info['ssm_agent_version'] = ssm_info.get('AgentVersion')
+                except ClientError as e:
+                    logger.debug(f"SSM check failed: {e}")
+                    health_info['ssm_error'] = str(e)
+            
+            # Determine overall health
+            health_info['healthy'] = (
+                state == 'running' and 
+                health_info.get('status_checks_passed', False) and
+                health_info.get('ssm_available', False)
+            )
+            
+            return health_info
+            
+        except Exception as e:
+            logger.error(f"Failed to check instance health: {e}")
+            return {'healthy': False, 'error': str(e)}
+
+    async def restart_instance(self, instance_id: str) -> bool:
+        """Restart an instance that's not responding properly"""
+        try:
+            logger.info(f"Attempting to restart instance {instance_id}")
+            
+            # Stop the instance
+            self.ec2_client.stop_instances(InstanceIds=[instance_id])
+            
+            # Wait for it to stop
+            waiter = self.ec2_client.get_waiter('instance_stopped')
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: waiter.wait(
+                    InstanceIds=[instance_id],
+                    WaiterConfig={'Delay': 10, 'MaxAttempts': 30}
+                )
+            )
+            
+            logger.info(f"Instance {instance_id} stopped, starting it again...")
+            
+            # Start the instance
+            self.ec2_client.start_instances(InstanceIds=[instance_id])
+            
+            logger.info(f"Instance {instance_id} restart initiated")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to restart instance {instance_id}: {e}")
+            return False
+
+    async def install_ssm_agent(self, instance_id: str) -> bool:
+        """Try to install/restart SSM agent on the instance via user data"""
+        try:
+            logger.info(f"Attempting to install/restart SSM agent on {instance_id}")
+            
+            # Get instance details
+            response = self.ec2_client.describe_instances(InstanceIds=[instance_id])
+            if not response['Reservations']:
+                return False
+                
+            instance = response['Reservations'][0]['Instances'][0]
+            
+            # Create a user data script to install/restart SSM
+            ssm_install_script = """#!/bin/bash
+# Install or restart SSM agent
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+fi
+
+if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
+    # Ubuntu/Debian
+    snap install amazon-ssm-agent --classic || true
+    snap start amazon-ssm-agent || true
+    systemctl restart snap.amazon-ssm-agent.amazon-ssm-agent.service || true
+elif [ "$OS" == "amzn" ]; then
+    # Amazon Linux
+    yum install -y amazon-ssm-agent || true
+    systemctl restart amazon-ssm-agent || true
+fi
+
+# Alternative installation method
+cd /tmp
+wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+dpkg -i amazon-ssm-agent.deb || true
+systemctl enable amazon-ssm-agent
+systemctl restart amazon-ssm-agent
+
+echo "SSM agent installation/restart attempted at $(date)" >> /var/log/ssm-install.log
+"""
+            
+            # Update instance user data
+            encoded_script = base64.b64encode(ssm_install_script.encode()).decode()
+            
+            # Note: This requires stopping the instance first
+            if instance['State']['Name'] == 'running':
+                logger.warning(f"Cannot update user data while instance {instance_id} is running")
+                return False
+            
+            self.ec2_client.modify_instance_attribute(
+                InstanceId=instance_id,
+                UserData={'Value': encoded_script}
+            )
+            
+            logger.info(f"Updated user data for {instance_id} with SSM installation script")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to install SSM agent: {e}")
+            return False
 
 # Global instance
 gpu_training_manager = AWSGPUTrainingManager()
