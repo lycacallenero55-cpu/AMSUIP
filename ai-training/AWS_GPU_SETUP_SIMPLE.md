@@ -134,6 +134,11 @@ S3_BUCKET=your-unique-bucket-name
 AWS_KEY_NAME=gpu-training-key
 AWS_SECURITY_GROUP_ID=sg-xxxxxxxxx  # From security group creation above
 AWS_SUBNET_ID=subnet-xxxxxxxxx      # From subnet command above
+
+# Optional GPU Configuration (advanced users)
+AWS_GPU_INSTANCE_TYPE=g4dn.xlarge   # Instance type (g4dn.xlarge, g4dn.2xlarge, p3.2xlarge)
+AWS_GPU_AMI_ID=ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 20.04)
+AWS_GPU_GITHUB_REPO=https://github.com/your-repo/ai-training.git  # Your training code repo
 ```
 
 ### 4.2 Get Your Resource IDs
