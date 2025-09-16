@@ -162,6 +162,8 @@ import boto3
 import numpy as np
 from PIL import Image
 import io
+import requests
+
 
 def train_on_gpu(training_data_key, job_id, student_id):
     # Download training data from S3
@@ -188,25 +190,47 @@ def train_on_gpu(training_data_key, job_id, student_id):
     augmenter = SignatureAugmentation()
     
     # Process training data with proper preprocessing and augmentation
-    processed_data = {{}}
+    processed_data = {}
     for student_name, signatures in training_data.items():
         genuine_images = []
         forged_images = []
         
-        for img_data in signatures['genuine']:
-            img = Image.open(io.BytesIO(bytes(img_data)))
-            processed = preprocessor.preprocess_signature(img)
-            # Apply data augmentation for better generalization
-            augmented = augmenter.augment_signature(processed)
-            genuine_images.append(augmented)
+        # Support dict input with 'genuine'/'genuine_images' or direct list
+        if isinstance(signatures, dict):
+            source_list = signatures.get('genuine') or signatures.get('genuine_images') or []
+        else:
+            source_list = signatures or []
+
+        for img_data in source_list:
+            try:
+                img = None
+                if isinstance(img_data, (bytes, bytearray)):
+                    img = Image.open(io.BytesIO(img_data))
+                elif isinstance(img_data, str) and (img_data.startswith('http://') or img_data.startswith('https://')):
+                    r = requests.get(img_data, timeout=10)
+                    r.raise_for_status()
+                    img = Image.open(io.BytesIO(r.content))
+                else:
+                    arr = np.array(img_data)
+                    if arr.dtype in (np.float32, np.float64):
+                        arr = (arr * 255.0 if arr.max() <= 1.0 else arr)
+                    arr = np.clip(arr, 0, 255).astype(np.uint8)
+                    if arr.ndim == 2:
+                        arr = np.stack([arr, arr, arr], axis=-1)
+                    img = Image.fromarray(arr)
+                if img is None:
+                    continue
+                processed = preprocessor.preprocess_signature(img)
+                augmented = augmenter.augment_signature(processed)
+                genuine_images.append(augmented)
+            except Exception:
+                continue
         
         # Skip forged signature processing - not used for owner identification training
-        # (Forgery detection is disabled - focus on owner identification only)
-        
-        processed_data[student_name] = {{
+        processed_data[student_name] = {
             'genuine': genuine_images,
             'forged': forged_images
-        }}
+        }
     
     # Prepare training data using the same method as CPU training
     X, y = ai_model.prepare_training_data(processed_data)
@@ -214,67 +238,38 @@ def train_on_gpu(training_data_key, job_id, student_id):
     # Train classification-only model for owner identification with real-time metrics
     result = ai_model.train_classification_only(processed_data, epochs=50)
     
-    # Send real-time metrics updates
-    import requests
-    import time
-    
-    def send_metrics_update(epoch, total_epochs, loss, accuracy, val_loss=None, val_accuracy=None):
-        try:
-            metrics = {{
-                'job_id': job_id,
-                'current_epoch': epoch,
-                'total_epochs': total_epochs,
-                'loss': loss,
-                'accuracy': accuracy,
-                'val_loss': val_loss or 0.0,
-                'val_accuracy': val_accuracy or 0.0,
-                'timestamp': time.time()
-            }}
-            
-            # Send to main server (you'll need to implement this endpoint)
-            # requests.post(f'http://your-main-server/api/training/metrics', json=metrics)
-            print(f"Epoch {{epoch}}/{{total_epochs}} - Loss: {{loss:.4f}}, Accuracy: {{accuracy:.4f}}")
-        except Exception as e:
-            print(f"Failed to send metrics: {{e}}")
-    
-    # Override the training callback to send real-time updates
-    original_callback = ai_model.training_callback
-    if hasattr(ai_model, 'training_callback'):
-        # Add real-time metrics sending to existing callback
-        pass
-    
     # Save models
     model_path = f'/tmp/models_{job_id}'
     ai_model.save_models(model_path)
     
     # Upload models to S3
     model_files = [
-        (f'{{model_path}}_embedding.keras', 'embedding'),
-        (f'{{model_path}}_classification.keras', 'classification'),
-        (f'{{model_path}}_authenticity.keras', 'authenticity'),
-        (f'{{model_path}}_siamese.keras', 'siamese'),
-        (f'{{model_path}}_mappings.json', 'mappings')
+        (f'{model_path}_embedding.keras', 'embedding'),
+        (f'{model_path}_classification.keras', 'classification'),
+        (f'{model_path}_authenticity.keras', 'authenticity'),
+        (f'{model_path}_siamese.keras', 'siamese'),
+        (f'{model_path}_mappings.json', 'mappings')
     ]
     
-    model_urls = {{}}
+    model_urls = {}
     for file_path, model_type in model_files:
         if os.path.exists(file_path):
-            s3_key = f'models/{{job_id}}/{{model_type}}.keras'
+            s3_key = f'models/{job_id}/{model_type}.keras'
             s3.upload_file(file_path, bucket, s3_key)
-            model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
+            model_urls[model_type] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
     
     # Save training results
-    results = {{
+    results = {
         'job_id': job_id,
         'student_id': student_id,
         'model_urls': model_urls,
         'training_metrics': result
-    }}
+    }
     
     with open('/tmp/training_results.json', 'w') as f:
         json.dump(results, f)
     
-    s3.upload_file('/tmp/training_results.json', bucket, f'training_results/{{job_id}}.json')
+    s3.upload_file('/tmp/training_results.json', bucket, f'training_results/{job_id}.json')
     
     print("Training completed successfully!")
 
@@ -299,6 +294,7 @@ boto3==1.28.0
 python-dotenv==1.0.0
 fastapi==0.103.0
 uvicorn==0.23.0
+requests==2.32.3
 EOF
 
 # Set environment variables
