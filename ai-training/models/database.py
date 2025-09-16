@@ -11,14 +11,21 @@ class DatabaseManager:
     
     def _initialize_client(self):
         try:
-            self.client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-            logger.info("✅ Supabase client initialized successfully")
+            if hasattr(settings, 'SUPABASE_URL') and settings.SUPABASE_URL:
+                self.client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                logger.info("✅ Supabase client initialized successfully")
+            else:
+                logger.warning("⚠️ Supabase URL not configured - running in offline mode")
+                self.client = None
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Supabase client: {e}")
-            raise
+            logger.warning(f"⚠️ Failed to initialize Supabase client: {e} - running in offline mode")
+            self.client = None
     
     async def get_student(self, student_id: int):
         """Get student information by ID"""
+        if not self.client:
+            logger.warning("Database client not available - running in offline mode")
+            return None
         try:
             response = self.client.table("students").select("*").eq("id", student_id).execute()
             if response.data:
@@ -30,6 +37,9 @@ class DatabaseManager:
 
     async def get_student_by_school_id(self, school_student_id: str):
         """Get student by school/student_id string column"""
+        if not self.client:
+            logger.warning("Database client not available - running in offline mode")
+            return None
         try:
             # Normalize input (trim whitespace)
             candidate = (school_student_id or "").strip()

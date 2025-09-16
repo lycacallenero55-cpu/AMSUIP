@@ -54,6 +54,10 @@ class Settings:
     ENABLE_ANTISPOOFING: bool = False
     SPOOFING_THRESHOLD: float = 0.6
     
+    # Training Configuration - Focus on Owner Identification Only
+    MIN_FORGED_SAMPLES = 0  # Disabled - no forgery detection needed
+    ENABLE_FORGERY_TRAINING: bool = False  # Disabled system-wide
+    
     # Model Versioning
     ENABLE_MODEL_VERSIONING: bool = True
     MAX_MODEL_VERSIONS: int = 5

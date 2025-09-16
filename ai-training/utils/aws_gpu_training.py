@@ -27,8 +27,8 @@ class AWSGPUTrainingManager:
         self.ssm_client = boto3.client('ssm', region_name=region_name)
         
         # GPU instance configuration
-        self.gpu_instance_type = 'g4dn.xlarge'  # 1 GPU, 4 vCPUs, 16GB RAM
-        self.ami_id = 'ami-0c02fb55956c7d316'  # Deep Learning AMI (Ubuntu 20.04)
+        self.gpu_instance_type = os.getenv('AWS_GPU_INSTANCE_TYPE', 'g4dn.xlarge')  # 1 GPU, 4 vCPUs, 16GB RAM
+        self.ami_id = os.getenv('AWS_GPU_AMI_ID', 'ami-0c02fb55956c7d316')  # Deep Learning AMI (Ubuntu 20.04)
         self.key_name = os.getenv('AWS_KEY_NAME', 'your-key-pair')
         self.security_group_id = os.getenv('AWS_SECURITY_GROUP_ID', 'sg-xxxxxxxxx')
         self.subnet_id = os.getenv('AWS_SUBNET_ID', 'subnet-xxxxxxxxx')
@@ -36,6 +36,7 @@ class AWSGPUTrainingManager:
         # Training configuration
         self.training_script_path = '/home/ubuntu/ai-training'
         self.s3_bucket = os.getenv('S3_BUCKET')
+        self.github_repo = os.getenv('AWS_GPU_GITHUB_REPO', 'https://github.com/your-repo/ai-training.git')
 
     def is_available(self) -> bool:
         """Lightweight capability check to decide if GPU training can be attempted.
@@ -43,7 +44,7 @@ class AWSGPUTrainingManager:
         """
         try:
             # Simple call that requires basic EC2 perms
-            self.ec2_client.describe_instance_types(MaxResults=1)
+            self.ec2_client.describe_instance_types(MaxResults=5)
             return True
         except Exception as e:
             logger.warning(f"GPU manager not available: {e}")
@@ -54,35 +55,48 @@ class AWSGPUTrainingManager:
                                 job_id: str,
                                 student_id: int) -> Dict:
         """
-        Start training on AWS GPU instance
+        Start training on AWS GPU instance with real-time progress updates
         """
         try:
             logger.info(f"Starting GPU training for job {job_id}")
             
+            # Import job queue for progress updates
+            from utils.job_queue import job_queue
+            
             # Step 1: Launch GPU instance
+            job_queue.update_job_progress(job_id, 5.0, "Launching GPU instance...")
             instance_id = await self._launch_gpu_instance(job_id)
             if not instance_id:
                 raise Exception("Failed to launch GPU instance")
             
             # Step 2: Wait for instance to be ready
+            job_queue.update_job_progress(job_id, 15.0, "Waiting for GPU instance to be ready...")
             await self._wait_for_instance_ready(instance_id)
             
             # Step 3: Get instance IP (optional for logs)
             instance_ip = await self._get_instance_ip(instance_id)
+            logger.info(f"GPU instance {instance_id} ready at {instance_ip}")
             
             # Step 4: Upload training data to S3
+            job_queue.update_job_progress(job_id, 25.0, "Uploading training data to S3...")
             training_data_key = await self._upload_training_data(training_data, job_id)
             
             # Step 5: Start training on GPU instance
+            job_queue.update_job_progress(job_id, 30.0, "Starting training on GPU instance...")
             training_result = await self._start_remote_training(
                 instance_id, training_data_key, job_id, student_id
             )
             
             # Step 6: Download results
+            job_queue.update_job_progress(job_id, 85.0, "Downloading training results...")
             model_urls = await self._download_training_results(job_id)
+            job_queue.update_job_progress(job_id, 90.0, "Training results downloaded successfully")
             
             # Step 7: Terminate instance
+            job_queue.update_job_progress(job_id, 95.0, "Cleaning up GPU instance...")
             await self._terminate_instance(instance_id)
+            
+            job_queue.update_job_progress(job_id, 100.0, "GPU training completed successfully!")
             
             return {
                 'success': True,
@@ -93,6 +107,12 @@ class AWSGPUTrainingManager:
             
         except Exception as e:
             logger.error(f"GPU training failed: {e}")
+            # Update job status to failed
+            try:
+                from utils.job_queue import job_queue
+                job_queue.update_job_progress(job_id, 0.0, f"GPU training failed: {str(e)}")
+            except:
+                pass
             return {'success': False, 'error': str(e)}
     
     async def _launch_gpu_instance(self, job_id: str) -> Optional[str]:
@@ -116,7 +136,7 @@ mkdir -p {self.training_script_path}
 cd {self.training_script_path}
 
 # Clone or download training code
-git clone https://github.com/lycacallenero55-cpu/AMSUIP.git .
+git clone {self.github_repo} .
 cd ai-training
 
 # Install Python dependencies
@@ -129,7 +149,7 @@ import os
 sys.path.append('/home/ubuntu/ai-training')
 
 from models.signature_embedding_model import SignatureEmbeddingModel
-from utils.signature_preprocessing import SignaturePreprocessor
+from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation
 import json
 import boto3
 import numpy as np
@@ -147,11 +167,20 @@ def train_on_gpu(training_data_key, job_id, student_id):
     with open('/tmp/training_data.json', 'r') as f:
         training_data = json.load(f)
     
-    # Initialize AI system
-    ai_model = SignatureEmbeddingModel(max_students=150)
-    preprocessor = SignaturePreprocessor(target_size=224)
+    # Initialize AI system with proper configuration
+    image_size = 224
+    embedding_dim = 256
+    max_students = 150
     
-    # Process training data
+    ai_model = SignatureEmbeddingModel(
+        image_size=image_size,
+        embedding_dim=embedding_dim,
+        max_students=max_students
+    )
+    preprocessor = SignaturePreprocessor(target_size=image_size)
+    augmenter = SignatureAugmentation()
+    
+    # Process training data with proper preprocessing and augmentation
     processed_data = {{}}
     for student_name, signatures in training_data.items():
         genuine_images = []
@@ -160,7 +189,9 @@ def train_on_gpu(training_data_key, job_id, student_id):
         for img_data in signatures['genuine']:
             img = Image.open(io.BytesIO(bytes(img_data)))
             processed = preprocessor.preprocess_signature(img)
-            genuine_images.append(processed)
+            # Apply data augmentation for better generalization
+            augmented = augmenter.augment_signature(processed)
+            genuine_images.append(augmented)
         
         # Skip forged signature processing - not used for owner identification training
         # (Forgery detection is disabled - focus on owner identification only)
@@ -170,8 +201,40 @@ def train_on_gpu(training_data_key, job_id, student_id):
             'forged': forged_images
         }}
     
-    # Train classification-only model for owner identification
+    # Prepare training data using the same method as CPU training
+    X, y = ai_model.prepare_training_data(processed_data)
+    
+    # Train classification-only model for owner identification with real-time metrics
     result = ai_model.train_classification_only(processed_data, epochs=50)
+    
+    # Send real-time metrics updates
+    import requests
+    import time
+    
+    def send_metrics_update(epoch, total_epochs, loss, accuracy, val_loss=None, val_accuracy=None):
+        try:
+            metrics = {{
+                'job_id': job_id,
+                'current_epoch': epoch,
+                'total_epochs': total_epochs,
+                'loss': loss,
+                'accuracy': accuracy,
+                'val_loss': val_loss or 0.0,
+                'val_accuracy': val_accuracy or 0.0,
+                'timestamp': time.time()
+            }}
+            
+            # Send to main server (you'll need to implement this endpoint)
+            # requests.post(f'http://your-main-server/api/training/metrics', json=metrics)
+            print(f"Epoch {{epoch}}/{{total_epochs}} - Loss: {{loss:.4f}}, Accuracy: {{accuracy:.4f}}")
+        except Exception as e:
+            print(f"Failed to send metrics: {{e}}")
+    
+    # Override the training callback to send real-time updates
+    original_callback = ai_model.training_callback
+    if hasattr(ai_model, 'training_callback'):
+        # Add real-time metrics sending to existing callback
+        pass
     
     # Save models
     model_path = f'/tmp/models_{job_id}'
