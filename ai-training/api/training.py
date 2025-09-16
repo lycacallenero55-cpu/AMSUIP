@@ -283,9 +283,26 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         logs_url = None
         try:
             import json
+            import numpy as np
+            
+            # Convert numpy types to native Python types for JSON serialization
+            def convert_numpy_types(obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, dict):
+                    return {k: convert_numpy_types(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_numpy_types(item) for item in obj]
+                else:
+                    return obj
+            
             logs_payload = {
-                "classification_history": classification_history,
-                "siamese_history": siamese_history,
+                "classification_history": convert_numpy_types(classification_history),
+                "siamese_history": convert_numpy_types(siamese_history),
                 "student_mappings": {
                     'student_to_id': local_manager.student_to_id,
                     'id_to_student': local_manager.id_to_student
@@ -301,6 +318,13 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             logger.warning(f"Failed to upload training logs: {e}")
         
         # Record in DB (with optional global_model_id linkage)
+        # Extract final accuracy from training history
+        final_accuracy = None
+        if classification_history.get('accuracy'):
+            final_accuracy = float(classification_history['accuracy'][-1])
+        elif classification_history.get('val_accuracy'):
+            final_accuracy = float(classification_history['val_accuracy'][-1])
+        
         payload = {
             "student_id": int(student["id"]),
             # Store classification model as primary path for student identification
@@ -313,7 +337,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
             "genuine_count": len(genuine_arrays),
             "forged_count": len(forged_arrays),
             "training_date": datetime.utcnow().isoformat(),
-            "accuracy": None,
+            "accuracy": final_accuracy,  # Store actual accuracy instead of None
             "training_metrics": {
                 'model_type': 'ai_signature_verification_individual',
                 'architecture': 'signature_embedding_network',
@@ -495,10 +519,27 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         # Upload training logs (metrics) to S3 as JSON for auditability
         try:
             import json
+            import numpy as np
+            
+            # Convert numpy types to native Python types for JSON serialization
+            def convert_numpy_types(obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, dict):
+                    return {k: convert_numpy_types(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_numpy_types(item) for item in obj]
+                else:
+                    return obj
+            
             logs_payload = {
-                "classification_history": result_models.get('classification_history', {}),
-                "siamese_history": result_models.get('siamese_history', {}),
-                "student_mappings": result_models.get('student_mappings', {}),
+                "classification_history": convert_numpy_types(result_models.get('classification_history', {})),
+                "siamese_history": convert_numpy_types(result_models.get('siamese_history', {})),
+                "student_mappings": convert_numpy_types(result_models.get('student_mappings', {})),
                 "created_at": datetime.utcnow().isoformat(),
                 "model_uuid": model_uuid,
                 "student_id": int(student["id"]),
@@ -507,7 +548,8 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             from utils.s3_storage import upload_model_file as _upload_generic
             # Reuse model namespace for grouping; store logs alongside models
             _logs_key, logs_url = _upload_generic(logs_bytes, "individual", f"training_logs_{model_uuid}", "json")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to upload training logs: {e}")
             logs_url = None
 
         # Create model record with comprehensive metrics
@@ -1017,6 +1059,13 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 job_queue.update_job_progress(job.job_id, 90.0, "Training completed, saving results...")
 
             # Create model record
+            # Extract accuracy from GPU result if available
+            gpu_accuracy = gpu_result.get('accuracy', 0.0)
+            if isinstance(gpu_accuracy, (int, float)) and gpu_accuracy > 0:
+                accuracy = float(gpu_accuracy)
+            else:
+                accuracy = None
+                
             model_record = await db_manager.create_trained_model({
                 "student_id": int(student["id"]),
                 "model_path": gpu_result['model_urls'].get('classification', ''),
@@ -1026,13 +1075,14 @@ async def run_gpu_training(job, student, genuine_data, forged_data):
                 "genuine_count": len(genuine_images),
                 "forged_count": len(forged_images),
                 "training_date": datetime.utcnow().isoformat(),
-                # GPU flow may not return per-head accuracies; leave overall accuracy empty here
+                "accuracy": accuracy,  # Store GPU training accuracy
                 "training_metrics": {
                     'model_type': 'ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
                     'training_method': 'aws_gpu_instance',
                     'instance_type': 'g4dn.xlarge',
-                    'gpu_acceleration': True
+                    'gpu_acceleration': True,
+                    'gpu_accuracy': gpu_accuracy
                 }
             })
 
@@ -1122,8 +1172,16 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
         if gpu_result['success']:
             if job:
                 job_queue.update_job_progress(job.job_id, 90.0, "Global training completed, saving results...")
+                logger.info(f"Global GPU training completed for job {job.job_id}")
 
             # Create global model record
+            # Extract accuracy from GPU result if available
+            gpu_accuracy = gpu_result.get('accuracy', 0.0)
+            if isinstance(gpu_accuracy, (int, float)) and gpu_accuracy > 0:
+                accuracy = float(gpu_accuracy)
+            else:
+                accuracy = None
+                
             model_record = await db_manager.create_global_model({
                 "model_path": gpu_result['model_urls'].get('classification', ''),
                 "s3_key": f"global_models/{job.job_id}",
@@ -1134,13 +1192,14 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data):
                 "forged_count": int(total_forged),
                 "student_count": len(students),
                 "training_date": datetime.utcnow().isoformat(),
-                "accuracy": gpu_result.get('accuracy', 0.0),  # Use actual training results
+                "accuracy": accuracy,  # Store actual GPU training accuracy
                 "training_metrics": {
                     'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
                     'training_method': 'aws_gpu_instance',
                     'instance_type': 'g4dn.xlarge',
-                    'gpu_acceleration': True
+                    'gpu_acceleration': True,
+                    'gpu_accuracy': gpu_accuracy
                 }
             })
 
