@@ -257,6 +257,9 @@ async def identify_signature_owner(
                     except Exception:
                         pass
                 if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Initialize mappings for centroid path
+                    id_to_student = {}
+                    id_to_name = {}
                     # Centroid fast-path: try to load centroids/spec and use embedding nearest neighbor
                     try:
                         after = model_url.split('amazonaws.com/', 1)[-1]
