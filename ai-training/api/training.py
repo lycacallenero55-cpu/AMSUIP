@@ -1226,6 +1226,8 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 "student_count": len(students),
                 "training_date": datetime.utcnow().isoformat(),
                 "accuracy": accuracy if isinstance(accuracy, (int, float)) else 0.0,
+                # Store mappings path for exact id/name resolution in verification
+                "mappings_path": (gpu_result.get('model_urls') or {}).get('mappings', None),
                 "training_metrics": {
                     'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
