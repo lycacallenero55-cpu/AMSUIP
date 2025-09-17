@@ -262,36 +262,15 @@ async def identify_signature_owner(
                             mresp = requests.get(mappings_url, timeout=15)
                             mresp.raise_for_status()
                             mdata = mresp.json()
-                            # Preferred explicit mapping
-                            if mdata.get('id_to_student'):
-                                id_to_student = {int(k): v for k, v in (mdata.get('id_to_student') or {}).items()}
-                            # Fallback: build from 'students' list of names
-                            if not id_to_student and isinstance(mdata.get('students'), list):
+                            # Preferred explicit mappings from trainer
+                            if mdata.get('id_to_student_id'):
+                                id_to_student = {int(k): int(v) for k, v in (mdata.get('id_to_student_id') or {}).items()}
+                            if mdata.get('id_to_student_name'):
+                                id_to_name = {int(k): str(v) for k, v in (mdata.get('id_to_student_name') or {}).items()}
+                            # Backward compatibility
+                            if not id_to_name and isinstance(mdata.get('students'), list):
                                 names = mdata['students']
                                 id_to_name = {int(i): str(n) for i, n in enumerate(names)}
-                                # Try to resolve IDs by matching names in DB
-                                try:
-                                    resolved = {}
-                                    for idx, nm in id_to_name.items():
-                                        try:
-                                            # Try multiple name fields heuristically
-                                            q = db_manager.client.table("students").select("id,name,full_name,student_name,firstname,surname,first_name,last_name,email").ilike("name", nm).limit(1).execute()
-                                            sid = None
-                                            if q.data:
-                                                row = q.data[0]
-                                                sid = row.get('id')
-                                            if sid is None:
-                                                # Try other fields
-                                                q2 = db_manager.client.table("students").select("id,firstname,surname").ilike("firstname", nm.split(' ')[0]).limit(1).execute()
-                                                if q2.data:
-                                                    sid = q2.data[0].get('id')
-                                            if sid is not None:
-                                                resolved[idx] = int(sid)
-                                        except Exception:
-                                            continue
-                                    id_to_student = resolved
-                                except Exception:
-                                    pass
                     except Exception:
                         id_to_student = {}
                     try:
@@ -318,7 +297,7 @@ async def identify_signature_owner(
                         probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
                         class_idx = int(np.argmax(probs))
                         confidence = float(np.max(probs))
-                        predicted_name = id_to_name.get(class_idx) or id_to_student.get(class_idx) or f"class_{class_idx}"
+                        predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
                         # Map back to student id if available in mappings
                         predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
                         return {
