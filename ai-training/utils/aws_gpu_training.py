@@ -550,7 +550,29 @@ def train_on_gpu(training_data_key, job_id, student_id):
         
         # Install required packages
         print("Installing required packages...")
-        os.system("pip install tensorflow pillow numpy scikit-learn")
+        os.system("pip3 install --upgrade pip")
+        os.system("pip3 install tensorflow==2.15.1 pillow numpy scikit-learn")
+        os.system("pip3 install --upgrade tensorflow-gpu")
+        
+        # Verify TensorFlow installation
+        print("Verifying TensorFlow installation...")
+        try:
+            import tensorflow as tf
+            print(f"TensorFlow version: {{tf.__version__}}")
+            print(f"GPU available: {{tf.config.list_physical_devices('GPU')}}")
+        except ImportError as e:
+            print(f"TensorFlow import failed: {{e}}")
+            print("Trying alternative installation...")
+            os.system("pip3 install --force-reinstall tensorflow==2.15.1")
+            try:
+                import tensorflow as tf
+                print(f"TensorFlow version after reinstall: {{tf.__version__}}")
+            except ImportError as e2:
+                print(f"Reinstall failed: {{e2}}")
+                print("Trying system-wide installation...")
+                os.system("sudo pip3 install tensorflow==2.15.1")
+                import tensorflow as tf
+                print(f"TensorFlow version after system install: {{tf.__version__}}")
         
         # Import training modules
         sys.path.append('/home/ubuntu/ai-training')
