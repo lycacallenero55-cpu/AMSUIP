@@ -94,9 +94,11 @@ class AWSGPUTrainingManager:
             await self._setup_training_environment(instance_id, job_id)
             
             job_queue.update_job_progress(job_id, 40.0, "Starting training on GPU instance...")
+            logger.info(f"DEBUG: About to start remote training with data key: {training_data_key}")
             training_result = await self._start_remote_training(
                 instance_id, training_data_key, job_id, student_id, job_queue
             )
+            logger.info(f"DEBUG: Remote training result: {training_result}")
             
             if training_result.get('status') != 'success':
                 raise Exception(f"Training failed: {training_result.get('error', 'Unknown error')}")
@@ -476,6 +478,7 @@ echo "Instance setup completed at $(date)"
         try:
             # Create training script
             training_script = self._generate_training_script()
+            logger.info(f"DEBUG: Generated training script length: {len(training_script)} characters")
             
             # Upload script to S3 first
             script_key = f'scripts/{job_id}/train_gpu.py'
@@ -485,6 +488,7 @@ echo "Instance setup completed at $(date)"
                 Body=training_script,
                 ContentType='text/x-python'
             )
+            logger.info(f"DEBUG: Uploaded training script to s3://{self.s3_bucket}/{script_key}")
             
             # Download and setup script on instance using SSM
             setup_commands = [
@@ -814,9 +818,12 @@ if __name__ == "__main__":
             # Run training command
             training_command = [
                 f'cd {self.training_script_path}',
+                f'ls -la',  # Debug: list files
+                f'head -20 train_gpu.py',  # Debug: show first 20 lines of script
                 f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
             ]
             
+            logger.info(f"DEBUG: Running training commands: {training_command}")
             response = self.ssm_client.send_command(
                 InstanceIds=[instance_id],
                 DocumentName='AWS-RunShellScript',
