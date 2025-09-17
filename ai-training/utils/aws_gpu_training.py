@@ -576,6 +576,15 @@ def train_on_gpu(training_data_key, job_id, student_id):
         
         # Import training modules
         sys.path.append('/home/ubuntu/ai-training')
+        
+        # Try to activate ec2-user's virtual environment first
+        try:
+            import os
+            os.system("source /home/ec2-user/tf-gpu/bin/activate && python -c 'import tensorflow as tf; print(f\"TF version: {{tf.__version__}}\")'")
+            print("Using ec2-user's virtual environment")
+        except:
+            print("ec2-user environment not available, using system installation")
+        
         try:
             from models.signature_embedding_model import SignatureEmbeddingModel
             from utils.signature_preprocessing import SignaturePreprocessor
