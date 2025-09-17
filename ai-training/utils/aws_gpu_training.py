@@ -500,93 +500,134 @@ echo "Instance setup completed at $(date)"
             raise
     
     def _generate_training_script(self) -> str:
-        """Generate the training script (use safe formatting to avoid nested f-string issues)"""
+        """Generate the training script (REAL Keras global training on GPU)."""
         return '''#!/usr/bin/env python3
 import sys
 import os
 import json
 import boto3
 import numpy as np
-from PIL import Image
-import io
-import requests
 import traceback
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+def _preprocess(arr):
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    if arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
+    arr = tf.image.resize(arr, (224, 224)).numpy()
+    arr = arr / 255.0
+    return arr
+
+def _as_dataset(X, y, batch_size=16, shuffle=True):
+    ds = tf.data.Dataset.from_tensor_slices((X, y))
+    if shuffle:
+        ds = ds.shuffle(buffer_size=min(1000, len(X)))
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return ds
+
+def _build_model(num_classes: int, input_shape=(224, 224, 3)):
+    inputs = keras.Input(shape=input_shape)
+    x = layers.RandomFlip('horizontal')(inputs)
+    x = layers.RandomRotation(0.05)(x)
+    x = layers.RandomZoom(0.1)(x)
+    base = keras.applications.MobileNetV2(input_shape=input_shape, include_top=False, weights=None)
+    x = base(x)
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dropout(0.2)(x)
+    outputs = layers.Dense(num_classes, activation='softmax')(x)
+    model = keras.Model(inputs=inputs, outputs=outputs)
+    model.compile(optimizer=keras.optimizers.Adam(1e-3),
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+    return model
 
 def train_on_gpu(training_data_key, job_id, student_id):
-    """Train model on GPU instance"""
     try:
-        # Initialize S3 client
         s3 = boto3.client('s3')
         bucket = '{bucket}'
-        
-        print(f"Starting training for job {{job_id}}")
-        
-        # Download training data from S3
-        print(f"Downloading training data from s3://{{bucket}}/{{training_data_key}}")
+        print(f"Starting training for job {job_id}")
+        print("TensorFlow:", tf.__version__)
+        print("GPUs:", tf.config.list_physical_devices('GPU'))
+
+        # Download training data manifest
+        print(f"Downloading training data from s3://{bucket}/{training_data_key}")
         s3.download_file(bucket, training_data_key, '/tmp/training_data.json')
-        
         with open('/tmp/training_data.json', 'r') as f:
             training_data = json.load(f)
-        
-        print(f"Loaded training data for {{len(training_data)}} students")
-        
-        # Simulate training process (replace with actual training code)
-        # This is where you would integrate with your actual AI model
-        import time
-        for i in range(10):
-            print(f"Training progress: {{(i+1)*10}}%")
-            time.sleep(2)
-        
-        # Create dummy model files for testing
-        model_files = ['embedding', 'classification', 'authenticity', 'siamese']
-        model_urls = {{}}
-        
-        for model_type in model_files:
-            # Create dummy model file
-            file_path = f'/tmp/{{job_id}}_{{model_type}}.keras'
-            with open(file_path, 'w') as f:
-                f.write(f'Dummy {{model_type}} model')
-            
-            # Upload to S3
-            s3_key = f'models/{{job_id}}/{{model_type}}.keras'
-            s3.upload_file(file_path, bucket, s3_key)
-            model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-            print(f"Uploaded {{model_type}} model to S3")
-        
-        # Save mappings
-        mappings = {{
-            'student_id': student_id,
-            'students': list(training_data.keys())
-        }}
-        mappings_path = f'/tmp/{{job_id}}_mappings.json'
-        with open(mappings_path, 'w') as f:
-            json.dump(mappings, f)
-        
-        s3_key = f'models/{{job_id}}/mappings.json'
-        s3.upload_file(mappings_path, bucket, s3_key)
-        model_urls['mappings'] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-        
-        # Save training results
-        results = {{
+
+        print(f"Loaded training data for {len(training_data)} students")
+
+        # Flatten to global dataset
+        class_names = list(training_data.keys())
+        class_to_id = {name: i for i, name in enumerate(class_names)}
+        X, y = [], []
+        for name, buckets in training_data.items():
+            cls = class_to_id[name]
+            imgs = buckets.get('genuine') or buckets.get('genuine_images') or []
+            for arr in imgs:
+                X.append(_preprocess(arr))
+                y.append(cls)
+        if not X:
+            raise RuntimeError('No training samples provided')
+        X = np.stack(X).astype('float32')
+        y = np.asarray(y, dtype='int64')
+
+        # Train/val split
+        n = len(X)
+        idx = np.arange(n)
+        np.random.shuffle(idx)
+        split = max(1, int(0.8 * n))
+        tr_idx, va_idx = idx[:split], idx[split:]
+        Xtr, ytr = X[tr_idx], y[tr_idx]
+        Xva, yva = (X[va_idx], y[va_idx]) if len(va_idx) > 0 else (Xtr, ytr)
+        ds_tr = _as_dataset(Xtr, ytr, batch_size=16, shuffle=True)
+        ds_va = _as_dataset(Xva, yva, batch_size=16, shuffle=False)
+
+        # Model and training
+        model = _build_model(num_classes=len(class_names))
+        callbacks = [
+            keras.callbacks.ReduceLROnPlateau(monitor='val_accuracy', factor=0.5, patience=2, verbose=1),
+            keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=4, restore_best_weights=True)
+        ]
+        history = model.fit(ds_tr, validation_data=ds_va, epochs=12, verbose=2, callbacks=callbacks)
+        val_acc = float(history.history.get('val_accuracy', [0])[-1])
+        val_loss = float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
+
+        # Save model to S3
+        os.makedirs('/tmp/models', exist_ok=True)
+        model_path = f'/tmp/models/{job_id}_global.keras'
+        model.save(model_path)
+        s3_key_model = f'models/{job_id}/global.keras'
+        s3.upload_file(model_path, bucket, s3_key_model)
+        model_url = f'https://{bucket}.s3.amazonaws.com/{s3_key_model}'
+
+        # Verify reload and inference
+        reloaded = keras.models.load_model(model_path)
+        _ = reloaded.predict(Xtr[:1])
+
+        # Write results JSON
+        results = {
             'job_id': job_id,
             'student_id': student_id,
-            'model_urls': model_urls,
-            'training_metrics': {{
-                'accuracy': 0.95,
-                'loss': 0.05,
-                'epochs': 10
-            }}
-        }}
-        
+            'model_urls': {'classification': model_url},
+            'training_metrics': {
+                'accuracy': val_acc,
+                'loss': val_loss,
+                'epochs': len(history.history.get('accuracy', []))
+            }
+        }
         results_path = '/tmp/training_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f)
-        
-        s3.upload_file(results_path, bucket, f'training_results/{{job_id}}.json')
-        print(f"Training completed successfully for job {{job_id}}!")
-        
+        s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
+        print(f"Training completed successfully for job {job_id}!")
+
     except Exception as e:
-        print(f"Training failed: {{str(e)}}")
+        print(f"Training failed: {str(e)}")
         traceback.print_exc()
         raise
 
@@ -594,11 +635,9 @@ if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Usage: train_gpu.py <training_data_key> <job_id> <student_id>")
         sys.exit(1)
-        
     training_data_key = sys.argv[1]
     job_id = sys.argv[2]
     student_id = int(sys.argv[3])
-    
     train_on_gpu(training_data_key, job_id, student_id)
 '''.format(bucket=self.s3_bucket)
     
