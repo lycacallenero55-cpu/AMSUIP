@@ -19,7 +19,7 @@ except Exception as e:
 
 def check_database_available():
     """Check if database is available for operations"""
-    if db_manager is None or db_manager.client is None:
+    if db_manager is None or not hasattr(db_manager, 'client') or db_manager.client is None:
         raise HTTPException(status_code=503, detail="Database not available - running in offline mode")
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor, SignatureAugmentation

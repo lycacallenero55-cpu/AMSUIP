@@ -13,7 +13,7 @@ except Exception as e:
 
 def check_database_available():
     """Check if database is available for operations"""
-    if db_manager is None or db_manager.client is None:
+    if db_manager is None or not hasattr(db_manager, 'client') or db_manager.client is None:
         raise HTTPException(status_code=503, detail="Database not available - running in offline mode")
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor
@@ -428,8 +428,8 @@ async def identify_signature_owner(
                         logger.error(f"Failed to load student mappings: {e}")
                         # Continue without mappings - will use fallback
                 
-                # Use the request-specific model manager
-                signature_ai_manager = request_model_manager
+                # Use the request-specific model manager (don't reassign global variable)
+                # Use request_model_manager directly instead of signature_ai_manager
                 
                 # CRITICAL FIX: Ensure mappings are loaded
                 if not signature_ai_manager.id_to_student:
@@ -1347,8 +1347,8 @@ async def verify_signature(
                         logger.error(f"Failed to load student mappings: {e}")
                         # Continue without mappings - will use fallback
                 
-                # Use the request-specific model manager
-                signature_ai_manager = request_model_manager
+                # Use the request-specific model manager (don't reassign global variable)
+                # Use request_model_manager directly instead of signature_ai_manager
                 
                 # CRITICAL FIX: Ensure mappings are loaded
                 if not signature_ai_manager.id_to_student:
