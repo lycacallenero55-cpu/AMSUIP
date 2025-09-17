@@ -713,6 +713,12 @@ def train_on_gpu(training_data_key, job_id, student_id):
         print("Starting model training...")
         print(f"Dataset summary: classes={num_classes}, total_samples={total_samples}")
         from sklearn.model_selection import train_test_split
+        import tensorflow as tf
+        import numpy as _np
+        import random as _random
+        tf.random.set_seed(42)
+        _np.random.seed(42)
+        _random.seed(42)
         if total_samples > 4 and len(np.unique(y)) > 1:
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
@@ -720,6 +726,10 @@ def train_on_gpu(training_data_key, job_id, student_id):
         else:
             X_train, X_val, y_train, y_val = X, X, y, y
         
+        # Prepare output directory early (for checkpoints)
+        temp_dir = f'/tmp/{job_id}_models'
+        os.makedirs(temp_dir, exist_ok=True)
+
         # Create a simple but effective classifier with light augmentation
         aug = keras.Sequential([
             keras.layers.RandomFlip('horizontal'),
@@ -744,6 +754,18 @@ def train_on_gpu(training_data_key, job_id, student_id):
         model = keras.Model(inputs, outputs)
         model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
         
+        # Compute class weights to reduce collapse to majority class
+        class_weight = None
+        try:
+            if len(y) > 0:
+                counts = _np.bincount(y, minlength=num_classes)
+                total = counts.sum()
+                # Avoid division by zero
+                class_weight = {i: (total / (num_classes * counts[i])) if counts[i] > 0 else 0.0 for i in range(num_classes)}
+                print(f"Class counts: {counts}, class_weight: {class_weight}")
+        except Exception as e:
+            print(f"Failed to compute class weights: {e}")
+
         if len(X_train) == 0:
             # Safety: if still empty, skip training
             hist = type('H', (), {'history': {'accuracy': [0.0], 'val_accuracy': [0.0], 'loss': [0.0], 'val_loss': [0.0]}})()
@@ -756,13 +778,22 @@ def train_on_gpu(training_data_key, job_id, student_id):
                     loss = logs.get('loss', 0.0)
                     val_loss = logs.get('val_loss', 0.0)
                     print(f"Epoch {epoch+1}: loss={loss:.4f} acc={acc:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+            # Callbacks: early stopping and best checkpoint
+            ckpt_path = f"{temp_dir}/best.keras"
+            callbacks = [
+                EpochLogger(),
+                keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=3, restore_best_weights=True),
+                keras.callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', mode='max', save_best_only=True, save_weights_only=False)
+            ]
             hist = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val if len(X_val)>0 else y_train),
                 epochs=15,
                 batch_size=16,
                 verbose=0,
-                callbacks=[EpochLogger()]
+                shuffle=True,
+                class_weight=class_weight,
+                callbacks=callbacks
             )
 
         print("Training completed! Saving models...")
@@ -778,9 +809,15 @@ def train_on_gpu(training_data_key, job_id, student_id):
             print(f"Predicted classes: {np.argmax(test_preds, axis=1)}")
             print(f"True classes: {y_val[:3]}")
         
-        # Save models to temporary directory
-        temp_dir = f'/tmp/{job_id}_models'
-        os.makedirs(temp_dir, exist_ok=True)
+        # If checkpoint exists, load best model before saving
+        try:
+            best_path = f"{temp_dir}/best.keras"
+            if os.path.exists(best_path):
+                best_model = keras.models.load_model(best_path, compile=False)
+                model = best_model
+                print("Loaded best checkpoint before saving final model")
+        except Exception as e:
+            print(f"Failed to load best checkpoint: {e}")
         
         # Save only the global classification model
         model_urls = {}
