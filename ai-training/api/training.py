@@ -1209,9 +1209,14 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 accuracy = float(gpu_accuracy)
             else:
                 accuracy = None
+
+            # Ensure a model was actually produced
+            model_url = (gpu_result.get('model_urls') or {}).get('classification', '')
+            if not model_url:
+                raise Exception("GPU training produced no classification model. Ensure at least 2 owners and sufficient samples.")
                 
             model_record = await db_manager.create_global_model({
-                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "model_path": model_url,
                 "s3_key": f"global_models/{job.job_id}",
                 "model_uuid": job.job_id,
                 "status": "completed",
