@@ -229,27 +229,31 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         s3_urls = {}
         s3_keys = {}
         for model_type, file_info in uploaded_files.items():
-            if model_type in ['embedding', 'classification']:
+            if model_type in ['embedding', 'classification', 'siamese', 'mappings']:
                 s3_urls[model_type] = file_info['url']
                 s3_keys[model_type] = file_info['key']
             
         logger.info(f"✅ Individual model {model_uuid} saved with optimized S3 saving")
         
     except Exception as e:
-        logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
-        try:
-            # Fallback to direct S3 saving
-            uploaded_files = save_signature_models_directly(
-                local_manager, 
-                "individual", 
-                model_uuid
-            )
+        if use_local_storage:
+            logger.error(f"Local storage failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Local model saving failed: {str(e)}")
+        else:
+            logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
+            try:
+                # Fallback to direct S3 saving
+                uploaded_files = save_signature_models_directly(
+                    local_manager, 
+                    "individual", 
+                    model_uuid
+                )
             
             # Extract URLs and keys from uploaded files
             s3_urls = {}
             s3_keys = {}
             for model_type, file_info in uploaded_files.items():
-                if model_type in ['embedding', 'classification']:
+                if model_type in ['embedding', 'classification', 'siamese', 'mappings']:
                     s3_urls[model_type] = file_info['url']
                     s3_keys[model_type] = file_info['key']
                 
@@ -492,14 +496,18 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
             logger.info(f"✅ Main training model {model_uuid} saved with optimized S3 saving")
             
         except Exception as e:
-            logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
-            try:
-                # Fallback to direct S3 saving
-                uploaded_files = save_signature_models_directly(
-                    local_manager, 
-                    "individual", 
-                    model_uuid
-                )
+            if use_local_storage:
+                logger.error(f"Local storage failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Local model saving failed: {str(e)}")
+            else:
+                logger.warning(f"Optimized S3 saving failed, trying direct method: {e}")
+                try:
+                    # Fallback to direct S3 saving
+                    uploaded_files = save_signature_models_directly(
+                        local_manager, 
+                        "individual", 
+                        model_uuid
+                    )
                 
                 # Extract URLs and KEYS from uploaded files
                 s3_urls = {}
@@ -991,24 +999,28 @@ async def train_global_model():
                 logger.info(f"✅ Global model {model_uuid} saved locally (INSTANT!)")
             
         except Exception as e:
-            logger.error(f"❌ Failed to save global model directly to S3: {e}")
-            # Fallback to original method if direct S3 saving fails
-            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
-            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-            
-            # Save model locally first
-            gsm.save_model(f"{base_path}.keras")
-            
-            # Upload to S3
-            with open(f"{base_path}.keras", 'rb') as f:
-                model_data = f.read()
-            
-            s3_key, s3_url = upload_model_file(
-                model_data, "global", f"global_{model_uuid}", "keras"
-            )
-            
-            # Clean up local file
-            cleanup_local_file(f"{base_path}.keras")
+            if use_s3_upload:
+                logger.error(f"❌ Failed to save global model directly to S3: {e}")
+                # Fallback to original method if direct S3 saving fails
+                base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+                os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+                
+                # Save model locally first
+                gsm.save_model(f"{base_path}.keras")
+                
+                # Upload to S3
+                with open(f"{base_path}.keras", 'rb') as f:
+                    model_data = f.read()
+                
+                s3_key, s3_url = upload_model_file(
+                    model_data, "global", f"global_{model_uuid}", "keras"
+                )
+                
+                # Clean up local file
+                cleanup_local_file(f"{base_path}.keras")
+            else:
+                logger.error(f"❌ Local global model saving failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Local global model saving failed: {str(e)}")
         
         # Store global model record in dedicated global table
         model_record = await db_manager.create_global_model({
@@ -1343,15 +1355,19 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data,
                 s3_key = uploaded_files.get('classification', {}).get('relative_path', '')
                 logger.info(f"✅ Global model {model_uuid} saved locally (INSTANT!)")
         except Exception as e:
-            logger.error(f"❌ Failed to save global model directly to S3: {e}")
-            # Fallback to local save → upload → cleanup
-            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
-            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-            gsm.save_model(f"{base_path}.keras")
-            with open(f"{base_path}.keras", 'rb') as f:
-                model_data = f.read()
-            s3_key, s3_url = upload_model_file(model_data, "global", f"global_{model_uuid}", "keras")
-            cleanup_local_file(f"{base_path}.keras")
+            if use_s3_upload:
+                logger.error(f"❌ Failed to save global model directly to S3: {e}")
+                # Fallback to local save → upload → cleanup
+                base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
+                os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
+                gsm.save_model(f"{base_path}.keras")
+                with open(f"{base_path}.keras", 'rb') as f:
+                    model_data = f.read()
+                s3_key, s3_url = upload_model_file(model_data, "global", f"global_{model_uuid}", "keras")
+                cleanup_local_file(f"{base_path}.keras")
+            else:
+                logger.error(f"❌ Local global model saving failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Local global model saving failed: {str(e)}")
         
         # Compute and cache centroids for verification speed
         try:
