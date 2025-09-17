@@ -42,6 +42,7 @@ class LocalModelSaver:
         self.saved_files['embedding'] = {
             'path': filepath,
             'url': f"local://{relative_path}",  # Use local:// protocol
+            'key': relative_path,  # For database compatibility
             'relative_path': relative_path,
             'size_mb': file_size
         }
@@ -65,6 +66,7 @@ class LocalModelSaver:
         self.saved_files['classification'] = {
             'path': filepath,
             'url': f"local://{relative_path}",  # Use local:// protocol
+            'key': relative_path,  # For database compatibility
             'relative_path': relative_path,
             'size_mb': file_size
         }
@@ -88,6 +90,7 @@ class LocalModelSaver:
         self.saved_files['siamese'] = {
             'path': filepath,
             'url': f"local://{relative_path}",  # Use local:// protocol
+            'key': relative_path,  # For database compatibility
             'relative_path': relative_path,
             'size_mb': file_size
         }
@@ -119,6 +122,7 @@ class LocalModelSaver:
         self.saved_files['mappings'] = {
             'path': filepath,
             'url': f"local://{relative_path}",  # Use local:// protocol
+            'key': relative_path,  # For database compatibility
             'relative_path': relative_path,
             'size_kb': file_size
         }
