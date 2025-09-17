@@ -392,8 +392,59 @@ async def identify_signature_owner(
                         try:
                             classifier = keras.models.load_model(model_path_local, compile=False)
                         except Exception as load_err:
-                            # Hard fail to avoid mismatched architecture random predictions
-                            raise RuntimeError(f"Failed to load full model: {load_err}")
+                            # Attempt weights + spec fallback (MobileNetV2 head)
+                            logger.warning(f"Full model load failed, attempting weights+spec fallback: {load_err}")
+                            # Download weights and spec if available
+                            weights_url = None
+                            spec_url = None
+                            if latest_global.get('training_metrics'):
+                                pass
+                            # Try derive URLs from model_url base
+                            base_url = model_url.rsplit('/', 1)[0] if '/' in model_url else None
+                            import requests as _rq
+                            import tempfile as _tf
+                            import json as _json
+                            weights_local = None
+                            spec_local = None
+                            try:
+                                if base_url:
+                                    # Try to fetch spec
+                                    spec_url = f"{base_url}/classifier_spec.json"
+                                    spec_resp = _rq.get(spec_url, timeout=15)
+                                    spec_resp.raise_for_status()
+                                    spec_data = spec_resp.json()
+                                    # Try to fetch weights
+                                    weights_url = f"{base_url}/classification.weights.h5"
+                                    w_resp = _rq.get(weights_url, timeout=60)
+                                    w_resp.raise_for_status()
+                                    with _tf.NamedTemporaryFile(suffix='.h5', delete=False) as tmpw:
+                                        tmpw.write(w_resp.content)
+                                        weights_local = tmpw.name
+                                    # Build model by spec
+                                    arch = spec_data.get('architecture')
+                                    num_classes = int(spec_data.get('num_classes') or (inferred_num_classes or 2))
+                                    if arch != 'mobilenet_v2_classifier':
+                                        raise RuntimeError('Unsupported classifier architecture in spec')
+                                    import tensorflow as tf
+                                    base = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights=None)
+                                    inputs_b = tf.keras.Input(shape=(224,224,3))
+                                    x_b = tf.keras.applications.mobilenet_v2.preprocess_input(inputs_b)
+                                    x_b = base(x_b, training=False)
+                                    x_b = tf.keras.layers.GlobalAveragePooling2D()(x_b)
+                                    x_b = tf.keras.layers.Dropout(float(spec_data.get('head', {}).get('dropout1', 0.5)))(x_b)
+                                    x_b = tf.keras.layers.Dense(int(spec_data.get('head', {}).get('dense_units', 512)), activation='relu')(x_b)
+                                    x_b = tf.keras.layers.Dropout(float(spec_data.get('head', {}).get('dropout2', 0.4)))(x_b)
+                                    out_b = tf.keras.layers.Dense(num_classes, activation='softmax')(x_b)
+                                    classifier = tf.keras.Model(inputs_b, out_b)
+                                    classifier.load_weights(weights_local)
+                                else:
+                                    raise RuntimeError('No base URL available to fetch weights/spec')
+                            finally:
+                                try:
+                                    if weights_local:
+                                        os.unlink(weights_local)
+                                except Exception:
+                                    pass
                         # Preprocess and predict (use trainer-aligned pipeline)
                         arr = _classifier_preprocess(test_image)
                         import numpy as np

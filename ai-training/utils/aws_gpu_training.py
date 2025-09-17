@@ -909,6 +909,29 @@ def train_on_gpu(training_data_key, job_id, student_id):
         s3.upload_file(cls_path, bucket, s3_key)
         model_urls['classification'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
         print("Uploaded classification model to S3")
+        # Also save weights and spec for robust loading across environments
+        weights_path = f'{temp_dir}/classification.weights.h5'
+        model.save_weights(weights_path)
+        s3_key_w = f'models/{job_id}/classification.weights.h5'
+        s3.upload_file(weights_path, bucket, s3_key_w)
+        model_urls['weights'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_w}'
+        spec = {
+            'architecture': 'mobilenet_v2_classifier',
+            'input_shape': [224, 224, 3],
+            'num_classes': int(num_classes),
+            'head': {
+                'dense_units': 512,
+                'dropout1': 0.5,
+                'dropout2': 0.4
+            }
+        }
+        import json as _json
+        spec_path = f'{temp_dir}/classifier_spec.json'
+        with open(spec_path, 'w') as _f:
+            _json.dump(spec, _f)
+        s3_key_s = f'models/{job_id}/classifier_spec.json'
+        s3.upload_file(spec_path, bucket, s3_key_s)
+        model_urls['spec'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_s}'
         
         # Save mappings
         class_to_idx = {c: i for i, c in enumerate(classes)}
