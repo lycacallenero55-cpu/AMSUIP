@@ -269,6 +269,21 @@ async def identify_signature_owner(
                     with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
                         tmp_model.write(resp.content)
                         model_path_local = tmp_model.name
+                    # Define classifier-aligned preprocessing (must match trainer)
+                    def _classifier_preprocess(img_pil):
+                        try:
+                            from PIL import Image as _PIL
+                            if not isinstance(img_pil, _PIL.Image.Image):
+                                img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
+                            img_pil = img_pil.convert('RGB')
+                            img_pil = img_pil.resize((224, 224))
+                            arr = np.asarray(img_pil).astype('float32')
+                            if arr.max() > 1.0:
+                                arr = arr / 255.0
+                            return arr
+                        except Exception:
+                            # Fallback to existing preprocessor if anything goes wrong
+                            return preprocessor.preprocess_signature(img_pil)
                     # Download mappings if available
                     id_to_student = {}
                     id_to_name = {}
@@ -343,8 +358,8 @@ async def identify_signature_owner(
                                 classifier.load_weights(model_path_local, by_name=True, skip_mismatch=True)
                             except Exception as werr:
                                 raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
-                        # Preprocess and predict
-                        arr = preprocessor.preprocess_signature(test_image)
+                        # Preprocess and predict (use trainer-aligned pipeline)
+                        arr = _classifier_preprocess(test_image)
                         import numpy as np
                         probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
                         class_idx = int(np.argmax(probs))
