@@ -265,7 +265,22 @@ async def identify_signature_owner(
                     except Exception:
                         id_to_student = {}
                     try:
-                        classifier = keras.models.load_model(model_path_local)
+                        # Try full-model load first
+                        try:
+                            classifier = keras.models.load_model(model_path_local, compile=False)
+                        except Exception as load_err:
+                            logger.warning(f"Keras model load failed, trying weights-only path: {load_err}")
+                            # Rebuild MobileNetV2 classifier and load weights
+                            num_classes = max(2, len(id_to_student) or 2)
+                            import tensorflow as tf
+                            base = tf.keras.applications.MobileNetV2(include_top=False, weights=None, input_shape=(settings.MODEL_IMAGE_SIZE, settings.MODEL_IMAGE_SIZE, 3))
+                            x = tf.keras.layers.GlobalAveragePooling2D()(base.output)
+                            out = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+                            classifier = tf.keras.Model(inputs=base.input, outputs=out)
+                            try:
+                                classifier.load_weights(model_path_local)
+                            except Exception as werr:
+                                raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
                         # Preprocess and predict
                         arr = preprocessor.preprocess_signature(test_image)
                         import numpy as np
@@ -273,7 +288,7 @@ async def identify_signature_owner(
                         class_idx = int(np.argmax(probs))
                         confidence = float(np.max(probs))
                         predicted_name = id_to_student.get(class_idx, f"class_{class_idx}")
-                        # Try to map back to student id if name matches a known mapping we carry
+                        # Map back to student id if available in mappings
                         predicted_id = class_idx if class_idx in id_to_student else 0
                         return {
                             "predicted_student": {"id": predicted_id, "name": predicted_name},
@@ -1251,7 +1266,27 @@ async def verify_signature(
                     except Exception:
                         id_to_student = {}
                     try:
-                        classifier = keras.models.load_model(model_path_local)
+                        # Try full-model load first
+                        try:
+                            classifier = keras.models.load_model(model_path_local, compile=False)
+                        except Exception as load_err:
+                            logger.warning(f"Keras model load failed (verify), trying weights-only path: {load_err}")
+                            # Rebuild MobileNetV2 classifier and load weights
+                            num_classes = 2
+                            try:
+                                # If mappings present, set num_classes accordingly
+                                num_classes = max(2, len(id_to_student) or 2)
+                            except Exception:
+                                pass
+                            import tensorflow as tf
+                            base = tf.keras.applications.MobileNetV2(include_top=False, weights=None, input_shape=(settings.MODEL_IMAGE_SIZE, settings.MODEL_IMAGE_SIZE, 3))
+                            x = tf.keras.layers.GlobalAveragePooling2D()(base.output)
+                            out = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+                            classifier = tf.keras.Model(inputs=base.input, outputs=out)
+                            try:
+                                classifier.load_weights(model_path_local)
+                            except Exception as werr:
+                                raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
                         # Preprocess and predict
                         arr = preprocessor.preprocess_signature(test_image)
                         import numpy as np
