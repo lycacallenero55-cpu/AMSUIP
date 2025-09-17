@@ -574,25 +574,80 @@ def train_on_gpu(training_data_key, job_id, student_id):
         print("Installing required packages...")
         os.system("pip install tensorflow pillow numpy scikit-learn")
         
-        # Self-contained preprocessor to avoid import errors
+        # Self-contained signature preprocessor (production-grade)
+        import cv2
         class _Preproc:
             def __init__(self, target_size=224):
                 self.target_size = target_size
+            def _remove_background(self, image: np.ndarray) -> np.ndarray:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                if np.mean(binary) > 127:
+                    binary = 255 - binary
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+                binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    min_area = (image.shape[0] * image.shape[1]) * 0.001
+                    for c in contours:
+                        if cv2.contourArea(c) < min_area:
+                            cv2.fillPoly(binary, [c], 0)
+                mask = binary.astype(np.uint8)
+                result = image.copy()
+                for i in range(3):
+                    result[:, :, i] = np.where(mask == 0, 255, result[:, :, i])
+                return result
+            def _enhance(self, image: np.ndarray) -> np.ndarray:
+                lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            def _normalize_geometry(self, image: np.ndarray) -> np.ndarray:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                if np.mean(binary) > 127:
+                    binary = 255 - binary
+                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if not contours:
+                    return image
+                largest = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(largest)
+                angle = rect[2]
+                if angle < -45:
+                    angle = 90 + angle
+                if abs(angle) > 1:
+                    h, w = image.shape[:2]
+                    center = (float(w // 2), float(h // 2))
+                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                    image = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+                return image
+            def _final_resize(self, image: np.ndarray) -> np.ndarray:
+                h, w = image.shape[:2]
+                scale = min(self.target_size / w, self.target_size / h)
+                new_w = max(1, int(w * scale))
+                new_h = max(1, int(h * scale))
+                resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                canvas = np.full((self.target_size, self.target_size, 3), 255, dtype=np.uint8)
+                y0 = (self.target_size - new_h) // 2
+                x0 = (self.target_size - new_w) // 2
+                canvas[y0:y0+new_h, x0:x0+new_w] = resized
+                return canvas
             def preprocess_signature(self, img):
                 if isinstance(img, Image.Image):
                     img = np.array(img)
                 if img.ndim == 2:
-                    img = np.stack([img]*3, axis=-1)
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
                 if img.shape[-1] == 4:
                     img = img[:, :, :3]
+                img = self._remove_background(img)
+                img = self._enhance(img)
+                img = self._normalize_geometry(img)
+                img = self._final_resize(img)
                 img = img.astype(np.float32)
                 if img.max() > 1.0:
                     img = img / 255.0
-                from PIL import Image as _PIL
-                pil = _PIL.fromarray((img*255).astype(np.uint8))
-                pil = pil.resize((224, 224))
-                out = np.array(pil).astype(np.float32) / 255.0
-                return out
+                return img
         
         # Process training data
         print("Processing training data...")
@@ -730,26 +785,33 @@ def train_on_gpu(training_data_key, job_id, student_id):
         temp_dir = f'/tmp/{job_id}_models'
         os.makedirs(temp_dir, exist_ok=True)
 
-        # Create a simple but effective classifier with light augmentation
+        # Stronger model with regularization and richer augmentation
+        from tensorflow.keras import regularizers
         aug = keras.Sequential([
             keras.layers.RandomFlip('horizontal'),
-            keras.layers.RandomRotation(0.02),
-            keras.layers.RandomZoom(0.1)
+            keras.layers.RandomRotation(0.05),
+            keras.layers.RandomZoom(0.15),
+            keras.layers.RandomTranslation(0.05, 0.05),
+            keras.layers.RandomContrast(0.1)
         ])
+        l2 = regularizers.l2(1e-4)
         inputs = keras.Input(shape=(224,224,3))
         x = aug(inputs)
-        x = keras.layers.Conv2D(32, 3, activation='relu')(x)
+        x = keras.layers.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
         x = keras.layers.BatchNormalization()(x)
         x = keras.layers.MaxPooling2D(2)(x)
-        x = keras.layers.Conv2D(64, 3, activation='relu')(x)
+        x = keras.layers.Conv2D(64, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
         x = keras.layers.BatchNormalization()(x)
         x = keras.layers.MaxPooling2D(2)(x)
-        x = keras.layers.Conv2D(128, 3, activation='relu')(x)
+        x = keras.layers.Conv2D(128, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
+        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.MaxPooling2D(2)(x)
+        x = keras.layers.Conv2D(256, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
         x = keras.layers.BatchNormalization()(x)
         x = keras.layers.GlobalAveragePooling2D()(x)
         x = keras.layers.Dropout(0.5)(x)
-        x = keras.layers.Dense(256, activation='relu')(x)
-        x = keras.layers.Dropout(0.3)(x)
+        x = keras.layers.Dense(512, activation='relu', kernel_regularizer=l2)(x)
+        x = keras.layers.Dropout(0.4)(x)
         outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
         model = keras.Model(inputs, outputs)
         model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
@@ -782,13 +844,14 @@ def train_on_gpu(training_data_key, job_id, student_id):
             ckpt_path = f"{temp_dir}/best.keras"
             callbacks = [
                 EpochLogger(),
-                keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=3, restore_best_weights=True),
+                keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-5),
+                keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=5, restore_best_weights=True),
                 keras.callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', mode='max', save_best_only=True, save_weights_only=False)
             ]
             hist = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val if len(X_val)>0 else y_train),
-                epochs=15,
+                epochs=30,
                 batch_size=16,
                 verbose=0,
                 shuffle=True,
@@ -835,7 +898,9 @@ def train_on_gpu(training_data_key, job_id, student_id):
             'students': classes,
             'class_to_idx': class_to_idx,
             'id_to_student_id': class_to_student_id,  # exact IDs when available
-            'id_to_student_name': class_to_student_name  # exact names per class index
+            'id_to_student_name': class_to_student_name,  # exact names per class index
+            'num_classes': int(num_classes),
+            'preprocessing': 'signature_preprocessor_v1'
         }
         mappings_path = f'/tmp/{job_id}_mappings.json'
         with open(mappings_path, 'w') as f:

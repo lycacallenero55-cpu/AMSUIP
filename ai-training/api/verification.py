@@ -269,20 +269,70 @@ async def identify_signature_owner(
                     with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
                         tmp_model.write(resp.content)
                         model_path_local = tmp_model.name
-                    # Define classifier-aligned preprocessing (must match trainer)
+                    # Define classifier-aligned preprocessing (signature preprocessor)
                     def _classifier_preprocess(img_pil):
                         try:
+                            import cv2
+                            import numpy as _np
                             from PIL import Image as _PIL
                             if not isinstance(img_pil, _PIL.Image.Image):
                                 img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
                             img_pil = img_pil.convert('RGB')
-                            img_pil = img_pil.resize((224, 224))
-                            arr = np.asarray(img_pil).astype('float32')
-                            if arr.max() > 1.0:
-                                arr = arr / 255.0
-                            return arr
+                            arr = _np.asarray(img_pil)
+                            # Background removal
+                            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            if _np.mean(binary) > 127:
+                                binary = 255 - binary
+                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+                            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+                            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if contours:
+                                min_area = (arr.shape[0] * arr.shape[1]) * 0.001
+                                for c in contours:
+                                    if cv2.contourArea(c) < min_area:
+                                        cv2.fillPoly(binary, [c], 0)
+                            mask = binary.astype(_np.uint8)
+                            for i in range(3):
+                                arr[:, :, i] = _np.where(mask == 0, 255, arr[:, :, i])
+                            # Enhancement (CLAHE)
+                            lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+                            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                            arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+                            # Orientation and centering
+                            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            if _np.mean(binary) > 127:
+                                binary = 255 - binary
+                            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if contours:
+                                largest = max(contours, key=cv2.contourArea)
+                                rect = cv2.minAreaRect(largest)
+                                angle = rect[2]
+                                if angle < -45:
+                                    angle = 90 + angle
+                                if abs(angle) > 1:
+                                    h, w = arr.shape[:2]
+                                    center = (float(w // 2), float(h // 2))
+                                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                                    arr = cv2.warpAffine(arr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+                            # Final resize with aspect preservation
+                            h, w = arr.shape[:2]
+                            target = 224
+                            scale = min(target / w, target / h)
+                            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+                            resized = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                            canvas = _np.full((target, target, 3), 255, dtype=_np.uint8)
+                            y0 = (target - new_h) // 2
+                            x0 = (target - new_w) // 2
+                            canvas[y0:y0+new_h, x0:x0+new_w] = resized
+                            out = canvas.astype('float32')
+                            if out.max() > 1.0:
+                                out = out / 255.0
+                            return out
                         except Exception:
-                            # Fallback to existing preprocessor if anything goes wrong
                             return preprocessor.preprocess_signature(img_pil)
                     # Download mappings if available
                     id_to_student = {}
