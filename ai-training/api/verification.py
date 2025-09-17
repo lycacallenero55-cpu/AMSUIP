@@ -291,9 +291,9 @@ async def identify_signature_owner(
                             try:
                                 import cv2
                                 import numpy as _np
-                                from PIL import Image as _PIL
-                                if not isinstance(img_pil, _PIL.Image.Image):
-                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
+                                from PIL import Image as _PIL  # use global Image module alias if needed
+                                if not isinstance(img_pil, Image.Image):
+                                    img_pil = Image.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else Image.fromarray(_np.array(img_pil))
                                 img_pil = img_pil.convert('RGB')
                                 arr = _np.asarray(img_pil)
                                 # Background removal
@@ -337,10 +337,10 @@ async def identify_signature_owner(
                             except Exception as e:
                                 logger.warning(f"Preprocessing failed: {e}, using fallback")
                                 # Fallback: simple resize and normalize
-                                if not isinstance(img_pil, _PIL.Image.Image):
-                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
+                                if not isinstance(img_pil, Image.Image):
+                                    img_pil = Image.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else Image.fromarray(_np.array(img_pil))
                                 img_pil = img_pil.convert('RGB')
-                                arr = _np.asarray(img_pil.resize((224, 224), _PIL.Image.Resampling.LANCZOS))
+                                arr = _np.asarray(img_pil.resize((224, 224), Image.Resampling.LANCZOS))
                                 return arr.astype(_np.float32) / 255.0
 
                         # Build embedder
