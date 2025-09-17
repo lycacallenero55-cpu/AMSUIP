@@ -205,7 +205,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
     model_uuid = str(uuid.uuid4())
     try:
         # Check if local storage is enabled (override with parameter)
-        use_local_storage = not use_s3_upload and os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+        use_local_storage = not use_s3_upload
         
         if use_local_storage:
             # Use local storage (INSTANT - no S3 upload)
@@ -461,7 +461,7 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         # Save models - choose between S3 or local storage
         try:
             # Check if local storage is enabled (override with parameter)
-            use_local_storage = not use_s3_upload and os.getenv('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+            use_local_storage = not use_s3_upload
             
             if use_local_storage:
                 # Use local storage (INSTANT - no S3 upload)
@@ -866,7 +866,8 @@ async def start_gpu_training(
 async def start_async_training(
     student_id: str = Form(...),
     genuine_files: List[UploadFile] | None = File(None),
-    forged_files: List[UploadFile] | None = File(None)
+    forged_files: List[UploadFile] | None = File(None),
+    use_s3_upload: bool = Form(False)
 ):
     check_database_available()
     try:

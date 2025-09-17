@@ -704,7 +704,8 @@ const SignatureAI = () => {
             studentIds.join(','),
             allGenuineFiles,
             allForgedFiles,
-            'hybrid'
+            'hybrid',
+            useS3Upload
           );
       
       setJobId(asyncResponse.job_id);

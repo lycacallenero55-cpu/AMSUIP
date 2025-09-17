@@ -382,7 +382,8 @@ export class AIService {
     studentId: string,
     genuineFiles: File[],
     forgedFiles: File[],
-    trainingMode?: 'individual' | 'global' | 'hybrid'
+    trainingMode?: 'individual' | 'global' | 'hybrid',
+    useS3Upload?: boolean
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
@@ -395,6 +396,9 @@ export class AIService {
       }
       if (trainingMode) {
         formData.append('training_mode', trainingMode);
+      }
+      if (useS3Upload !== undefined) {
+        formData.append('use_s3_upload', useS3Upload.toString());
       }
 
       const response = await fetch(`${this.baseUrl}/api/training/start-async`, {
