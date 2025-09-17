@@ -160,16 +160,16 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
     
     # Normalize arrays to float32 [H,W,3]
-    def _normalize(img):
+    def _normalize(img, _np=np):
         # Ensure it's a numpy array first
-        if not isinstance(img, np.ndarray):
-            arr = np.array(img)
+        if not isinstance(img, _np.ndarray):
+            arr = _np.array(img)
         else:
             arr = img
         
         # Convert to float32 if needed
-        if arr.dtype != np.float32:
-            arr = arr.astype(np.float32)
+        if arr.dtype != _np.float32:
+            arr = arr.astype(_np.float32)
         
         # Handle batched arrays
         if arr.ndim == 4:
