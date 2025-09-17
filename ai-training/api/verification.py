@@ -386,6 +386,12 @@ async def identify_signature_owner(
                         arr = _classifier_preprocess(test_image)
                         import numpy as np
                         probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                        
+                        # Debug logging
+                        logger.info(f"Model prediction probabilities: {probs}")
+                        logger.info(f"Number of classes: {len(probs)}")
+                        logger.info(f"Available mappings - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
+                        
                         class_idx = int(np.argmax(probs))
                         confidence = float(np.max(probs))
                         predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
@@ -400,6 +406,8 @@ async def identify_signature_owner(
                                     logger.info(f"Resolved student ID {predicted_id} for name {predicted_name} via DB fallback.")
                             except Exception as db_e:
                                 logger.warning(f"Failed to resolve student ID for {predicted_name} from DB: {db_e}")
+                        
+                        logger.info(f"Final prediction: class_idx={class_idx}, predicted_id={predicted_id}, predicted_name={predicted_name}, confidence={confidence}")
                         return {
                             "predicted_student": {"id": predicted_id, "name": predicted_name},
                             "is_match": True,

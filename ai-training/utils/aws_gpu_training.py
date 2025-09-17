@@ -767,6 +767,17 @@ def train_on_gpu(training_data_key, job_id, student_id):
 
         print("Training completed! Saving models...")
         
+        # Debug: Check if model actually learned anything
+        print(f"Final training accuracy: {hist.history.get('accuracy', [0.0])[-1]:.4f}")
+        print(f"Final validation accuracy: {hist.history.get('val_accuracy', [0.0])[-1]:.4f}")
+        
+        # Test prediction on a few samples to see if model is working
+        if len(X_val) > 0:
+            test_preds = model.predict(X_val[:3], verbose=0)
+            print(f"Sample predictions on validation set: {test_preds}")
+            print(f"Predicted classes: {np.argmax(test_preds, axis=1)}")
+            print(f"True classes: {y_val[:3]}")
+        
         # Save models to temporary directory
         temp_dir = f'/tmp/{job_id}_models'
         os.makedirs(temp_dir, exist_ok=True)
