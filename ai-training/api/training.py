@@ -957,6 +957,7 @@ async def start_async_training(
 
 @router.post("/train-global")
 async def train_global_model():
+    check_database_available()
     try:
         # Build manifest from DB (S3 URLs)
         rows = await db_manager.list_all_signatures()
@@ -1460,6 +1461,7 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data,
 
 @router.get("/models")
 async def get_trained_models(student_id: Optional[int] = None):
+    check_database_available()
     try:
         models = await db_manager.get_trained_models(student_id)
         return {"models": models}
@@ -1470,6 +1472,7 @@ async def get_trained_models(student_id: Optional[int] = None):
 
 @router.get("/global-models")
 async def get_global_models(limit: Optional[int] = None):
+    check_database_available()
     try:
         models = await db_manager.get_global_models(limit)
         return {"models": models}
@@ -1480,6 +1483,7 @@ async def get_global_models(limit: Optional[int] = None):
 
 @router.get("/global-models/latest")
 async def get_latest_global_model():
+    check_database_available()
     try:
         model = await db_manager.get_latest_global_model()
         if not model:

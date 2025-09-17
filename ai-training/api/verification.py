@@ -5,7 +5,16 @@ import io
 import logging
 from datetime import datetime
 
-from models.database import db_manager
+try:
+    from models.database import db_manager
+except Exception as e:
+    print(f"Warning: Database manager not available: {e}")
+    db_manager = None
+
+def check_database_available():
+    """Check if database is available for operations"""
+    if db_manager is None or db_manager.client is None:
+        raise HTTPException(status_code=503, detail="Database not available - running in offline mode")
 from models.signature_embedding_model import SignatureEmbeddingModel
 from utils.signature_preprocessing import SignaturePreprocessor
 from utils.image_processing import validate_image
@@ -113,6 +122,8 @@ preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
 async def _find_local_ai_model(db_manager):
     """Find the latest local AI model"""
+    if db_manager is None or not hasattr(db_manager, 'client'):
+        return None
     try:
         response = db_manager.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
         rows = response.data or []
@@ -128,6 +139,8 @@ async def _find_local_ai_model(db_manager):
 
 async def _find_s3_ai_model(db_manager):
     """Find the latest S3 AI model"""
+    if db_manager is None or not hasattr(db_manager, 'client'):
+        return None
     try:
         response = db_manager.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
         rows = response.data or []
@@ -256,6 +269,7 @@ async def identify_signature_owner(
     test_file: UploadFile = File(...),
     use_local_models: bool = Form(False)
 ):
+    check_database_available()
     """
     AI-powered signature identification with real deep learning
     """
@@ -438,6 +452,8 @@ async def identify_signature_owner(
                                 students = []
                                 for student_id in trained_student_ids:
                                     try:
+                                        if db_manager is None or not hasattr(db_manager, 'client'):
+                                            continue
                                         student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
                                         if student_response.data:
                                             student = student_response.data[0]
@@ -1208,6 +1224,7 @@ async def verify_signature(
     test_file: UploadFile = File(...),
     student_id: Optional[int] = None
 ):
+    check_database_available()
     """
     AI-powered signature verification with real deep learning
     """
@@ -1354,6 +1371,8 @@ async def verify_signature(
                                 students = []
                                 for student_id in trained_student_ids:
                                     try:
+                                        if db_manager is None or not hasattr(db_manager, 'client'):
+                                            continue
                                         student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
                                         if student_response.data:
                                             student = student_response.data[0]
