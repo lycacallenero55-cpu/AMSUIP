@@ -951,6 +951,55 @@ def train_on_gpu(training_data_key, job_id, student_id):
         s3_key = f'models/{job_id}/mappings.json'
         s3.upload_file(mappings_path, bucket, s3_key)
         model_urls['mappings'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+
+        # Additionally compute embeddings and centroids for few-shot identification
+        try:
+            print("Computing embeddings and centroids for few-shot...")
+            embed_base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+            embed_inp = keras.Input(shape=(224,224,3))
+            x = keras.applications.mobilenet_v2.preprocess_input(embed_inp)
+            x = embed_base(x, training=False)
+            x = keras.layers.GlobalAveragePooling2D()(x)
+            embed_model = keras.Model(embed_inp, x)
+            # Build per-class embeddings
+            idx_to_centroid = {}
+            for idx, cname in enumerate(classes):
+                imgs = processed_data.get(cname, {}).get('genuine', [])
+                if len(imgs) == 0:
+                    continue
+                arr = np.stack(imgs, axis=0)
+                embs = embed_model.predict(arr, verbose=0)
+                centroid = embs.mean(axis=0)
+                # Normalize to unit vector for cosine similarity
+                norm = np.linalg.norm(centroid) + 1e-8
+                centroid = (centroid / norm).tolist()
+                idx_to_centroid[idx] = centroid
+            centroids = {
+                'embedding_dim': int(next(iter(idx_to_centroid.values())).__len__()) if idx_to_centroid else 1280,
+                'idx_to_centroid': idx_to_centroid
+            }
+            centroids_path = f'/tmp/{job_id}_centroids.json'
+            with open(centroids_path, 'w') as f:
+                json.dump(centroids, f)
+            s3_key_c = f'models/{job_id}/centroids.json'
+            s3.upload_file(centroids_path, bucket, s3_key_c)
+            model_urls['centroids'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_c}'
+            # Save embedding spec
+            emb_spec = {
+                'architecture': 'mobilenet_v2_embedding',
+                'input_shape': [224,224,3],
+                'pooling': 'gap',
+                'preprocessing': 'mobilenet_v2_preprocess_input'
+            }
+            emb_spec_path = f'/tmp/{job_id}_embedding_spec.json'
+            with open(emb_spec_path, 'w') as f:
+                json.dump(emb_spec, f)
+            s3_key_es = f'models/{job_id}/embedding_spec.json'
+            s3.upload_file(emb_spec_path, bucket, s3_key_es)
+            model_urls['embedding_spec'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_es}'
+            print("Saved centroids and embedding spec")
+        except Exception as e:
+            print(f"Failed to compute centroids: {e}")
         
         # Calculate final accuracy (always numeric)
         final_accuracy = 0.0

@@ -257,6 +257,63 @@ async def identify_signature_owner(
                     except Exception:
                         pass
                 if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Centroid fast-path: try to load centroids/spec and use embedding nearest neighbor
+                    try:
+                        after = model_url.split('amazonaws.com/', 1)[-1]
+                        folder = after.rsplit('/', 1)[0]
+                        from utils.s3_storage import create_presigned_get as _presign
+                        centroids_url = _presign(f"{folder}/centroids.json", expires_seconds=3600)
+                        emb_spec_url = _presign(f"{folder}/embedding_spec.json", expires_seconds=3600)
+                        import requests as _rq
+                        c_resp = _rq.get(centroids_url, timeout=30); c_resp.raise_for_status()
+                        centroids_data = c_resp.json()
+                        s_resp = _rq.get(emb_spec_url, timeout=30); s_resp.raise_for_status()
+                        # Build embedder
+                        import tensorflow as tf
+                        base_e = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+                        inp_e = tf.keras.Input(shape=(224,224,3))
+                        xe = tf.keras.applications.mobilenet_v2.preprocess_input(inp_e)
+                        xe = base_e(xe, training=False)
+                        xe = tf.keras.layers.GlobalAveragePooling2D()(xe)
+                        embedder = tf.keras.Model(inp_e, xe)
+                        # Preprocess and embed query
+                        arr_e = _classifier_preprocess(test_image)
+                        import numpy as _np
+                        vec = embedder.predict(_np.expand_dims(arr_e, 0), verbose=0)[0]
+                        vn = _np.linalg.norm(vec) + 1e-8
+                        vec = vec / vn
+                        best_idx = -1; best_sim = -1.0
+                        for k, centroid in (centroids_data.get('idx_to_centroid') or {}).items():
+                            ci = int(k)
+                            c = _np.array(centroid, dtype=_np.float32)
+                            sim = float(_np.dot(vec, c))
+                            if sim > best_sim:
+                                best_sim = sim; best_idx = ci
+                        if best_idx >= 0:
+                            import numpy as np
+                            class_idx = int(best_idx)
+                            confidence = float((best_sim + 1.0) / 2.0)
+                            predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
+                            predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
+                            return {
+                                "predicted_student": {"id": predicted_id, "name": predicted_name},
+                                "is_match": True,
+                                "confidence": confidence,
+                                "score": confidence,
+                                "global_score": confidence,
+                                "student_confidence": confidence,
+                                "authenticity_score": 0.0,
+                                "is_unknown": False,
+                                "model_type": "global_centroid",
+                                "ai_architecture": "mobilenet_v2_embedding",
+                                "success": True,
+                                "decision": "match",
+                                "candidates": [
+                                    {"id": predicted_id, "name": predicted_name, "confidence": confidence}
+                                ]
+                            }
+                    except Exception as ce:
+                        logger.info(f"Centroid fast-path unavailable or failed: {ce}")
                     # Download model via presigned GET
                     s3_key = model_url.split('amazonaws.com/')[-1]
                     from utils.s3_storage import create_presigned_get
