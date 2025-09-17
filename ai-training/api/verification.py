@@ -291,6 +291,9 @@ async def identify_signature_owner(
                             if mdata.get('id_to_student_name'):
                                 id_to_name = {int(k): str(v) for k, v in (mdata.get('id_to_student_name') or {}).items()}
                             # Backward compatibility
+                            # Fallback keys
+                            if not mdata.get('students') and isinstance(mdata.get('classes'), list):
+                                mdata['students'] = mdata['classes']
                             if isinstance(mdata.get('students'), list):
                                 students_list = mdata['students']
                                 # Parse possible "id:name" entries to fill both maps when explicit maps are absent
