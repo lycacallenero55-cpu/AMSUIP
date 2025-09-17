@@ -36,12 +36,16 @@ class LocalModelSaver:
         file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
         logger.info(f"✅ Local embedding model saved: {filepath} ({file_size:.2f} MB in {save_time:.2f}s)")
         
+        # Store relative path for database compatibility
+        relative_path = os.path.relpath(filepath, os.getcwd())
+        
         self.saved_files['embedding'] = {
             'path': filepath,
-            'url': f"file://{filepath}",
+            'url': f"local://{relative_path}",  # Use local:// protocol
+            'relative_path': relative_path,
             'size_mb': file_size
         }
-        return filepath, f"file://{filepath}"
+        return filepath, f"local://{relative_path}"
     
     def save_classification_model(self, model: keras.Model) -> Tuple[str, str]:
         """Save classification model locally"""
@@ -55,12 +59,16 @@ class LocalModelSaver:
         file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
         logger.info(f"✅ Local classification model saved: {filepath} ({file_size:.2f} MB in {save_time:.2f}s)")
         
+        # Store relative path for database compatibility
+        relative_path = os.path.relpath(filepath, os.getcwd())
+        
         self.saved_files['classification'] = {
             'path': filepath,
-            'url': f"file://{filepath}",
+            'url': f"local://{relative_path}",  # Use local:// protocol
+            'relative_path': relative_path,
             'size_mb': file_size
         }
-        return filepath, f"file://{filepath}"
+        return filepath, f"local://{relative_path}"
     
     def save_siamese_model(self, model: keras.Model) -> Tuple[str, str]:
         """Save siamese model locally"""
@@ -74,12 +82,16 @@ class LocalModelSaver:
         file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
         logger.info(f"✅ Local siamese model saved: {filepath} ({file_size:.2f} MB in {save_time:.2f}s)")
         
+        # Store relative path for database compatibility
+        relative_path = os.path.relpath(filepath, os.getcwd())
+        
         self.saved_files['siamese'] = {
             'path': filepath,
-            'url': f"file://{filepath}",
+            'url': f"local://{relative_path}",  # Use local:// protocol
+            'relative_path': relative_path,
             'size_mb': file_size
         }
-        return filepath, f"file://{filepath}"
+        return filepath, f"local://{relative_path}"
     
     def save_mappings(self, student_to_id: Dict, id_to_student: Dict) -> Tuple[str, str]:
         """Save mappings locally"""
@@ -101,12 +113,16 @@ class LocalModelSaver:
         file_size = os.path.getsize(filepath) / 1024  # KB
         logger.info(f"✅ Local mappings saved: {filepath} ({file_size:.2f} KB in {save_time:.2f}s)")
         
+        # Store relative path for database compatibility
+        relative_path = os.path.relpath(filepath, os.getcwd())
+        
         self.saved_files['mappings'] = {
             'path': filepath,
-            'url': f"file://{filepath}",
+            'url': f"local://{relative_path}",  # Use local:// protocol
+            'relative_path': relative_path,
             'size_kb': file_size
         }
-        return filepath, f"file://{filepath}"
+        return filepath, f"local://{relative_path}"
     
     def get_saved_files(self) -> Dict[str, Dict[str, str]]:
         """Get all saved files with their paths and URLs"""

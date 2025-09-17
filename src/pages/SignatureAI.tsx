@@ -113,6 +113,7 @@ const SignatureAI = () => {
   const [verificationFile, setVerificationFile] = useState<File | null>(null);
   const [verificationPreview, setVerificationPreview] = useState<string>('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [useLocalModels, setUseLocalModels] = useState(false);
   const [verificationResult, setVerificationResult] = useState<{
     success: boolean;
     match: boolean;
@@ -999,7 +1000,7 @@ const SignatureAI = () => {
     setVerificationResult(null);
 
     try {
-      const result = await aiService.verifySignature(verificationFile);
+      const result = await aiService.verifySignature(verificationFile, undefined, useLocalModels);
       setVerificationResult(result);
       
       if (result.success) {
@@ -1578,6 +1579,18 @@ const SignatureAI = () => {
                     <CardDescription>
                       Upload or capture a signature to verify against trained models
                     </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="use-local-models"
+                      checked={useLocalModels}
+                      onChange={(e) => setUseLocalModels(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    <Label htmlFor="use-local-models" className="text-sm">
+                      🏠 Use Local Models
+                    </Label>
                   </div>
                 </div>
               </CardHeader>

@@ -223,7 +223,8 @@ async def _load_cached_centroids(latest_global: dict) -> dict | None:
 
 @router.post("/identify")
 async def identify_signature_owner(
-    test_file: UploadFile = File(...)
+    test_file: UploadFile = File(...),
+    use_local_models: bool = Form(False)
 ):
     """
     AI-powered signature identification with real deep learning
@@ -269,8 +270,15 @@ async def identify_signature_owner(
                         continue
                         
                     try:
-                        # Load model from S3 or Supabase
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                        # Load model from S3, local storage, or Supabase
+                        if model_path.startswith('local://') or (not model_path.startswith('http') and not model_path.startswith('s3://')):
+                            # Load from local storage
+                            from utils.local_model_loader import load_model_from_local_path
+                            model = load_model_from_local_path(model_path)
+                            if model is None:
+                                logger.error(f"Failed to load local model: {model_path}")
+                                continue
+                        elif model_path.startswith('https://') and 'amazonaws.com' in model_path:
                             # Download model from S3
                             import requests
                             import tempfile
@@ -1187,8 +1195,15 @@ async def verify_signature(
                         continue
                         
                     try:
-                        # Load model from S3 or Supabase
-                        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                        # Load model from S3, local storage, or Supabase
+                        if model_path.startswith('local://') or (not model_path.startswith('http') and not model_path.startswith('s3://')):
+                            # Load from local storage
+                            from utils.local_model_loader import load_model_from_local_path
+                            model = load_model_from_local_path(model_path)
+                            if model is None:
+                                logger.error(f"Failed to load local model: {model_path}")
+                                continue
+                        elif model_path.startswith('https://') and 'amazonaws.com' in model_path:
                             # Download model from S3
                             import requests
                             import tempfile

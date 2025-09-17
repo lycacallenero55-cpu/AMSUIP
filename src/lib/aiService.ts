@@ -253,7 +253,8 @@ export class AIService {
    */
   async verifySignature(
     imageFile: File,
-    sessionId?: number
+    sessionId?: number,
+    useLocalModels?: boolean
   ): Promise<AIVerificationResponse> {
     try {
       const formData = new FormData();
@@ -262,6 +263,9 @@ export class AIService {
       
       if (sessionId) {
         formData.append('session_id', sessionId.toString());
+      }
+      if (useLocalModels) {
+        formData.append('use_local_models', 'true');
       }
 
       const response = await fetch(`${this.baseUrl}/api/verification/identify`, {
