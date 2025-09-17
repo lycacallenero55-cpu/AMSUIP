@@ -802,25 +802,24 @@ async def start_gpu_training(
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files] if forged_files else []
             
+            # Route all GPU/global flows through global training (global-only requirement)
             if use_gpu and gpu_training_manager.is_available():
-                # Use GPU training
-                asyncio.create_task(run_gpu_training(job, student, genuine_data, forged_data, use_s3_upload))
+                asyncio.create_task(run_global_gpu_training(job, [student_ids[0]], genuine_data, forged_data, use_s3_upload))
                 return {
                     "success": True, 
                     "job_id": job.job_id, 
-                    "message": "GPU training job started", 
+                    "message": "Global GPU training job started", 
                     "stream_url": f"/api/progress/stream/{job.job_id}",
-                    "training_type": "gpu"
+                    "training_type": "global_gpu"
                 }
             else:
-                # Use local CPU training
-                asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
+                asyncio.create_task(run_global_async_training(job, [student_ids[0]], genuine_data, forged_data, use_s3_upload))
                 return {
                     "success": True, 
                     "job_id": job.job_id, 
-                    "message": "Local training job started", 
+                    "message": "Global local training job started", 
                     "stream_url": f"/api/progress/stream/{job.job_id}",
-                    "training_type": "local"
+                    "training_type": "global_local"
                 }
         
         else:
@@ -1221,7 +1220,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 "forged_count": int(total_forged),
                 "student_count": len(students),
                 "training_date": datetime.utcnow().isoformat(),
-                "accuracy": accuracy,  # Store actual GPU training accuracy
+                "accuracy": accuracy if isinstance(accuracy, (int, float)) else 0.0,
                 "training_metrics": {
                     'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
@@ -1243,21 +1242,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 "model_urls": gpu_result['model_urls']
             }
 
-            # Hybrid: also train individual models locally from the same preprocessed arrays (before completing job)
-            individual_count = 0
-            try:
-                for s in students:
-                    sid = int(s["id"])  # type: ignore[index]
-                    bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                    if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None, use_s3_upload=use_s3_upload)
-                        individual_count += 1
-            except Exception as e:
-                logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
-
+            # Per requirements: do NOT train individual per-student models here
             if job:
-                result["individual_models_created"] = individual_count
-                job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+                job_queue.update_job_progress(job.job_id, 98.0, "Saved global model")
                 job_queue.complete_job(job.job_id, result)
         else:
             error_msg = gpu_result.get('error', 'Unknown GPU training error')
@@ -1389,35 +1376,9 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data,
             "training_samples": int(total_genuine + total_forged)
         }
         
-        # Hybrid: also train and store individual models from the already preprocessed arrays (before completing job)
-        individual_count = 0
-        logger.info(f"Starting individual training for {len(students)} students")
-        try:
-            for i, s in enumerate(students):
-                sid = int(s["id"])  # type: ignore[index]
-                student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
-                bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                logger.info(f"Processing student {i+1}/{len(students)}: {student_name} (ID: {sid}) with {len(bucket['genuine_images'])} genuine images")
-                
-                if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                    try:
-                        global_model_id = int(model_record.get("id")) if model_record and isinstance(model_record, dict) else None
-                        logger.info(f"Starting individual training for {student_name}")
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=global_model_id, use_s3_upload=use_s3_upload)
-                        individual_count += 1
-                        logger.info(f"✅ Completed individual training for {student_name}")
-                    except Exception as student_error:
-                        logger.error(f"❌ Individual training failed for {student_name}: {student_error}")
-                        # Continue with next student instead of failing completely
-                        continue
-                else:
-                    logger.warning(f"⚠️ Skipping {student_name} - no genuine images available")
-        except Exception as e:
-            logger.warning(f"Hybrid individual training (post-global local) encountered an error: {e}")
-
+        # Per requirements: do NOT train per-student models in global flow
         if job:
-            result["individual_models_created"] = individual_count
-            job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+            job_queue.update_job_progress(job.job_id, 98.0, "Saved global model")
             job_queue.complete_job(job.job_id, result)
             
     except Exception as e:

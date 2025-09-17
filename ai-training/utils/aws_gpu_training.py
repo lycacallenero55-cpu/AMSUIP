@@ -428,7 +428,8 @@ echo "Instance setup completed at $(date)"
             return 'N/A'
     
     async def _upload_training_data(self, training_data: Dict, job_id: str) -> str:
-        """Upload training data to S3"""
+        """Upload training data to S3 (gzip-compressed to reduce time)."""
+        import gzip
         # Convert images to serializable format
         serializable_data = {}
         for student_name, signatures in training_data.items():
@@ -449,13 +450,16 @@ echo "Instance setup completed at $(date)"
                     'forged': []
                 }
         
-        # Upload to S3
-        key = f'training_data/{job_id}.json'
+        # Upload to S3 (gzip)
+        payload = json.dumps(serializable_data).encode('utf-8')
+        compressed = gzip.compress(payload)
+        key = f'training_data/{job_id}.json.gz'
         self.s3_client.put_object(
             Bucket=self.s3_bucket,
             Key=key,
-            Body=json.dumps(serializable_data),
-            ContentType='application/json'
+            Body=compressed,
+            ContentType='application/json',
+            ContentEncoding='gzip'
         )
         
         logger.info(f"Uploaded training data to s3://{self.s3_bucket}/{key}")
@@ -524,9 +528,9 @@ if gpus:
     try:
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
-        print(f"Found {{len(gpus)}} GPU(s), using GPU acceleration")
+        print(f"Found {len(gpus)} GPU(s), using GPU acceleration")
     except RuntimeError as e:
-        print(f"GPU setup error: {{e}}")
+        print(f"GPU setup error: {e}")
 else:
     print("No GPU found, using CPU")
 
@@ -537,39 +541,56 @@ def train_on_gpu(training_data_key, job_id, student_id):
         s3 = boto3.client('s3')
         bucket = '{self.s3_bucket}'
         
-        print(f"Starting REAL training for job {{job_id}}")
+        print(f"Starting REAL training for job {job_id}")
         
-        # Download training data from S3
-        print(f"Downloading training data from s3://{{bucket}}/{{training_data_key}}")
-        s3.download_file(bucket, training_data_key, '/tmp/training_data.json')
+        # Download training data from S3 (supports gzip)
+        print(f"Downloading training data from s3://{bucket}/{training_data_key}")
+        local_path = '/tmp/training_data.json'
+        if training_data_key.endswith('.gz'):
+            local_path += '.gz'
+        s3.download_file(bucket, training_data_key, local_path)
         
-        with open('/tmp/training_data.json', 'r') as f:
-            training_data = json.load(f)
+        if local_path.endswith('.gz'):
+            import gzip
+            with gzip.open(local_path, 'rb') as f:
+                training_data = json.loads(f.read().decode('utf-8'))
+        else:
+            with open(local_path, 'r') as f:
+                training_data = json.load(f)
         
-        print(f"Loaded training data for {{len(training_data)}} students")
+        print(f"Loaded training data for {len(training_data)} students")
         
         # Install required packages
         print("Installing required packages...")
         os.system("pip install tensorflow pillow numpy scikit-learn")
         
-        # Import training modules
-        sys.path.append('/home/ubuntu/ai-training')
-        try:
-            from models.signature_embedding_model import SignatureEmbeddingModel
-            from utils.signature_preprocessing import SignaturePreprocessor
-            print("Successfully imported training modules")
-        except ImportError as e:
-            print(f"Import error: {{e}}")
-            # Fallback: create a simple model
-            print("Creating fallback model...")
-            
+        # Self-contained preprocessor to avoid import errors
+        class _Preproc:
+            def __init__(self, target_size=224):
+                self.target_size = target_size
+            def preprocess_signature(self, img):
+                if isinstance(img, Image.Image):
+                    img = np.array(img)
+                if img.ndim == 2:
+                    img = np.stack([img]*3, axis=-1)
+                if img.shape[-1] == 4:
+                    img = img[:, :, :3]
+                img = img.astype(np.float32)
+                if img.max() > 1.0:
+                    img = img / 255.0
+                from PIL import Image as _PIL
+                pil = _PIL.fromarray((img*255).astype(np.uint8))
+                pil = pil.resize((224, 224))
+                out = np.array(pil).astype(np.float32) / 255.0
+                return out
+        
         # Process training data
         print("Processing training data...")
-        processed_data = {{}}
-        preprocessor = SignaturePreprocessor(target_size=(224, 224))
+        processed_data = {}
+        preprocessor = _Preproc(target_size=224)
         
         for student_name, data in training_data.items():
-            print(f"Processing {{student_name}}...")
+            print(f"Processing {student_name}...")
             genuine_images = []
             forged_images = []
             
@@ -584,12 +605,12 @@ def train_on_gpu(training_data_key, job_id, student_id):
                         img = Image.open(io.BytesIO(img_bytes))
                     else:
                         # Already processed array
-                        img = Image.fromarray((img_data * 255).astype(np.uint8))
+                        img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
                     
                     processed_img = preprocessor.preprocess_signature(img)
                     genuine_images.append(processed_img)
                 except Exception as e:
-                    print(f"Error processing image: {{e}}")
+                    print(f"Error processing image: {e}")
                     continue
             
             # Process forged images
@@ -600,105 +621,116 @@ def train_on_gpu(training_data_key, job_id, student_id):
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(io.BytesIO(img_bytes))
                     else:
-                        img = Image.fromarray((img_data * 255).astype(np.uint8))
+                        img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
                     
                     processed_img = preprocessor.preprocess_signature(img)
                     forged_images.append(processed_img)
                 except Exception as e:
-                    print(f"Error processing forged image: {{e}}")
+                    print(f"Error processing forged image: {e}")
                     continue
             
-            processed_data[student_name] = {{
+            processed_data[student_name] = {
                 'genuine': genuine_images,
                 'forged': forged_images
-            }}
-            print(f"{{student_name}}: {{len(genuine_images)}} genuine, {{len(forged_images)}} forged")
+            }
+            print(f"{student_name}: {len(genuine_images)} genuine, {len(forged_images)} forged")
         
-        # Train the model
+        # Train a simple real classifier (MobileNetV2 backbone)
         print("Starting model training...")
-        model_manager = SignatureEmbeddingModel(max_students=150)
-        
-        # Train with progress updates
-        training_result = model_manager.train_models(processed_data, epochs=25)
-        
+        classes = sorted(list(processed_data.keys()))
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        X, y = [], []
+        for cname, data in processed_data.items():
+            for img in data.get('genuine', []):
+                X.append(img)
+                y.append(class_to_idx[cname])
+        X = np.array(X, dtype=np.float32)
+        y = np.array(y, dtype=np.int64)
+        from sklearn.model_selection import train_test_split
+        if len(np.unique(y)) > 1 and len(y) > 4:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+        else:
+            X_train, X_val, y_train, y_val = X, X, y, y
+        base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+        base.trainable = False
+        inputs = keras.Input(shape=(224,224,3))
+        x = keras.applications.mobilenet_v2.preprocess_input(inputs)
+        x = base(x, training=False)
+        x = keras.layers.GlobalAveragePooling2D()(x)
+        x = keras.layers.Dense(256, activation='relu')(x)
+        outputs = keras.layers.Dense(len(classes), activation='softmax')(x)
+        model = keras.Model(inputs, outputs)
+        model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+        hist = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=15, batch_size=16, verbose=1)
+
         print("Training completed! Saving models...")
         
         # Save models to temporary directory
-        temp_dir = f'/tmp/{{job_id}}_models'
+        temp_dir = f'/tmp/{job_id}_models'
         os.makedirs(temp_dir, exist_ok=True)
         
-        # Save all models
-        model_manager.save_models(f'{{temp_dir}}/signature_model')
-        
-        # Upload models to S3
-        model_files = ['embedding', 'classification', 'siamese']
-        model_urls = {{}}
-        
-        for model_type in model_files:
-            file_path = f'{{temp_dir}}/signature_model_{{model_type}}.keras'
-            if os.path.exists(file_path):
-                s3_key = f'models/{{job_id}}/{{model_type}}.keras'
-                s3.upload_file(file_path, bucket, s3_key)
-                model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-                print(f"Uploaded {{model_type}} model to S3")
+        # Save only the global classification model
+        model_urls = {}
+        cls_path = f'{temp_dir}/global_classification.keras'
+        model.save(cls_path)
+        s3_key = f'models/{job_id}/classification.keras'
+        s3.upload_file(cls_path, bucket, s3_key)
+        model_urls['classification'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+        print("Uploaded classification model to S3")
         
         # Save mappings
-        mappings = {{
+        mappings = {
             'student_id': student_id,
-            'students': list(training_data.keys()),
-            'student_to_id': model_manager.student_to_id,
-            'id_to_student': model_manager.id_to_student
-        }}
-        mappings_path = f'/tmp/{{job_id}}_mappings.json'
+            'students': classes,
+            'class_to_idx': class_to_idx
+        }
+        mappings_path = f'/tmp/{job_id}_mappings.json'
         with open(mappings_path, 'w') as f:
             json.dump(mappings, f)
         
-        s3_key = f'models/{{job_id}}/mappings.json'
+        s3_key = f'models/{job_id}/mappings.json'
         s3.upload_file(mappings_path, bucket, s3_key)
-        model_urls['mappings'] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
+        model_urls['mappings'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
         
-        # Extract training metrics
-        classification_history = training_result.get('classification_history', {{}})
-        siamese_history = training_result.get('siamese_history', {{}})
-        
-        # Calculate final accuracy
-        final_accuracy = None
-        if classification_history.get('accuracy'):
-            final_accuracy = float(classification_history['accuracy'][-1])
-        elif classification_history.get('val_accuracy'):
-            final_accuracy = float(classification_history['val_accuracy'][-1])
-        elif siamese_history.get('accuracy'):
-            final_accuracy = float(siamese_history['accuracy'][-1])
+        # Calculate final accuracy (always numeric)
+        final_accuracy = 0.0
+        try:
+            if hist.history.get('val_accuracy'):
+                final_accuracy = float(hist.history['val_accuracy'][-1])
+            elif hist.history.get('accuracy'):
+                final_accuracy = float(hist.history['accuracy'][-1])
+        except Exception:
+            final_accuracy = 0.0
         
         # Save training results
-        results = {{
+        results = {
             'job_id': job_id,
             'student_id': student_id,
             'model_urls': model_urls,
             'accuracy': final_accuracy,
-            'training_metrics': {{
+            'training_metrics': {
                 'accuracy': final_accuracy,
-                'classification_history': classification_history,
-                'siamese_history': siamese_history,
-                'epochs_trained': len(classification_history.get('loss', [])),
-                'final_loss': float(classification_history.get('loss', [0])[-1]) if classification_history.get('loss') else None,
-                'val_accuracy': float(classification_history.get('val_accuracy', [0])[-1]) if classification_history.get('val_accuracy') else None,
-                'val_loss': float(classification_history.get('val_loss', [0])[-1]) if classification_history.get('val_loss') else None
-            }}
-        }}
+                'epochs_trained': len(hist.history.get('loss', [])),
+                'final_loss': float(hist.history.get('loss', [0])[-1]) if hist.history.get('loss') else 0.0,
+                'val_accuracy': float(hist.history.get('val_accuracy', [0])[-1]) if hist.history.get('val_accuracy') else 0.0,
+                'val_loss': float(hist.history.get('val_loss', [0])[-1]) if hist.history.get('val_loss') else 0.0
+            }
+        }
         
         results_path = '/tmp/training_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f)
         
-        s3.upload_file(results_path, bucket, f'training_results/{{job_id}}.json')
-        print(f"Training completed successfully for job {{job_id}}! Final accuracy: {{final_accuracy}}")
+        s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
+        print(f"Training completed successfully for job {job_id}! Final accuracy: {final_accuracy}")
         
         # Cleanup
         shutil.rmtree(temp_dir, ignore_errors=True)
         
     except Exception as e:
-        print(f"Training failed: {{str(e)}}")
+        print(f"Training failed: {str(e)}")
         traceback.print_exc()
         raise
 
@@ -1000,6 +1032,7 @@ echo "SSM agent installation/restart attempted at $(date)" >> /var/log/ssm-insta
 """
             
             # Update instance user data
+            import base64
             encoded_script = base64.b64encode(ssm_install_script.encode()).decode()
             
             # Note: This requires stopping the instance first
