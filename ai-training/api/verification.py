@@ -408,14 +408,24 @@ async def identify_signature_owner(
                             spec_local = None
                             try:
                                 if base_url:
-                                    # Try to fetch spec
-                                    spec_url = f"{base_url}/classifier_spec.json"
-                                    spec_resp = _rq.get(spec_url, timeout=15)
+                                    # Build S3 keys and presign both spec and weights
+                                    after = model_url.split('amazonaws.com/', 1)[-1]
+                                    folder = after.rsplit('/', 1)[0]
+                                    spec_key = f"{folder}/classifier_spec.json"
+                                    weights_key = f"{folder}/classification.weights.h5"
+                                    try:
+                                        from utils.s3_storage import create_presigned_get as _presign
+                                        spec_url = _presign(spec_key, expires_seconds=3600)
+                                        weights_url = _presign(weights_key, expires_seconds=3600)
+                                    except Exception:
+                                        spec_url = f"{base_url}/classifier_spec.json"
+                                        weights_url = f"{base_url}/classification.weights.h5"
+                                    # Fetch spec
+                                    spec_resp = _rq.get(spec_url, timeout=30)
                                     spec_resp.raise_for_status()
                                     spec_data = spec_resp.json()
-                                    # Try to fetch weights
-                                    weights_url = f"{base_url}/classification.weights.h5"
-                                    w_resp = _rq.get(weights_url, timeout=60)
+                                    # Fetch weights
+                                    w_resp = _rq.get(weights_url, timeout=120)
                                     w_resp.raise_for_status()
                                     with _tf.NamedTemporaryFile(suffix='.h5', delete=False) as tmpw:
                                         tmpw.write(w_resp.content)
