@@ -785,7 +785,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
         temp_dir = f'/tmp/{job_id}_models'
         os.makedirs(temp_dir, exist_ok=True)
 
-        # Stronger model with regularization and richer augmentation
+        # Transfer learning model: MobileNetV2 backbone + classifier head
         from tensorflow.keras import regularizers
         aug = keras.Sequential([
             keras.layers.RandomFlip('horizontal'),
@@ -795,19 +795,12 @@ def train_on_gpu(training_data_key, job_id, student_id):
             keras.layers.RandomContrast(0.1)
         ])
         l2 = regularizers.l2(1e-4)
+        base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+        base.trainable = False  # phase 1: freeze backbone
         inputs = keras.Input(shape=(224,224,3))
         x = aug(inputs)
-        x = keras.layers.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
-        x = keras.layers.BatchNormalization()(x)
-        x = keras.layers.MaxPooling2D(2)(x)
-        x = keras.layers.Conv2D(64, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
-        x = keras.layers.BatchNormalization()(x)
-        x = keras.layers.MaxPooling2D(2)(x)
-        x = keras.layers.Conv2D(128, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
-        x = keras.layers.BatchNormalization()(x)
-        x = keras.layers.MaxPooling2D(2)(x)
-        x = keras.layers.Conv2D(256, 3, padding='same', activation='relu', kernel_regularizer=l2)(x)
-        x = keras.layers.BatchNormalization()(x)
+        x = keras.applications.mobilenet_v2.preprocess_input(x)
+        x = base(x, training=False)
         x = keras.layers.GlobalAveragePooling2D()(x)
         x = keras.layers.Dropout(0.5)(x)
         x = keras.layers.Dense(512, activation='relu', kernel_regularizer=l2)(x)
@@ -848,16 +841,42 @@ def train_on_gpu(training_data_key, job_id, student_id):
                 keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=5, restore_best_weights=True),
                 keras.callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', mode='max', save_best_only=True, save_weights_only=False)
             ]
+            # Phase 1: train head only
+            print("Phase 1: training classifier head with frozen backbone...")
             hist = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val if len(X_val)>0 else y_train),
-                epochs=30,
+                epochs=10,
                 batch_size=16,
                 verbose=0,
                 shuffle=True,
                 class_weight=class_weight,
                 callbacks=callbacks
             )
+
+            # Phase 2: fine-tune last blocks
+            print("Phase 2: fine-tuning last backbone blocks...")
+            try:
+                # Unfreeze last 30 layers
+                for layer in base.layers[-30:]:
+                    if not isinstance(layer, keras.layers.BatchNormalization):
+                        layer.trainable = True
+                model.compile(optimizer=keras.optimizers.Adam(1e-4), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+                hist2 = model.fit(
+                    X_train, y_train,
+                    validation_data=(X_val, y_val if len(X_val)>0 else y_train),
+                    epochs=20,
+                    batch_size=16,
+                    verbose=0,
+                    shuffle=True,
+                    class_weight=class_weight,
+                    callbacks=callbacks
+                )
+                # Merge histories for final reporting
+                for k, v in hist2.history.items():
+                    hist.history.setdefault(k, []).extend(v)
+            except Exception as e:
+                print(f"Fine-tuning skipped due to error: {e}")
 
         print("Training completed! Saving models...")
         

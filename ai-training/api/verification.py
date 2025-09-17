@@ -392,46 +392,8 @@ async def identify_signature_owner(
                         try:
                             classifier = keras.models.load_model(model_path_local, compile=False)
                         except Exception as load_err:
-                            logger.warning(f"Keras model load failed, trying weights-only path: {load_err}")
-                            # Rebuild simple CNN classifier and load weights
-                            # Determine exact number of classes from mappings
-                            num_classes = None
-                            if inferred_num_classes:
-                                num_classes = inferred_num_classes
-                            elif class_to_idx:
-                                num_classes = max(2, len(class_to_idx))
-                            elif id_to_name:
-                                num_classes = max(2, len(id_to_name))
-                            elif id_to_student:
-                                num_classes = max(2, len(id_to_student))
-                            else:
-                                num_classes = 2
-                            import tensorflow as tf
-                            import numpy as _np
-                            import random as _random
-                            tf.random.set_seed(42)
-                            _np.random.seed(42)
-                            _random.seed(42)
-                            inputs = tf.keras.Input(shape=(224, 224, 3))
-                            x = tf.keras.layers.Conv2D(32, 3, activation='relu')(inputs)
-                            x = tf.keras.layers.BatchNormalization()(x)
-                            x = tf.keras.layers.MaxPooling2D(2)(x)
-                            x = tf.keras.layers.Conv2D(64, 3, activation='relu')(x)
-                            x = tf.keras.layers.BatchNormalization()(x)
-                            x = tf.keras.layers.MaxPooling2D(2)(x)
-                            x = tf.keras.layers.Conv2D(128, 3, activation='relu')(x)
-                            x = tf.keras.layers.BatchNormalization()(x)
-                            x = tf.keras.layers.GlobalAveragePooling2D()(x)
-                            x = tf.keras.layers.Dropout(0.5)(x)
-                            x = tf.keras.layers.Dense(256, activation='relu')(x)
-                            x = tf.keras.layers.Dropout(0.3)(x)
-                            outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
-                            classifier = tf.keras.Model(inputs, outputs)
-                            try:
-                                # Be tolerant to minor naming/version diffs
-                                classifier.load_weights(model_path_local, by_name=True, skip_mismatch=True)
-                            except Exception as werr:
-                                raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
+                            # Hard fail to avoid mismatched architecture random predictions
+                            raise RuntimeError(f"Failed to load full model: {load_err}")
                         # Preprocess and predict (use trainer-aligned pipeline)
                         arr = _classifier_preprocess(test_image)
                         import numpy as np
