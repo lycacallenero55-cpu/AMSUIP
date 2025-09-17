@@ -274,6 +274,14 @@ async def identify_signature_owner(
                     id_to_name = {}
                     try:
                         if mappings_url:
+                            # If mappings is on S3, presign access just like model
+                            if 'amazonaws.com' in mappings_url:
+                                try:
+                                    mkey = mappings_url.split('amazonaws.com/', 1)[-1]
+                                    from utils.s3_storage import create_presigned_get as _presign
+                                    mappings_url = _presign(mkey, expires_seconds=3600)
+                                except Exception:
+                                    pass
                             mresp = requests.get(mappings_url, timeout=15)
                             mresp.raise_for_status()
                             mdata = mresp.json()
@@ -283,9 +291,24 @@ async def identify_signature_owner(
                             if mdata.get('id_to_student_name'):
                                 id_to_name = {int(k): str(v) for k, v in (mdata.get('id_to_student_name') or {}).items()}
                             # Backward compatibility
-                            if not id_to_name and isinstance(mdata.get('students'), list):
-                                names = mdata['students']
-                                id_to_name = {int(i): str(n) for i, n in enumerate(names)}
+                            if isinstance(mdata.get('students'), list):
+                                students_list = mdata['students']
+                                # Parse possible "id:name" entries to fill both maps when explicit maps are absent
+                                parsed_any = False
+                                for i, s in enumerate(students_list):
+                                    try:
+                                        if isinstance(s, str) and ':' in s:
+                                            sid_str, sname = s.split(':', 1)
+                                            sid_val = int(sid_str)
+                                            id_to_student.setdefault(i, sid_val)
+                                            id_to_name.setdefault(i, sname.strip())
+                                            parsed_any = True
+                                        else:
+                                            id_to_name.setdefault(i, str(s))
+                                    except Exception:
+                                        id_to_name.setdefault(i, str(s))
+                                if (not id_to_name) and (not parsed_any):
+                                    id_to_name = {int(i): str(n) for i, n in enumerate(students_list)}
                     except Exception:
                         id_to_student = {}
                     try:
