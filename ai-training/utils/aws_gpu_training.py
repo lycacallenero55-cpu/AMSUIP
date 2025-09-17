@@ -716,13 +716,20 @@ def train_on_gpu(training_data_key, job_id, student_id):
         else:
             X_train, X_val, y_train, y_val = X, X, y, y
         
-        base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
-        base.trainable = False
+        # Create a simple but effective classifier
         inputs = keras.Input(shape=(224,224,3))
-        x = keras.applications.mobilenet_v2.preprocess_input(inputs)
-        x = base(x, training=False)
+        x = keras.layers.Conv2D(32, 3, activation='relu')(inputs)
+        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.MaxPooling2D(2)(x)
+        x = keras.layers.Conv2D(64, 3, activation='relu')(x)
+        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.MaxPooling2D(2)(x)
+        x = keras.layers.Conv2D(128, 3, activation='relu')(x)
+        x = keras.layers.BatchNormalization()(x)
         x = keras.layers.GlobalAveragePooling2D()(x)
+        x = keras.layers.Dropout(0.5)(x)
         x = keras.layers.Dense(256, activation='relu')(x)
+        x = keras.layers.Dropout(0.3)(x)
         outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
         model = keras.Model(inputs, outputs)
         model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
@@ -756,7 +763,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
         
         # Save only the global classification model
         model_urls = {}
-        cls_path = f'{temp_dir}/global_classification.keras'
+        cls_path = f'{temp_dir}/classification.keras'
         model.save(cls_path)
         s3_key = f'models/{job_id}/classification.keras'
         s3.upload_file(cls_path, bucket, s3_key)

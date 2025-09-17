@@ -279,13 +279,24 @@ async def identify_signature_owner(
                             classifier = keras.models.load_model(model_path_local, compile=False)
                         except Exception as load_err:
                             logger.warning(f"Keras model load failed, trying weights-only path: {load_err}")
-                            # Rebuild MobileNetV2 classifier and load weights
+                            # Rebuild simple CNN classifier and load weights
                             num_classes = max(2, len(id_to_student) or 2)
                             import tensorflow as tf
-                            base = tf.keras.applications.MobileNetV2(include_top=False, weights=None, input_shape=(settings.MODEL_IMAGE_SIZE, settings.MODEL_IMAGE_SIZE, 3))
-                            x = tf.keras.layers.GlobalAveragePooling2D()(base.output)
-                            out = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
-                            classifier = tf.keras.Model(inputs=base.input, outputs=out)
+                            inputs = tf.keras.Input(shape=(224, 224, 3))
+                            x = tf.keras.layers.Conv2D(32, 3, activation='relu')(inputs)
+                            x = tf.keras.layers.BatchNormalization()(x)
+                            x = tf.keras.layers.MaxPooling2D(2)(x)
+                            x = tf.keras.layers.Conv2D(64, 3, activation='relu')(x)
+                            x = tf.keras.layers.BatchNormalization()(x)
+                            x = tf.keras.layers.MaxPooling2D(2)(x)
+                            x = tf.keras.layers.Conv2D(128, 3, activation='relu')(x)
+                            x = tf.keras.layers.BatchNormalization()(x)
+                            x = tf.keras.layers.GlobalAveragePooling2D()(x)
+                            x = tf.keras.layers.Dropout(0.5)(x)
+                            x = tf.keras.layers.Dense(256, activation='relu')(x)
+                            x = tf.keras.layers.Dropout(0.3)(x)
+                            outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+                            classifier = tf.keras.Model(inputs, outputs)
                             try:
                                 # Be tolerant to minor naming/version diffs
                                 classifier.load_weights(model_path_local, by_name=True, skip_mismatch=True)
@@ -310,7 +321,7 @@ async def identify_signature_owner(
                             "authenticity_score": 0.0,
                             "is_unknown": False,
                             "model_type": "global_classifier",
-                            "ai_architecture": "mobilenet_v2_classifier",
+                            "ai_architecture": "simple_cnn_classifier",
                             "success": True,
                             "decision": "match",
                             "candidates": [
@@ -1319,7 +1330,7 @@ async def verify_signature(
                             "is_genuine": True,
                             "is_unknown": False,
                             "model_type": "global_classifier",
-                            "ai_architecture": "mobilenet_v2_classifier",
+                            "ai_architecture": "simple_cnn_classifier",
                             "success": True,
                             "message": "Match found" if is_correct_student else "No match found",
                             "decision": "match" if is_correct_student else "no_match",
