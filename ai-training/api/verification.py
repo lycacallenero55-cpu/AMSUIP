@@ -240,7 +240,11 @@ async def identify_signature_owner(
             latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
             if latest_global and latest_global.get("status") == "completed" and latest_global.get("model_path"):
                 model_url = latest_global.get("model_path")
-                mappings_url = latest_global.get("mappings_path") or latest_global.get("mappings_url")
+                mappings_url = (
+                    latest_global.get("mappings_path")
+                    or latest_global.get("mappings_url")
+                    or (latest_global.get("training_metrics") or {}).get("mappings_path")
+                )
                 if model_url.startswith('https://') and 'amazonaws.com' in model_url:
                     # Download model via presigned GET
                     s3_key = model_url.split('amazonaws.com/')[-1]
@@ -311,6 +315,15 @@ async def identify_signature_owner(
                         predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
                         # Map back to student id if available in mappings
                         predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
+                        # Fallback: resolve ID by name from DB if mapping lacks IDs
+                        if (predicted_id == 0) and predicted_name and not predicted_name.startswith("class_"):
+                            try:
+                                student_response = await db_manager.client.table("students").select("id").eq("name", predicted_name).limit(1).execute()
+                                if getattr(student_response, 'data', None):
+                                    predicted_id = int(student_response.data[0]['id'])
+                                    logger.info(f"Resolved student ID {predicted_id} for name {predicted_name} via DB fallback.")
+                            except Exception as db_e:
+                                logger.warning(f"Failed to resolve student ID for {predicted_name} from DB: {db_e}")
                         return {
                             "predicted_student": {"id": predicted_id, "name": predicted_name},
                             "is_match": True,

@@ -1234,7 +1234,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                     'training_method': 'aws_gpu_instance',
                     'instance_type': 'g4dn.xlarge',
                     'gpu_acceleration': True,
-                    'gpu_accuracy': gpu_accuracy
+                    'gpu_accuracy': gpu_accuracy,
+                    # Duplicate mappings url inside metrics for backward-compat tables lacking top-level column
+                    'mappings_path': (gpu_result.get('model_urls') or {}).get('mappings', None)
                 }
             })
 
