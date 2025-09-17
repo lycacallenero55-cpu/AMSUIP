@@ -267,9 +267,14 @@ async def identify_signature_owner(
                         from utils.s3_storage import create_presigned_get as _presign
                         centroids_url = _presign(f"{folder}/centroids.json", expires_seconds=3600)
                         emb_spec_url = _presign(f"{folder}/embedding_spec.json", expires_seconds=3600)
+                        # Ensure mappings URL is available and presigned
+                        if not mappings_url:
+                            mappings_url = _presign(f"{folder}/mappings.json", expires_seconds=3600)
                         import requests as _rq
                         c_resp = _rq.get(centroids_url, timeout=30); c_resp.raise_for_status()
-                        centroids_data = c_resp.json()
+                        centroids_raw = c_resp.json()
+                        # Support both formats: {"idx_to_centroid": {"0": [...]}} or {"0": [...]}
+                        centroids_dict = centroids_raw.get('idx_to_centroid') if isinstance(centroids_raw, dict) and 'idx_to_centroid' in centroids_raw else centroids_raw
                         s_resp = _rq.get(emb_spec_url, timeout=30); s_resp.raise_for_status()
                         # Ensure mappings are loaded for exact id/name
                         id_to_student = id_to_student or {}
@@ -284,6 +289,21 @@ async def identify_signature_owner(
                                     id_to_name = {int(k): str(v) for k, v in (mdata2.get('id_to_student_name') or {}).items()}
                                 if (not id_to_name) and isinstance(mdata2.get('students'), list):
                                     id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['students'])}
+                                if (not id_to_name) and isinstance(mdata2.get('classes'), list):
+                                    # Fallback: parse "id:name" strings
+                                    tmp = {}
+                                    for i, entry in enumerate(mdata2['classes']):
+                                        if isinstance(entry, str) and ':' in entry:
+                                            parts = entry.split(':', 1)
+                                            try:
+                                                sid = int(parts[0]); name = parts[1].strip()
+                                                id_to_student[i] = sid; tmp[i] = name
+                                            except Exception:
+                                                tmp[i] = entry
+                                        else:
+                                            tmp[i] = str(entry)
+                                    if tmp:
+                                        id_to_name = tmp
                             except Exception:
                                 pass
                         # Define classifier-aligned preprocessing (signature preprocessor)
@@ -358,9 +378,11 @@ async def identify_signature_owner(
                         vn = _np.linalg.norm(vec) + 1e-8
                         vec = vec / vn
                         best_idx = -1; best_sim = -1.0
-                        for k, centroid in (centroids_data.get('idx_to_centroid') or {}).items():
+                        for k, centroid in (centroids_dict or {}).items():
                             ci = int(k)
                             c = _np.array(centroid, dtype=_np.float32)
+                            cn = _np.linalg.norm(c) + 1e-8
+                            c = c / cn
                             sim = float(_np.dot(vec, c))
                             if sim > best_sim:
                                 best_sim = sim; best_idx = ci
