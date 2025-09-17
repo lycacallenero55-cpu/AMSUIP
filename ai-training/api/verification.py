@@ -286,6 +286,63 @@ async def identify_signature_owner(
                                     id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['students'])}
                             except Exception:
                                 pass
+                        # Define classifier-aligned preprocessing (signature preprocessor)
+                        def _classifier_preprocess(img_pil):
+                            try:
+                                import cv2
+                                import numpy as _np
+                                from PIL import Image as _PIL
+                                if not isinstance(img_pil, _PIL.Image.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
+                                img_pil = img_pil.convert('RGB')
+                                arr = _np.asarray(img_pil)
+                                # Background removal
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                if contours:
+                                    largest_contour = max(contours, key=cv2.contourArea)
+                                    x, y, w, h = cv2.boundingRect(largest_contour)
+                                    arr = arr[y:y+h, x:x+w]
+                                # Contrast enhancement
+                                lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+                                l, a, b = cv2.split(lab)
+                                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                                l = clahe.apply(l)
+                                lab = cv2.merge([l, a, b])
+                                arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+                                # Orientation correction
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                coords = _np.column_stack(_np.where(gray > 0))
+                                if len(coords) > 0:
+                                    angle = cv2.minAreaRect(coords)[-1]
+                                    if angle < -45:
+                                        angle += 90
+                                    (h, w) = arr.shape[:2]
+                                    center = (w // 2, h // 2)
+                                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                                    arr = cv2.warpAffine(arr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+                                # Center and pad
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                coords = _np.column_stack(_np.where(gray > 0))
+                                if len(coords) > 0:
+                                    y_min, x_min = coords.min(axis=0)
+                                    y_max, x_max = coords.max(axis=0)
+                                    arr = arr[y_min:y_max+1, x_min:x_max+1]
+                                # Resize to 224x224
+                                arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA)
+                                # Normalize to [0,1]
+                                arr = arr.astype(_np.float32) / 255.0
+                                return arr
+                            except Exception as e:
+                                logger.warning(f"Preprocessing failed: {e}, using fallback")
+                                # Fallback: simple resize and normalize
+                                if not isinstance(img_pil, _PIL.Image.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(np.array(img_pil))
+                                img_pil = img_pil.convert('RGB')
+                                arr = _np.asarray(img_pil.resize((224, 224), _PIL.Image.Resampling.LANCZOS))
+                                return arr.astype(_np.float32) / 255.0
+
                         # Build embedder
                         import tensorflow as tf
                         base_e = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
