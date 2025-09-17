@@ -34,6 +34,8 @@ from services.model_versioning import model_versioning_service
 from config import settings
 from models.global_signature_model import GlobalSignatureVerificationModel
 from utils.s3_storage import create_presigned_get, download_bytes
+from utils.s3_storage import download_model_file as s3_download_model_file
+from utils.s3_storage import delete_model_file as s3_delete_model_file
 from utils.s3_storage import upload_model_file as upload_file_generic
 from utils.storage import cleanup_local_file
 
@@ -785,7 +787,8 @@ async def start_gpu_training(
 async def start_async_training(
     student_id: str = Form(...),
     genuine_files: List[UploadFile] | None = File(None),
-    forged_files: List[UploadFile] | None = File(None)
+    forged_files: List[UploadFile] | None = File(None),
+    save_to_s3: bool = Form(True)
 ):
     check_database_available()
     try:
@@ -793,7 +796,7 @@ async def start_async_training(
         student_ids = [sid.strip() for sid in student_id.split(',') if sid.strip()]
         
         if len(student_ids) == 1:
-            # Single student training (original logic)
+            # Single student → treat as global with one class (global-only pipeline)
             student = await db_manager.get_student_by_school_id(student_ids[0])
             if not student:
                 try:
@@ -804,7 +807,7 @@ async def start_async_training(
             if not student:
                 raise HTTPException(status_code=404, detail="Student not found")
 
-            job = job_queue.create_job(int(student["id"]), "training")
+            job = job_queue.create_job(int(student["id"]), "global_training")
             # Allow auto-fetch when files are not uploaded
             if not genuine_files or len(genuine_files) == 0:  # Only need genuine files for owner identification
                 rows = await db_manager.list_student_signatures(int(student["id"]))
@@ -839,8 +842,8 @@ async def start_async_training(
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files] if forged_files else []
-            asyncio.create_task(run_async_training(job, student, genuine_data, forged_data))
-            return {"success": True, "job_id": job.job_id, "message": "Training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
+            asyncio.create_task(run_global_async_training(job, [student_ids[0]], genuine_data, forged_data, save_to_s3=save_to_s3))
+            return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
         
         else:
             # Multiple students - use global training
@@ -856,7 +859,7 @@ async def start_async_training(
                 # Forged samples not required since forgery detection is disabled - focus on owner identification only
                 genuine_data = [await f.read() for f in genuine_files]
                 forged_data = [await f.read() for f in forged_files] if forged_files else []
-            asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data))
+            asyncio.create_task(run_global_async_training(job, student_ids, genuine_data, forged_data, save_to_s3=save_to_s3))
             return {"success": True, "job_id": job.job_id, "message": "Global training job started", "stream_url": f"/api/progress/stream/{job.job_id}"}
             
     except HTTPException:
@@ -1006,19 +1009,44 @@ async def run_gpu_training(job, student, genuine_data, forged_data, save_to_s3: 
             if job:
                 job_queue.update_job_progress(job.job_id, 90.0, "Training completed, saving results...")
 
-            # Create model record (global GPU may not have per-head individual accuracy)
-            model_record = await db_manager.create_trained_model({
-                "student_id": int(student["id"]),
-                "model_path": gpu_result['model_urls'].get('classification', ''),
-                "embedding_model_path": gpu_result['model_urls'].get('embedding', ''),
+            # Global-only pipeline: store only in global_trained_models
+            # Prepare model storage based on destination
+            s3_model_key = f"models/{job.job_id}/global.keras"
+            local_path = None
+            model_path_value = gpu_result['model_urls'].get('classification', '')
+            s3_key_value = s3_model_key
+            if not save_to_s3:
+                try:
+                    data = s3_download_model_file(s3_model_key)
+                    base_dir = settings.LOCAL_MODELS_DIR
+                    os.makedirs(base_dir, exist_ok=True)
+                    local_path = os.path.join(base_dir, f"global_model_{job.job_id}.keras")
+                    with open(local_path, 'wb') as f:
+                        f.write(data)
+                    model_path_value = local_path
+                    s3_key_value = ""
+                    # Optional: cleanup S3 copy to avoid mixing
+                    try:
+                        s3_delete_model_file(s3_model_key)
+                    except Exception:
+                        pass
+                except Exception as dl_err:
+                    logger.warning(f"Failed to download global GPU model locally: {dl_err}")
+
+            # Build global record
+            model_record = await db_manager.create_global_model({
+                "model_path": model_path_value,
+                "s3_key": s3_key_value or None,
+                "model_uuid": job.job_id,
                 "status": "completed",
                 "sample_count": len(genuine_images) + len(forged_images),
                 "genuine_count": len(genuine_images),
                 "forged_count": len(forged_images),
+                "student_count": 1,
                 "training_date": datetime.utcnow().isoformat(),
-                # GPU flow may not return per-head accuracies; leave overall accuracy empty here
+                "accuracy": float(gpu_result.get('training_result', {}).get('training_metrics', {}).get('accuracy')) if gpu_result.get('training_result') else None,
                 "training_metrics": {
-                    'model_type': 'ai_signature_verification_gpu',
+                    'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
                     'training_method': 'aws_gpu_instance',
                     'instance_type': 'g4dn.xlarge',
@@ -1026,13 +1054,7 @@ async def run_gpu_training(job, student, genuine_data, forged_data, save_to_s3: 
                 }
             })
 
-            # Mirror CPU: also train individual locally to compute accuracy and save as per destination
-            try:
-                preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
-                arrays = [preprocessor.preprocess_signature(img) for img in genuine_images]
-                await _train_and_store_individual_from_arrays(student, arrays, [], job, global_model_id=None, save_to_s3=save_to_s3)
-            except Exception as e:
-                logger.warning(f"Post-GPU individual training failed: {e}")
+            # Global-only mode: skip individual training entirely
 
             result = {
                 "success": True,
@@ -1121,10 +1143,30 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, s
             if job:
                 job_queue.update_job_progress(job.job_id, 90.0, "Global training completed, saving results...")
 
-            # Create global model record
+            # Create global model record with destination handling
+            s3_model_key = f"models/{job.job_id}/global.keras"
+            model_path_value = gpu_result['model_urls'].get('classification', '')
+            s3_key_value = s3_model_key
+            if not save_to_s3:
+                try:
+                    data = s3_download_model_file(s3_model_key)
+                    base_dir = settings.LOCAL_MODELS_DIR
+                    os.makedirs(base_dir, exist_ok=True)
+                    local_path = os.path.join(base_dir, f"global_model_{job.job_id}.keras")
+                    with open(local_path, 'wb') as f:
+                        f.write(data)
+                    model_path_value = local_path
+                    s3_key_value = ""
+                    try:
+                        s3_delete_model_file(s3_model_key)
+                    except Exception:
+                        pass
+                except Exception as dl_err:
+                    logger.warning(f"Failed to download global GPU model locally: {dl_err}")
+
             model_record = await db_manager.create_global_model({
-                "model_path": gpu_result['model_urls'].get('classification', ''),
-                "s3_key": f"global_models/{job.job_id}",
+                "model_path": model_path_value,
+                "s3_key": s3_key_value or None,
                 "model_uuid": job.job_id,
                 "status": "completed",
                 "sample_count": int(total_genuine + total_forged),
@@ -1152,22 +1194,8 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, s
                 "training_method": "aws_gpu_global",
                 "model_urls": gpu_result['model_urls']
             }
-
-            # Hybrid: also train individual models locally from the same preprocessed arrays (before completing job)
-            individual_count = 0
-            try:
-                for s in students:
-                    sid = int(s["id"])  # type: ignore[index]
-                    bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                    if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None, save_to_s3=save_to_s3)
-                        individual_count += 1
-            except Exception as e:
-                logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
-
             if job:
-                result["individual_models_created"] = individual_count
-                job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+                job_queue.update_job_progress(job.job_id, 98.0, "Saved global model")
                 job_queue.complete_job(job.job_id, result)
         else:
             error_msg = gpu_result.get('error', 'Unknown GPU training error')
