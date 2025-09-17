@@ -427,19 +427,24 @@ echo "Instance setup completed at $(date)"
     
     async def _upload_training_data(self, training_data: Dict, job_id: str) -> str:
         """Upload training data to S3"""
-        # Convert images to serializable format
+        # Convert images to serializable format (normalize keys: genuine/genuine_images, forged/forged_images)
         serializable_data = {}
         for student_name, signatures in training_data.items():
             serializable_data[student_name] = {}
             
             # Handle different data structures
             if isinstance(signatures, dict):
-                for key in ['genuine', 'forged']:
-                    if key in signatures:
-                        serializable_data[student_name][key] = [
-                            img.tolist() if hasattr(img, 'tolist') else img 
+                for key in ['genuine', 'genuine_images', 'forged', 'forged_images']:
+                    if key in signatures and signatures[key] is not None:
+                        norm = 'genuine' if key.startswith('genuine') else 'forged'
+                        serializable_data[student_name].setdefault(norm, [])
+                        serializable_data[student_name][norm].extend([
+                            (img.tolist() if hasattr(img, 'tolist') else img)
                             for img in signatures[key]
-                        ]
+                        ])
+                # Ensure keys exist even if empty
+                serializable_data[student_name].setdefault('genuine', [])
+                serializable_data[student_name].setdefault('forged', [])
             else:
                 # If it's a list, treat as genuine signatures
                 serializable_data[student_name] = {
