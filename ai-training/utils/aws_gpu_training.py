@@ -501,7 +501,7 @@ echo "Instance setup completed at $(date)"
     
     def _generate_training_script(self) -> str:
         """Generate the training script (REAL Keras global training on GPU)."""
-        return '''#!/usr/bin/env python3
+        script = '''#!/usr/bin/env python3
 import sys
 import os
 import json
@@ -548,7 +548,7 @@ def _build_model(num_classes: int, input_shape=(224, 224, 3)):
 def train_on_gpu(training_data_key, job_id, student_id):
     try:
         s3 = boto3.client('s3')
-        bucket = '{bucket}'
+        bucket = '__BUCKET__'
         print(f"Starting training for job {job_id}")
         print("TensorFlow:", tf.__version__)
         print("GPUs:", tf.config.list_physical_devices('GPU'))
@@ -639,7 +639,8 @@ if __name__ == "__main__":
     job_id = sys.argv[2]
     student_id = int(sys.argv[3])
     train_on_gpu(training_data_key, job_id, student_id)
-'''.format(bucket=self.s3_bucket)
+'''
+        return script.replace('__BUCKET__', self.s3_bucket)
     
     async def _start_remote_training(self, instance_id: str, training_data_key: str, 
                                    job_id: str, student_id: int, job_queue) -> Dict:
