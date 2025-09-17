@@ -278,7 +278,8 @@ async def identify_signature_owner(
                             out = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
                             classifier = tf.keras.Model(inputs=base.input, outputs=out)
                             try:
-                                classifier.load_weights(model_path_local)
+                                # Be tolerant to minor naming/version diffs
+                                classifier.load_weights(model_path_local, by_name=True, skip_mismatch=True)
                             except Exception as werr:
                                 raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
                         # Preprocess and predict
