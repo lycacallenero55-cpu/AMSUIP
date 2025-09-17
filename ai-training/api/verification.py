@@ -245,6 +245,17 @@ async def identify_signature_owner(
                     or latest_global.get("mappings_url")
                     or (latest_global.get("training_metrics") or {}).get("mappings_path")
                 )
+                # Derive fallback mappings URL from model URL if not explicitly stored
+                if (not mappings_url) and model_url and 'amazonaws.com' in model_url:
+                    try:
+                        after = model_url.split('amazonaws.com/', 1)[-1]
+                        # Expecting models/<job_id>/classification.keras
+                        if after.startswith('models/') and after.endswith('/classification.keras'):
+                            base = model_url.rsplit('/', 1)[0]
+                            mappings_url = f"{base}/mappings.json"
+                            logger.info("Derived mappings_url from model_url fallback")
+                    except Exception:
+                        pass
                 if model_url.startswith('https://') and 'amazonaws.com' in model_url:
                     # Download model via presigned GET
                     s3_key = model_url.split('amazonaws.com/')[-1]

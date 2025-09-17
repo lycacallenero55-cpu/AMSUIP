@@ -720,9 +720,15 @@ def train_on_gpu(training_data_key, job_id, student_id):
         else:
             X_train, X_val, y_train, y_val = X, X, y, y
         
-        # Create a simple but effective classifier
+        # Create a simple but effective classifier with light augmentation
+        aug = keras.Sequential([
+            keras.layers.RandomFlip('horizontal'),
+            keras.layers.RandomRotation(0.02),
+            keras.layers.RandomZoom(0.1)
+        ])
         inputs = keras.Input(shape=(224,224,3))
-        x = keras.layers.Conv2D(32, 3, activation='relu')(inputs)
+        x = aug(inputs)
+        x = keras.layers.Conv2D(32, 3, activation='relu')(x)
         x = keras.layers.BatchNormalization()(x)
         x = keras.layers.MaxPooling2D(2)(x)
         x = keras.layers.Conv2D(64, 3, activation='relu')(x)
