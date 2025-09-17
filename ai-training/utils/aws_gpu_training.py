@@ -500,8 +500,8 @@ echo "Instance setup completed at $(date)"
             raise
     
     def _generate_training_script(self) -> str:
-        """Generate the training script"""
-        return f'''#!/usr/bin/env python3
+        """Generate the training script (use safe formatting to avoid nested f-string issues)"""
+        return '''#!/usr/bin/env python3
 import sys
 import os
 import json
@@ -517,7 +517,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
     try:
         # Initialize S3 client
         s3 = boto3.client('s3')
-        bucket = '{self.s3_bucket}'
+        bucket = '{bucket}'
         
         print(f"Starting training for job {{job_id}}")
         
@@ -600,7 +600,7 @@ if __name__ == "__main__":
     student_id = int(sys.argv[3])
     
     train_on_gpu(training_data_key, job_id, student_id)
-'''
+'''.format(bucket=self.s3_bucket)
     
     async def _start_remote_training(self, instance_id: str, training_data_key: str, 
                                    job_id: str, student_id: int, job_queue) -> Dict:
