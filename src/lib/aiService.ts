@@ -470,12 +470,14 @@ export class AIService {
     studentId: string,
     genuineFiles: File[],
     forgedFiles: File[],
-    useGPU: boolean = true
+    useGPU: boolean = true,
+    saveToS3: boolean = true
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
       formData.append('student_id', studentId);
       formData.append('use_gpu', useGPU.toString());
+      formData.append('save_to_s3', saveToS3.toString());
       
       for (const file of genuineFiles) {
         formData.append('genuine_files', file);
