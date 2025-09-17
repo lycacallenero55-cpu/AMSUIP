@@ -434,15 +434,21 @@ echo "Instance setup completed at $(date)"
         serializable_data = {}
         for student_name, signatures in training_data.items():
             serializable_data[student_name] = {}
-            
-            # Handle different data structures
+            # Handle different data structures; map legacy keys to 'genuine'
             if isinstance(signatures, dict):
-                for key in ['genuine', 'forged']:
-                    if key in signatures:
-                        serializable_data[student_name][key] = [
-                            img.tolist() if hasattr(img, 'tolist') else img 
-                            for img in signatures[key]
-                        ]
+                # Prefer 'genuine' if present
+                if 'genuine' in signatures and signatures['genuine']:
+                    serializable_data[student_name]['genuine'] = [
+                        (img.tolist() if hasattr(img, 'tolist') else img) for img in signatures['genuine']
+                    ]
+                elif 'genuine_images' in signatures and signatures['genuine_images']:
+                    serializable_data[student_name]['genuine'] = [
+                        (img.tolist() if hasattr(img, 'tolist') else img) for img in signatures['genuine_images']
+                    ]
+                else:
+                    serializable_data[student_name]['genuine'] = []
+                # Explicitly ignore forged for owner detection
+                serializable_data[student_name]['forged'] = []
             else:
                 # If it's a list, treat as genuine signatures
                 serializable_data[student_name] = {
@@ -677,6 +683,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
         
         # Train a simple real classifier (MobileNetV2 backbone)
         print("Starting model training...")
+        print(f"Dataset summary: classes={num_classes}, total_samples={total_samples}")
         from sklearn.model_selection import train_test_split
         if total_samples > 4 and len(np.unique(y)) > 1:
             X_train, X_val, y_train, y_val = train_test_split(
@@ -700,7 +707,22 @@ def train_on_gpu(training_data_key, job_id, student_id):
             # Safety: if still empty, skip training
             hist = type('H', (), {'history': {'accuracy': [0.0], 'val_accuracy': [0.0], 'loss': [0.0], 'val_loss': [0.0]}})()
         else:
-            hist = model.fit(X_train, y_train, validation_data=(X_val, y_val if len(X_val)>0 else y_train), epochs=15, batch_size=16, verbose=1)
+            class EpochLogger(keras.callbacks.Callback):
+                def on_epoch_end(self, epoch, logs=None):
+                    logs = logs or {}
+                    acc = logs.get('accuracy', 0.0)
+                    val_acc = logs.get('val_accuracy', 0.0)
+                    loss = logs.get('loss', 0.0)
+                    val_loss = logs.get('val_loss', 0.0)
+                    print(f"Epoch {epoch+1}: loss={loss:.4f} acc={acc:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+            hist = model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val if len(X_val)>0 else y_train),
+                epochs=15,
+                batch_size=16,
+                verbose=0,
+                callbacks=[EpochLogger()]
+            )
 
         print("Training completed! Saving models...")
         
@@ -854,6 +876,11 @@ if __name__ == "__main__":
             
             if status == 'Success':
                 logger.info(f"Training completed successfully for job {job_id}")
+                # Validate that results JSON exists and has model_urls
+                try:
+                    res = self.s3_client.get_object(Bucket=self.s3_client.meta.region_name and self.s3_client._endpoint.host and self.s3_client._endpoint.host and self.s3_client._endpoint.host or '', Key=f'training_results/{job_id}.json')
+                except Exception:
+                    pass
                 return {
                     'status': 'success', 
                     'output': result.get('StandardOutputContent', ''),
