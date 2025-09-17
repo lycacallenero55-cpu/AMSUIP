@@ -173,3 +173,40 @@ def save_signature_models_locally(
     except Exception as e:
         logger.error(f"❌ Failed to save models locally: {e}")
         raise
+
+def save_global_model_locally(
+    global_model: Any,
+    model_uuid: str = None
+) -> Dict[str, Dict[str, str]]:
+    """
+    Save global model locally (FAST - no S3 upload)
+    
+    Args:
+        global_model: GlobalSignatureModel instance
+        model_uuid: Optional UUID for the model
+    
+    Returns:
+        Dictionary with saved file information
+    """
+    saver = LocalModelSaver("global", model_uuid)
+    
+    logger.info(f"🚀 Starting LOCAL save of global model (no S3 upload)...")
+    
+    try:
+        # Save global model
+        if hasattr(global_model, 'model') and global_model.model:
+            saver.save_classification_model(global_model.model)
+            logger.info("✅ Global classification model saved locally")
+        
+        # Save mappings if available
+        if hasattr(global_model, 'student_to_id') and hasattr(global_model, 'id_to_student'):
+            saver.save_mappings(global_model.student_to_id, global_model.id_to_student)
+            logger.info("✅ Global mappings saved locally")
+        
+        logger.info(f"🎉 Global model {model_uuid} saved locally in {saver.local_models_dir}")
+        
+        return saver.get_saved_files()
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to save global model locally: {e}")
+        raise

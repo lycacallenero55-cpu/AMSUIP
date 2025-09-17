@@ -973,13 +973,21 @@ async def train_global_model():
         gsm = GlobalSignatureVerificationModel()
         history = gsm.train_global_model(data_by_student)
         
-        # Save global model directly to S3 (no local files)
+        # Save global model (S3 or local based on parameter)
         model_uuid = str(uuid.uuid4())
         try:
-            # Use direct S3 saving to eliminate two-step process
-            from utils.direct_s3_saving import save_global_model_directly
-            s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
-            logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+            if use_s3_upload:
+                # Use direct S3 saving to eliminate two-step process
+                from utils.direct_s3_saving import save_global_model_directly
+                s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
+                logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+            else:
+                # Use local storage (INSTANT - no S3 upload)
+                from utils.local_model_saving import save_global_model_locally
+                uploaded_files = save_global_model_locally(gsm, model_uuid)
+                s3_url = uploaded_files.get('classification', {}).get('url', '')
+                s3_key = uploaded_files.get('classification', {}).get('relative_path', '')
+                logger.info(f"✅ Global model {model_uuid} saved locally (INSTANT!)")
             
         except Exception as e:
             logger.error(f"❌ Failed to save global model directly to S3: {e}")
@@ -1319,12 +1327,20 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data,
         gsm = GlobalSignatureVerificationModel()
         history = gsm.train_global_model(training_data)
         
-        # Save global model directly to S3 (no local files)
+        # Save global model (S3 or local based on parameter)
         model_uuid = str(uuid.uuid4())
         try:
-            from utils.direct_s3_saving import save_global_model_directly
-            s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
-            logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+            if use_s3_upload:
+                from utils.direct_s3_saving import save_global_model_directly
+                s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
+                logger.info(f"✅ Global model {model_uuid} saved directly to S3")
+            else:
+                # Use local storage (INSTANT - no S3 upload)
+                from utils.local_model_saving import save_global_model_locally
+                uploaded_files = save_global_model_locally(gsm, model_uuid)
+                s3_url = uploaded_files.get('classification', {}).get('url', '')
+                s3_key = uploaded_files.get('classification', {}).get('relative_path', '')
+                logger.info(f"✅ Global model {model_uuid} saved locally (INSTANT!)")
         except Exception as e:
             logger.error(f"❌ Failed to save global model directly to S3: {e}")
             # Fallback to local save → upload → cleanup

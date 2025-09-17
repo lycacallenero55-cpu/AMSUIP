@@ -111,6 +111,36 @@ async def debug_models():
 signature_ai_manager = SignatureEmbeddingModel(max_students=150)
 preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
+async def _find_local_ai_model(db_manager):
+    """Find the latest local AI model"""
+    try:
+        response = db_manager.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
+        rows = response.data or []
+        
+        for row in rows:
+            model_path = row.get("model_path", "")
+            if model_path.startswith('local://') or (not model_path.startswith('http') and not model_path.startswith('s3://')):
+                return row
+        return None
+    except Exception as e:
+        logger.error(f"Error finding local AI model: {e}")
+        return None
+
+async def _find_s3_ai_model(db_manager):
+    """Find the latest S3 AI model"""
+    try:
+        response = db_manager.client.table("trained_models").select("*").order("created_at", desc=True).limit(50).execute()
+        rows = response.data or []
+        
+        for row in rows:
+            model_path = row.get("model_path", "")
+            if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                return row
+        return None
+    except Exception as e:
+        logger.error(f"Error finding S3 AI model: {e}")
+        return None
+
 def _get_fallback_response(endpoint_type="identify", student_id=None, error_message="System temporarily unavailable"):
     """Return a fallback response when system is unavailable"""
     base_response = {
@@ -242,6 +272,30 @@ async def identify_signature_owner(
             if hasattr(db_manager, 'get_latest_ai_model'):
                 latest_ai_model = await db_manager.get_latest_ai_model()
                 logger.info(f"Latest AI model found: {latest_ai_model is not None}")
+                
+                # Filter by storage type if requested
+                if use_local_models and latest_ai_model:
+                    model_path = latest_ai_model.get("model_path", "")
+                    if not (model_path.startswith('local://') or (not model_path.startswith('http') and not model_path.startswith('s3://'))):
+                        logger.info("Latest model is not local, searching for local model...")
+                        # Try to find a local model
+                        local_model = await _find_local_ai_model(db_manager)
+                        if local_model:
+                            latest_ai_model = local_model
+                            logger.info("Found local AI model for verification")
+                        else:
+                            logger.warning("No local AI model found, using latest model anyway")
+                elif not use_local_models and latest_ai_model:
+                    model_path = latest_ai_model.get("model_path", "")
+                    if model_path.startswith('local://') or (not model_path.startswith('http') and not model_path.startswith('s3://')):
+                        logger.info("Latest model is local but S3 requested, searching for S3 model...")
+                        # Try to find an S3 model
+                        s3_model = await _find_s3_ai_model(db_manager)
+                        if s3_model:
+                            latest_ai_model = s3_model
+                            logger.info("Found S3 AI model for verification")
+                        else:
+                            logger.warning("No S3 AI model found, using latest model anyway")
             else:
                 logger.warning("get_latest_ai_model method not available")
         except Exception as e:
