@@ -156,6 +156,8 @@ async def _fetch_and_validate_student_images(student_ids: list[int]) -> dict[int
 
 async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays: list, forged_arrays: list, job=None, global_model_id: int | None = None, use_s3_upload: bool = False) -> dict:
     """Train and store an individual model given preprocessed arrays (hybrid mode helper)."""
+    import numpy as np  # Import numpy at function level
+    
     if job:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
     
