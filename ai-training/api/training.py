@@ -1184,7 +1184,8 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
             bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
             # Use student name for consistent mapping
             student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
-            training_data[student_name] = {
+            # Include both ID and name in the key for proper mapping
+            training_data[f"{sid}:{student_name}"] = {
                 "genuine_images": bucket["genuine_images"],
                 "forged_images": bucket["forged_images"],
             }

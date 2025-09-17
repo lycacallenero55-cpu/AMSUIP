@@ -658,21 +658,25 @@ def train_on_gpu(training_data_key, job_id, student_id):
         class_to_student_name = {}
         for idx, cls in enumerate(classes):
             try:
-                # Each class key is the student's display name; also attempt to parse embedded id if provided
-                class_to_student_name[idx] = str(cls)
-                # Attempt to parse an integer ID prefix like "<id>:<name>" if such format was used
-                sid = None
+                # Parse "id:name" format from class key
                 if isinstance(cls, str) and ':' in cls:
-                    maybe = cls.split(':', 1)[0]
-                    try:
-                        sid = int(maybe)
-                    except Exception:
-                        sid = None
-                # Fallback: keep None if unknown; verification can still use names
-                if sid is not None:
-                    class_to_student_id[idx] = int(sid)
+                    parts = cls.split(':', 1)
+                    if len(parts) == 2:
+                        try:
+                            sid = int(parts[0])
+                            name = parts[1].strip()
+                            class_to_student_id[idx] = sid
+                            class_to_student_name[idx] = name
+                        except ValueError:
+                            # Fallback to using the whole string as name
+                            class_to_student_name[idx] = str(cls)
+                    else:
+                        class_to_student_name[idx] = str(cls)
+                else:
+                    # Fallback for old format
+                    class_to_student_name[idx] = str(cls)
             except Exception:
-                continue
+                class_to_student_name[idx] = str(cls)
         X, y = [], []
         for cname, data in processed_data.items():
             for img in data.get('genuine', []):
