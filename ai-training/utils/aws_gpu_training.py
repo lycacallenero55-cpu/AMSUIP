@@ -594,19 +594,23 @@ def train_on_gpu(training_data_key, job_id, student_id):
             genuine_images = []
             forged_images = []
             
+            # Compatible with {'genuine': [...] } and legacy {'genuine_images': [...]}
+            raw_genuine = data.get('genuine')
+            if raw_genuine is None:
+                raw_genuine = data.get('genuine_images', [])
+            raw_forged = data.get('forged')
+            if raw_forged is None:
+                raw_forged = data.get('forged_images', [])
+            
             # Process genuine images
-            for img_data in data.get('genuine_images', []):
+            for img_data in raw_genuine:
                 try:
-                    # Convert base64 or array to image
                     if isinstance(img_data, str):
-                        # Base64 encoded
                         import base64
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(io.BytesIO(img_bytes))
                     else:
-                        # Already processed array
                         img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
-                    
                     processed_img = preprocessor.preprocess_signature(img)
                     genuine_images.append(processed_img)
                 except Exception as e:
@@ -614,7 +618,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
                     continue
             
             # Process forged images
-            for img_data in data.get('forged_images', []):
+            for img_data in raw_forged:
                 try:
                     if isinstance(img_data, str):
                         import base64
@@ -622,37 +626,65 @@ def train_on_gpu(training_data_key, job_id, student_id):
                         img = Image.open(io.BytesIO(img_bytes))
                     else:
                         img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
-                    
                     processed_img = preprocessor.preprocess_signature(img)
                     forged_images.append(processed_img)
                 except Exception as e:
                     print(f"Error processing forged image: {e}")
                     continue
             
-            processed_data[student_name] = {
-                'genuine': genuine_images,
-                'forged': forged_images
-            }
-            print(f"{student_name}: {len(genuine_images)} genuine, {len(forged_images)} forged")
+            if len(genuine_images) > 0:
+                processed_data[student_name] = {
+                    'genuine': genuine_images,
+                    'forged': forged_images
+                }
+                print(f"{student_name}: {len(genuine_images)} genuine, {len(forged_images)} forged")
+            else:
+                print(f"Skipping {student_name} (no genuine images)")
         
-        # Train a simple real classifier (MobileNetV2 backbone)
-        print("Starting model training...")
+        # Build dataset
         classes = sorted(list(processed_data.keys()))
-        class_to_idx = {c: i for i, c in enumerate(classes)}
         X, y = [], []
         for cname, data in processed_data.items():
             for img in data.get('genuine', []):
                 X.append(img)
-                y.append(class_to_idx[cname])
-        X = np.array(X, dtype=np.float32)
-        y = np.array(y, dtype=np.int64)
+                y.append(classes.index(cname))
+        X = np.array(X, dtype=np.float32) if len(X) > 0 else np.array([])
+        y = np.array(y, dtype=np.int64) if len(y) > 0 else np.array([])
+        total_samples = int(len(X)) if hasattr(X, '__len__') else 0
+        num_classes = int(len(classes))
+        
+        if total_samples == 0 or num_classes == 0:
+            print("No training samples available after preprocessing. Writing zero-accuracy results.")
+            results = {
+                'job_id': job_id,
+                'student_id': student_id,
+                'model_urls': {},
+                'accuracy': 0.0,
+                'training_metrics': {
+                    'accuracy': 0.0,
+                    'epochs_trained': 0,
+                    'final_loss': 0.0,
+                    'val_accuracy': 0.0,
+                    'val_loss': 0.0
+                }
+            }
+            results_path = '/tmp/training_results.json'
+            with open(results_path, 'w') as f:
+                json.dump(results, f)
+            s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
+            print(f"Training completed with no data for job {job_id}. Final accuracy: 0.0")
+            return
+        
+        # Train a simple real classifier (MobileNetV2 backbone)
+        print("Starting model training...")
         from sklearn.model_selection import train_test_split
-        if len(np.unique(y)) > 1 and len(y) > 4:
+        if total_samples > 4 and len(np.unique(y)) > 1:
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
             )
         else:
             X_train, X_val, y_train, y_val = X, X, y, y
+        
         base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
         base.trainable = False
         inputs = keras.Input(shape=(224,224,3))
@@ -660,10 +692,15 @@ def train_on_gpu(training_data_key, job_id, student_id):
         x = base(x, training=False)
         x = keras.layers.GlobalAveragePooling2D()(x)
         x = keras.layers.Dense(256, activation='relu')(x)
-        outputs = keras.layers.Dense(len(classes), activation='softmax')(x)
+        outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
         model = keras.Model(inputs, outputs)
         model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-        hist = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=15, batch_size=16, verbose=1)
+        
+        if len(X_train) == 0:
+            # Safety: if still empty, skip training
+            hist = type('H', (), {'history': {'accuracy': [0.0], 'val_accuracy': [0.0], 'loss': [0.0], 'val_loss': [0.0]}})()
+        else:
+            hist = model.fit(X_train, y_train, validation_data=(X_val, y_val if len(X_val)>0 else y_train), epochs=15, batch_size=16, verbose=1)
 
         print("Training completed! Saving models...")
         
@@ -681,6 +718,7 @@ def train_on_gpu(training_data_key, job_id, student_id):
         print("Uploaded classification model to S3")
         
         # Save mappings
+        class_to_idx = {c: i for i, c in enumerate(classes)}
         mappings = {
             'student_id': student_id,
             'students': classes,
@@ -712,10 +750,10 @@ def train_on_gpu(training_data_key, job_id, student_id):
             'accuracy': final_accuracy,
             'training_metrics': {
                 'accuracy': final_accuracy,
-                'epochs_trained': len(hist.history.get('loss', [])),
-                'final_loss': float(hist.history.get('loss', [0])[-1]) if hist.history.get('loss') else 0.0,
-                'val_accuracy': float(hist.history.get('val_accuracy', [0])[-1]) if hist.history.get('val_accuracy') else 0.0,
-                'val_loss': float(hist.history.get('val_loss', [0])[-1]) if hist.history.get('val_loss') else 0.0
+                'epochs_trained': len(hist.history.get('loss', [])) if hasattr(hist, 'history') else 0,
+                'final_loss': float(hist.history.get('loss', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('loss') else 0.0,
+                'val_accuracy': float(hist.history.get('val_accuracy', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('val_accuracy') else 0.0,
+                'val_loss': float(hist.history.get('val_loss', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('val_loss') else 0.0
             }
         }
         
