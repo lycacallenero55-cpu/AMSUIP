@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 import asyncio
 import os
 from datetime import datetime
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ class AWSGPUTrainingManager:
     
     def _generate_user_data(self) -> str:
         """Generate user data script for instance initialization"""
-        return f"""#!/bin/bash
+        script_template = """#!/bin/bash
 set -e
 
 # Log output
@@ -263,13 +264,14 @@ pip3 install --upgrade pip
 pip3 install tensorflow boto3 numpy pillow opencv-python scikit-learn requests
 
 # Create training directory
-mkdir -p {self.training_script_path}
-chown -R ubuntu:ubuntu {self.training_script_path}
+mkdir -p {training_path}
+chown -R ubuntu:ubuntu {training_path}
 
 # Mark setup as complete
 touch /tmp/setup_complete
 echo "Instance setup completed at $(date)"
 """
+        return script_template.format(training_path=self.training_script_path)
     
     async def _wait_for_instance_ready(self, instance_id: str, timeout: int = 300):
         """Wait for instance to be ready - Fixed version with proper status handling"""
@@ -503,7 +505,7 @@ echo "Instance setup completed at $(date)"
     
     def _generate_training_script(self) -> str:
         """Generate the training script"""
-        return f'''#!/usr/bin/env python3
+        script_content = '''#!/usr/bin/env python3
 import sys
 import os
 import json
@@ -511,7 +513,6 @@ import boto3
 import numpy as np
 from PIL import Image
 import io
-import requests
 import traceback
 import tensorflow as tf
 from tensorflow import keras
@@ -524,181 +525,252 @@ if gpus:
     try:
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
-        print(f"Found {{len(gpus)}} GPU(s), using GPU acceleration")
+        print(f"Found {len(gpus)} GPU(s), using GPU acceleration")
     except RuntimeError as e:
-        print(f"GPU setup error: {{e}}")
+        print(f"GPU setup error: {e}")
 else:
     print("No GPU found, using CPU")
+
+class SignaturePreprocessor:
+    """Simple preprocessor for signatures"""
+    def __init__(self, target_size=(224, 224)):
+        self.target_size = target_size
+    
+    def preprocess_signature(self, img):
+        """Preprocess a signature image"""
+        if isinstance(img, Image.Image):
+            img = img.convert('RGB')
+        else:
+            img = Image.fromarray(img).convert('RGB')
+        
+        # Resize to target size
+        img = img.resize(self.target_size, Image.LANCZOS)
+        
+        # Convert to numpy array and normalize
+        img_array = np.array(img, dtype=np.float32) / 255.0
+        
+        return img_array
+
+class SignatureEmbeddingModel:
+    """Simplified embedding model for GPU training"""
+    def __init__(self, max_students=150):
+        self.max_students = max_students
+        self.embedding_dim = 128
+        self.student_to_id = {}
+        self.id_to_student = {}
+        self.embedding_model = None
+        self.classification_head = None
+        self.siamese_model = None
+    
+    def train_models(self, training_data, epochs=25):
+        """Train the signature models"""
+        print("Starting model training...")
+        
+        # Prepare data
+        all_images = []
+        all_labels = []
+        
+        for idx, (student_name, data) in enumerate(training_data.items()):
+            self.student_to_id[student_name] = idx
+            self.id_to_student[idx] = student_name
+            
+            for img in data['genuine']:
+                all_images.append(img)
+                all_labels.append(idx)
+            
+            for img in data['forged']:
+                all_images.append(img)
+                all_labels.append(idx)
+        
+        X = np.array(all_images)
+        y = keras.utils.to_categorical(all_labels, num_classes=len(training_data))
+        
+        # Create simple CNN model
+        model = keras.Sequential([
+            keras.layers.InputLayer(input_shape=(224, 224, 3)),
+            keras.layers.Conv2D(32, (3, 3), activation='relu'),
+            keras.layers.MaxPooling2D((2, 2)),
+            keras.layers.Conv2D(64, (3, 3), activation='relu'),
+            keras.layers.MaxPooling2D((2, 2)),
+            keras.layers.Conv2D(128, (3, 3), activation='relu'),
+            keras.layers.GlobalAveragePooling2D(),
+            keras.layers.Dense(256, activation='relu'),
+            keras.layers.Dropout(0.5),
+            keras.layers.Dense(len(training_data), activation='softmax')
+        ])
+        
+        model.compile(
+            optimizer='adam',
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        # Train model
+        history = model.fit(
+            X, y,
+            batch_size=32,
+            epochs=epochs,
+            validation_split=0.2,
+            verbose=1
+        )
+        
+        self.classification_head = model
+        self.embedding_model = keras.Model(
+            inputs=model.input,
+            outputs=model.layers[-3].output  # Get embeddings from Dense(256) layer
+        )
+        
+        return {
+            'classification_history': history.history,
+            'siamese_history': {}
+        }
+    
+    def save_models(self, base_path):
+        """Save models"""
+        if self.embedding_model:
+            self.embedding_model.save(f"{base_path}_embedding.keras")
+        if self.classification_head:
+            self.classification_head.save(f"{base_path}_classification.keras")
+        
+        # Save mappings
+        import json
+        with open(f"{base_path}_mappings.json", 'w') as f:
+            json.dump({
+                'student_to_id': self.student_to_id,
+                'id_to_student': self.id_to_student
+            }, f)
 
 def train_on_gpu(training_data_key, job_id, student_id):
     """Train model on GPU instance"""
     try:
         # Initialize S3 client
         s3 = boto3.client('s3')
-        bucket = '{self.s3_bucket}'
+        bucket = os.environ.get('S3_BUCKET', 'signatureai-uploads')
         
-        print(f"Starting REAL training for job {{job_id}}")
+        print(f"Starting training for job {job_id}")
         
         # Download training data from S3
-        print(f"Downloading training data from s3://{{bucket}}/{{training_data_key}}")
-        s3.download_file(bucket, training_data_key, '/tmp/training_data.json')
+        print(f"Downloading training data from s3://{bucket}/{training_data_key}")
+        response = s3.get_object(Bucket=bucket, Key=training_data_key)
+        training_data = json.loads(response['Body'].read())
         
-        with open('/tmp/training_data.json', 'r') as f:
-            training_data = json.load(f)
+        print(f"Loaded training data for {len(training_data)} students")
         
-        print(f"Loaded training data for {{len(training_data)}} students")
+        # Create preprocessor and model
+        preprocessor = SignaturePreprocessor(target_size=(224, 224))
+        model_manager = SignatureEmbeddingModel(max_students=150)
         
-        # Install required packages
-        print("Installing required packages...")
-        os.system("pip install tensorflow pillow numpy scikit-learn")
-        
-        # Import training modules
-        sys.path.append('/home/ubuntu/ai-training')
-        try:
-            from models.signature_embedding_model import SignatureEmbeddingModel
-            from utils.signature_preprocessing import SignaturePreprocessor
-            print("Successfully imported training modules")
-        except ImportError as e:
-            print(f"Import error: {{e}}")
-            # Fallback: create a simple model
-            print("Creating fallback model...")
-            
         # Process training data
         print("Processing training data...")
-        processed_data = {{}}
-        preprocessor = SignaturePreprocessor(target_size=(224, 224))
+        processed_data = {}
         
         for student_name, data in training_data.items():
-            print(f"Processing {{student_name}}...")
+            print(f"Processing {student_name}...")
             genuine_images = []
             forged_images = []
             
             # Process genuine images
-            for img_data in data.get('genuine_images', []):
+            for img_data in data.get('genuine', []):
                 try:
-                    # Convert base64 or array to image
-                    if isinstance(img_data, str):
-                        # Base64 encoded
+                    if isinstance(img_data, list):
+                        # Convert array to image
+                        img_array = np.array(img_data, dtype=np.uint8)
+                        if img_array.max() <= 1.0:
+                            img_array = (img_array * 255).astype(np.uint8)
+                        img = Image.fromarray(img_array)
+                    else:
+                        # Handle base64 or other formats
                         import base64
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(io.BytesIO(img_bytes))
-                    else:
-                        # Already processed array
-                        img = Image.fromarray((img_data * 255).astype(np.uint8))
                     
                     processed_img = preprocessor.preprocess_signature(img)
                     genuine_images.append(processed_img)
                 except Exception as e:
-                    print(f"Error processing image: {{e}}")
+                    print(f"Error processing image: {e}")
                     continue
             
             # Process forged images
-            for img_data in data.get('forged_images', []):
+            for img_data in data.get('forged', []):
                 try:
-                    if isinstance(img_data, str):
+                    if isinstance(img_data, list):
+                        img_array = np.array(img_data, dtype=np.uint8)
+                        if img_array.max() <= 1.0:
+                            img_array = (img_array * 255).astype(np.uint8)
+                        img = Image.fromarray(img_array)
+                    else:
                         import base64
                         img_bytes = base64.b64decode(img_data)
                         img = Image.open(io.BytesIO(img_bytes))
-                    else:
-                        img = Image.fromarray((img_data * 255).astype(np.uint8))
                     
                     processed_img = preprocessor.preprocess_signature(img)
                     forged_images.append(processed_img)
                 except Exception as e:
-                    print(f"Error processing forged image: {{e}}")
+                    print(f"Error processing forged image: {e}")
                     continue
             
-            processed_data[student_name] = {{
+            processed_data[student_name] = {
                 'genuine': genuine_images,
                 'forged': forged_images
-            }}
-            print(f"{{student_name}}: {{len(genuine_images)}} genuine, {{len(forged_images)}} forged")
+            }
+            print(f"{student_name}: {len(genuine_images)} genuine, {len(forged_images)} forged")
         
         # Train the model
         print("Starting model training...")
-        model_manager = SignatureEmbeddingModel(max_students=150)
-        
-        # Train with progress updates
         training_result = model_manager.train_models(processed_data, epochs=25)
         
         print("Training completed! Saving models...")
         
         # Save models to temporary directory
-        temp_dir = f'/tmp/{{job_id}}_models'
+        temp_dir = f'/tmp/{job_id}_models'
         os.makedirs(temp_dir, exist_ok=True)
         
         # Save all models
-        model_manager.save_models(f'{{temp_dir}}/signature_model')
+        model_manager.save_models(f'{temp_dir}/signature_model')
         
         # Upload models to S3
-        model_files = ['embedding', 'classification', 'siamese']
-        model_urls = {{}}
+        model_files = ['embedding', 'classification']
+        model_urls = {}
         
         for model_type in model_files:
-            file_path = f'{{temp_dir}}/signature_model_{{model_type}}.keras'
+            file_path = f'{temp_dir}/signature_model_{model_type}.keras'
             if os.path.exists(file_path):
-                s3_key = f'models/{{job_id}}/{{model_type}}.keras'
+                s3_key = f'models/{job_id}/{model_type}.keras'
                 s3.upload_file(file_path, bucket, s3_key)
-                model_urls[model_type] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-                print(f"Uploaded {{model_type}} model to S3")
-        
-        # Save mappings
-        mappings = {{
-            'student_id': student_id,
-            'students': list(training_data.keys()),
-            'student_to_id': model_manager.student_to_id,
-            'id_to_student': model_manager.id_to_student
-        }}
-        mappings_path = f'/tmp/{{job_id}}_mappings.json'
-        with open(mappings_path, 'w') as f:
-            json.dump(mappings, f)
-        
-        s3_key = f'models/{{job_id}}/mappings.json'
-        s3.upload_file(mappings_path, bucket, s3_key)
-        model_urls['mappings'] = f'https://{{bucket}}.s3.amazonaws.com/{{s3_key}}'
-        
-        # Extract training metrics
-        classification_history = training_result.get('classification_history', {{}})
-        siamese_history = training_result.get('siamese_history', {{}})
+                model_urls[model_type] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+                print(f"Uploaded {model_type} model to S3")
         
         # Calculate final accuracy
+        classification_history = training_result.get('classification_history', {})
         final_accuracy = None
-        if classification_history.get('accuracy'):
+        if 'accuracy' in classification_history:
             final_accuracy = float(classification_history['accuracy'][-1])
-        elif classification_history.get('val_accuracy'):
-            final_accuracy = float(classification_history['val_accuracy'][-1])
-        elif siamese_history.get('accuracy'):
-            final_accuracy = float(siamese_history['accuracy'][-1])
         
         # Save training results
-        results = {{
+        results = {
             'job_id': job_id,
             'student_id': student_id,
             'model_urls': model_urls,
             'accuracy': final_accuracy,
-            'training_metrics': {{
+            'training_metrics': {
                 'accuracy': final_accuracy,
                 'classification_history': classification_history,
-                'siamese_history': siamese_history,
                 'epochs_trained': len(classification_history.get('loss', [])),
-                'final_loss': float(classification_history.get('loss', [0])[-1]) if classification_history.get('loss') else None,
-                'val_accuracy': float(classification_history.get('val_accuracy', [0])[-1]) if classification_history.get('val_accuracy') else None,
-                'val_loss': float(classification_history.get('val_loss', [0])[-1]) if classification_history.get('val_loss') else None
-            }}
-        }}
+            }
+        }
         
         results_path = '/tmp/training_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f)
         
-        s3.upload_file(results_path, bucket, f'training_results/{{job_id}}.json')
-        print(f"Training completed successfully for job {{job_id}}! Final accuracy: {{final_accuracy}}")
+        s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
+        print(f"Training completed successfully for job {job_id}! Final accuracy: {final_accuracy}")
         
         # Cleanup
         shutil.rmtree(temp_dir, ignore_errors=True)
         
     except Exception as e:
-        print(f"Training failed: {{str(e)}}")
+        print(f"Training failed: {str(e)}")
         traceback.print_exc()
         raise
 
@@ -713,6 +785,7 @@ if __name__ == "__main__":
     
     train_on_gpu(training_data_key, job_id, student_id)
 '''
+        return script_content
     
     async def _start_remote_training(self, instance_id: str, training_data_key: str, 
                                    job_id: str, student_id: int, job_queue) -> Dict:
