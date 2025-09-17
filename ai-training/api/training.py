@@ -1229,6 +1229,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 "accuracy": accuracy if isinstance(accuracy, (int, float)) else 0.0,
                 # Store mappings path for exact id/name resolution in verification
                 "mappings_path": (gpu_result.get('model_urls') or {}).get('mappings', None),
+                # Store few-shot artifacts when available
+                "centroids_path": (gpu_result.get('model_urls') or {}).get('centroids', None),
+                "embedding_spec_path": (gpu_result.get('model_urls') or {}).get('embedding_spec', None),
                 "training_metrics": {
                     'model_type': 'global_ai_signature_verification_gpu',
                     'architecture': 'signature_embedding_network',
@@ -1237,7 +1240,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                     'gpu_acceleration': True,
                     'gpu_accuracy': gpu_accuracy,
                     # Duplicate mappings url inside metrics for backward-compat tables lacking top-level column
-                    'mappings_path': (gpu_result.get('model_urls') or {}).get('mappings', None)
+                    'mappings_path': (gpu_result.get('model_urls') or {}).get('mappings', None),
+                    'centroids_path': (gpu_result.get('model_urls') or {}).get('centroids', None),
+                    'embedding_spec_path': (gpu_result.get('model_urls') or {}).get('embedding_spec', None)
                 }
             })
 

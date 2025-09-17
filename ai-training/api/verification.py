@@ -268,6 +268,21 @@ async def identify_signature_owner(
                         c_resp = _rq.get(centroids_url, timeout=30); c_resp.raise_for_status()
                         centroids_data = c_resp.json()
                         s_resp = _rq.get(emb_spec_url, timeout=30); s_resp.raise_for_status()
+                        # Ensure mappings are loaded for exact id/name
+                        id_to_student = id_to_student or {}
+                        id_to_name = id_to_name or {}
+                        if not id_to_name and mappings_url:
+                            try:
+                                mresp = _rq.get(mappings_url, timeout=15); mresp.raise_for_status()
+                                mdata2 = mresp.json()
+                                if mdata2.get('id_to_student_id'):
+                                    id_to_student = {int(k): int(v) for k, v in (mdata2.get('id_to_student_id') or {}).items()}
+                                if mdata2.get('id_to_student_name'):
+                                    id_to_name = {int(k): str(v) for k, v in (mdata2.get('id_to_student_name') or {}).items()}
+                                if (not id_to_name) and isinstance(mdata2.get('students'), list):
+                                    id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['students'])}
+                            except Exception:
+                                pass
                         # Build embedder
                         import tensorflow as tf
                         base_e = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
