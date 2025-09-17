@@ -235,6 +235,71 @@ async def identify_signature_owner(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
+        # Fast path: try latest global classifier (MobileNetV2) directly
+        try:
+            latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
+            if latest_global and latest_global.get("status") == "completed" and latest_global.get("model_path"):
+                model_url = latest_global.get("model_path")
+                mappings_url = latest_global.get("mappings_path") or latest_global.get("mappings_url")
+                if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Download model via presigned GET
+                    s3_key = model_url.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    import requests, tempfile, os, json
+                    from tensorflow import keras
+                    # Download model
+                    resp = requests.get(presigned_url, timeout=60)
+                    resp.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
+                        tmp_model.write(resp.content)
+                        model_path_local = tmp_model.name
+                    # Download mappings if available
+                    id_to_student = {}
+                    try:
+                        if mappings_url:
+                            mresp = requests.get(mappings_url, timeout=15)
+                            mresp.raise_for_status()
+                            mdata = mresp.json()
+                            id_to_student = {int(k): v for k, v in (mdata.get('id_to_student') or {}).items()}
+                    except Exception:
+                        id_to_student = {}
+                    try:
+                        classifier = keras.models.load_model(model_path_local)
+                        # Preprocess and predict
+                        arr = preprocessor.preprocess_signature(test_image)
+                        import numpy as np
+                        probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                        class_idx = int(np.argmax(probs))
+                        confidence = float(np.max(probs))
+                        predicted_name = id_to_student.get(class_idx, f"class_{class_idx}")
+                        # Try to map back to student id if name matches a known mapping we carry
+                        predicted_id = class_idx if class_idx in id_to_student else 0
+                        return {
+                            "predicted_student": {"id": predicted_id, "name": predicted_name},
+                            "is_match": True,
+                            "confidence": confidence,
+                            "score": confidence,
+                            "global_score": confidence,
+                            "student_confidence": confidence,
+                            "authenticity_score": 0.0,
+                            "is_unknown": False,
+                            "model_type": "global_classifier",
+                            "ai_architecture": "mobilenet_v2_classifier",
+                            "success": True,
+                            "decision": "match",
+                            "candidates": [
+                                {"id": predicted_id, "name": predicted_name, "confidence": confidence}
+                            ]
+                        }
+                    finally:
+                        try:
+                            os.unlink(model_path_local)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Global classifier fast-path failed: {e}")
+
         # Try to get latest AI model first, fallback to legacy models
         latest_ai_model = None
         try:
@@ -1155,6 +1220,75 @@ async def verify_signature(
 
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
+
+        # Fast path: try latest global classifier (MobileNetV2) directly
+        try:
+            latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
+            if latest_global and latest_global.get("status") == "completed" and latest_global.get("model_path"):
+                model_url = latest_global.get("model_path")
+                mappings_url = latest_global.get("mappings_path") or latest_global.get("mappings_url")
+                if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Download model via presigned GET
+                    s3_key = model_url.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    import requests, tempfile, os, json
+                    from tensorflow import keras
+                    # Download model
+                    resp = requests.get(presigned_url, timeout=60)
+                    resp.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
+                        tmp_model.write(resp.content)
+                        model_path_local = tmp_model.name
+                    # Download mappings if available
+                    id_to_student = {}
+                    try:
+                        if mappings_url:
+                            mresp = requests.get(mappings_url, timeout=15)
+                            mresp.raise_for_status()
+                            mdata = mresp.json()
+                            id_to_student = {int(k): v for k, v in (mdata.get('id_to_student') or {}).items()}
+                    except Exception:
+                        id_to_student = {}
+                    try:
+                        classifier = keras.models.load_model(model_path_local)
+                        # Preprocess and predict
+                        arr = preprocessor.preprocess_signature(test_image)
+                        import numpy as np
+                        probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                        class_idx = int(np.argmax(probs))
+                        confidence = float(np.max(probs))
+                        predicted_name = id_to_student.get(class_idx, f"class_{class_idx}")
+                        predicted_id = class_idx if class_idx in id_to_student else 0
+                        is_correct_student = (student_id is None) or (predicted_id == student_id)
+                        return {
+                            "is_match": is_correct_student,
+                            "confidence": confidence,
+                            "score": confidence,
+                            "global_score": confidence,
+                            "student_confidence": confidence,
+                            "authenticity_score": 0.0,
+                            "predicted_student": {"id": predicted_id, "name": predicted_name},
+                            "target_student_id": student_id,
+                            "is_correct_student": is_correct_student,
+                            "is_genuine": True,
+                            "is_unknown": False,
+                            "model_type": "global_classifier",
+                            "ai_architecture": "mobilenet_v2_classifier",
+                            "success": True,
+                            "message": "Match found" if is_correct_student else "No match found",
+                            "decision": "match" if is_correct_student else "no_match",
+                            "candidates": [
+                                {"id": predicted_id, "name": predicted_name, "confidence": confidence}
+                            ]
+                        }
+                    finally:
+                        try:
+                            os.unlink(model_path_local)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Global classifier fast-path (verify) failed: {e}")
 
         # Use the same AI model loading logic as identify
         latest_ai_model = None
