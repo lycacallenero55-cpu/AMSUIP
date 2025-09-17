@@ -287,6 +287,8 @@ async def identify_signature_owner(
                     # Download mappings if available
                     id_to_student = {}
                     id_to_name = {}
+                    class_to_idx = {}
+                    inferred_num_classes = None
                     try:
                         if mappings_url:
                             # If mappings is on S3, presign access just like model
@@ -305,6 +307,10 @@ async def identify_signature_owner(
                                 id_to_student = {int(k): int(v) for k, v in (mdata.get('id_to_student_id') or {}).items()}
                             if mdata.get('id_to_student_name'):
                                 id_to_name = {int(k): str(v) for k, v in (mdata.get('id_to_student_name') or {}).items()}
+                            if mdata.get('class_to_idx'):
+                                class_to_idx = {str(k): int(v) for k, v in (mdata.get('class_to_idx') or {}).items()}
+                            if isinstance(mdata.get('num_classes'), int) and mdata['num_classes'] > 0:
+                                inferred_num_classes = int(mdata['num_classes'])
                             # Backward compatibility
                             # Fallback keys
                             if not mdata.get('students') and isinstance(mdata.get('classes'), list):
@@ -327,6 +333,8 @@ async def identify_signature_owner(
                                         id_to_name.setdefault(i, str(s))
                                 if (not id_to_name) and (not parsed_any):
                                     id_to_name = {int(i): str(n) for i, n in enumerate(students_list)}
+                                if inferred_num_classes is None:
+                                    inferred_num_classes = len(students_list)
                     except Exception:
                         id_to_student = {}
                     try:
@@ -336,8 +344,24 @@ async def identify_signature_owner(
                         except Exception as load_err:
                             logger.warning(f"Keras model load failed, trying weights-only path: {load_err}")
                             # Rebuild simple CNN classifier and load weights
-                            num_classes = max(2, len(id_to_student) or 2)
+                            # Determine exact number of classes from mappings
+                            num_classes = None
+                            if inferred_num_classes:
+                                num_classes = inferred_num_classes
+                            elif class_to_idx:
+                                num_classes = max(2, len(class_to_idx))
+                            elif id_to_name:
+                                num_classes = max(2, len(id_to_name))
+                            elif id_to_student:
+                                num_classes = max(2, len(id_to_student))
+                            else:
+                                num_classes = 2
                             import tensorflow as tf
+                            import numpy as _np
+                            import random as _random
+                            tf.random.set_seed(42)
+                            _np.random.seed(42)
+                            _random.seed(42)
                             inputs = tf.keras.Input(shape=(224, 224, 3))
                             x = tf.keras.layers.Conv2D(32, 3, activation='relu')(inputs)
                             x = tf.keras.layers.BatchNormalization()(x)
