@@ -1006,6 +1006,13 @@ async def train_global_model():
             "history": {k: [float(x) for x in v] for k, v in history.history.items()},
         }
         spec = build_classifier_spec(num_classes=len(ci2sid), image_size=settings.MODEL_IMAGE_SIZE)
+        # Compute centroids for faster verification (optional)
+        try:
+            centroids_arr = gsm.compute_student_centroids(data_by_student)
+            centroids_json = {int(k): v.tolist() for k, v in centroids_arr.items()}
+        except Exception as e:
+            logger.warning(f"Failed to compute centroids: {e}")
+            centroids_json = None
         # Package locally
         artifacts = package_global_classifier_artifacts(
             model_uuid,
@@ -1013,7 +1020,7 @@ async def train_global_model():
             getattr(gsm, 'classifier'),
             getattr(gsm, 'embedding_model', None),
             id_first_mappings,
-            None,
+            centroids_json,
             tr,
             spec,
         )
@@ -1030,8 +1037,9 @@ async def train_global_model():
                 s3_urls[key_name] = up_url
         
         # Store global model record in dedicated global table
+        # Consistently point model_path to classifier SavedModel zip URL
         model_record = await db_manager.create_global_model({
-            "model_path": s3_url,
+            "model_path": s3_urls.get("savedmodel_zip", ""),
             "s3_key": s3_keys.get("savedmodel_zip", ""),
             "model_uuid": model_uuid,
             "status": "completed",

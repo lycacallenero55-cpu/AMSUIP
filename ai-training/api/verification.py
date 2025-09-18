@@ -360,6 +360,8 @@ async def identify_signature_owner(
                     except Exception as e:
                         logger.error(f"Failed to load student mappings: {e}")
                         # Continue without mappings - will use fallback
+                else:
+                    logger.warning("mappings_path missing in latest_ai_model; proceeding without mappings")
                 
                 # Use the request-specific model manager
                 signature_ai_manager = request_model_manager
@@ -710,7 +712,11 @@ async def identify_signature_owner(
                             os.unlink(tmp_path)
                         except:
                             pass
-                test_emb = gsm.embed_images([processed_signature])[0]
+                try:
+                    test_emb = gsm.embed_images([processed_signature])[0]
+                except Exception as e:
+                    logger.warning(f"Failed to embed with global model: {e}")
+                    test_emb = None
                 # Try cached centroids first
                 centroids = await _load_cached_centroids(latest_global) or {}
                 import numpy as np
