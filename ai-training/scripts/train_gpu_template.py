@@ -360,6 +360,67 @@ def train_on_gpu(training_data_key, job_id, student_id):
             s3.upload_file(mappings_path, bucket, s3_key)
             model_urls['mappings'] = 'https://{}.s3.amazonaws.com/{}'.format(bucket, s3_key)
             print("Uploaded mappings to S3: {}".format(s3_key))
+        # Save full SavedModel directory and zip for classifier
+        try:
+            savedmodel_dir = '{}/{}_classification.tf'.format(temp_dir, job_id)
+            model_manager.classification_head.save(savedmodel_dir, save_format='tf')
+            print("Saved classifier SavedModel to {}".format(savedmodel_dir))
+            import zipfile, os as _os
+            zip_path = '{}/{}_classification_savedmodel.zip'.format(temp_dir, job_id)
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for root, _, files in _os.walk(savedmodel_dir):
+                    for f in files:
+                        full = _os.path.join(root, f)
+                        rel = _os.path.relpath(full, start=savedmodel_dir)
+                        zf.write(full, arcname=rel)
+            s3_key = 'models/{}/classifier_savedmodel.zip'.format(job_id)
+            s3.upload_file(zip_path, bucket, s3_key)
+            model_urls['classifier_savedmodel_zip'] = 'https://{}.s3.amazonaws.com/{}'.format(bucket, s3_key)
+            print("Uploaded classifier SavedModel zip to S3: {}".format(s3_key))
+        except Exception as e:
+            print("WARNING: Failed to save/upload classifier SavedModel: {}".format(e))
+        # Build classifier spec
+        try:
+            spec = {
+                'type': 'classification',
+                'backbone': 'SimpleCNN',
+                'image_size': 224,
+                'num_classes': int(len(model_manager.id_to_student)),
+            }
+            spec_path = '{}/classifier_spec.json'.format(temp_dir)
+            with open(spec_path, 'w') as f:
+                json.dump(spec, f, indent=2)
+            s3_key = 'models/{}/classifier_spec.json'.format(job_id)
+            s3.upload_file(spec_path, bucket, s3_key)
+            model_urls['classifier_spec'] = 'https://{}.s3.amazonaws.com/{}'.format(bucket, s3_key)
+            print("Uploaded classifier_spec.json to S3: {}".format(s3_key))
+        except Exception as e:
+            print("WARNING: Failed to write/upload classifier spec: {}".format(e))
+        # Compute and upload centroids keyed by class index
+        try:
+            import numpy as _np
+            centroids = {}
+            # Build arrays per class index from processed_data (genuine only)
+            for cls_idx, student_name in model_manager.id_to_student.items():
+                try:
+                    imgs = processed_data.get(student_name, {}).get('genuine', [])
+                    if not imgs:
+                        continue
+                    arr = _np.array(imgs, dtype=_np.float32)
+                    embs = model_manager.embedding_model.predict(arr, verbose=0)
+                    centroids[str(int(cls_idx))] = _np.mean(embs, axis=0).tolist()
+                except Exception as _e:
+                    continue
+            if centroids:
+                cpath = '{}/centroids.json'.format(temp_dir)
+                with open(cpath, 'w') as f:
+                    json.dump(centroids, f, indent=2)
+                s3_key = 'models/{}/centroids.json'.format(job_id)
+                s3.upload_file(cpath, bucket, s3_key)
+                model_urls['centroids'] = 'https://{}.s3.amazonaws.com/{}'.format(bucket, s3_key)
+                print("Uploaded centroids.json to S3: {}".format(s3_key))
+        except Exception as e:
+            print("WARNING: Failed to compute/upload centroids: {}".format(e))
         classification_history = training_result.get('classification_history', {})
         final_accuracy = None
         if 'accuracy' in classification_history:
