@@ -971,7 +971,8 @@ async def train_global_model():
             (bucket["genuine_images"] if label == "genuine" else bucket["forged_images"]).append(image)
 
         gsm = GlobalSignatureVerificationModel()
-        history = gsm.train_global_model(data_by_student)
+        # Train global classifier with tf.data and validation metrics
+        history = gsm.train_global_classifier(data_by_student, epochs=settings.MODEL_EPOCHS)
         
         # Save global model directly to S3 (no local files)
         model_uuid = str(uuid.uuid4())

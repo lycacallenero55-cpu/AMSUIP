@@ -776,7 +776,7 @@ async def identify_signature_owner(
         except Exception as e:
             logger.warning(f"Global-first selection failed: {e}")
 
-        # Individual model inference to get overall confidence
+        # Individual model inference to get overall confidence and top-k
         try:
             # Check if we have any loaded models
             has_any_model = signature_ai_manager.embedding_model is not None
@@ -787,6 +787,24 @@ async def identify_signature_owner(
             
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
+            # If global classifier exists, compute top-k on it too (best-effort)
+            try:
+                # Attempt to reuse embedding and classification if available
+                if hasattr(signature_ai_manager, 'classification_head') and signature_ai_manager.classification_head is not None:
+                    import numpy as np
+                    probs = signature_ai_manager.classification_head.predict(np.expand_dims(processed_signature, 0), verbose=0)[0]
+                    topk = int(min(3, probs.shape[0]))
+                    idx = np.argsort(-probs)[:topk]
+                    candidates = []
+                    for i in idx:
+                        name = signature_ai_manager.id_to_student.get(int(i), f"Unknown_{int(i)}")
+                        sid = int(signature_ai_manager.external_student_id_map.get(name)) if getattr(signature_ai_manager, 'external_student_id_map', None) and name in signature_ai_manager.external_student_id_map else int(i)
+                        candidates.append({"id": sid, "name": name, "confidence": float(probs[int(i)])})
+                    # Merge with result.top_k if not present
+                    if not result.get("top_k"):
+                        result["top_k"] = [{"student_id": c["id"], "name": c["name"], "prob": c["confidence"]} for c in candidates]
+            except Exception:
+                pass
         except ValueError as e:
             logger.error(f"Model verification failed: {e}")
             return _get_fallback_response("identify")
