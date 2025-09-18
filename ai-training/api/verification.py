@@ -257,9 +257,16 @@ async def identify_signature_owner(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
-        # Try to get latest AI model first, fallback to legacy models
+        # Try to get latest global model first, then AI model, fallback to legacy models
+        latest_global_model = None
         latest_ai_model = None
         try:
+            # Check for latest global model first
+            if hasattr(db_manager, 'get_latest_global_model'):
+                latest_global_model = await db_manager.get_latest_global_model()
+                logger.info(f"Latest global model found: {latest_global_model is not None}")
+            
+            # Also check for AI model
             if hasattr(db_manager, 'get_latest_ai_model'):
                 latest_ai_model = await db_manager.get_latest_ai_model()
                 logger.info(f"Latest AI model found: {latest_ai_model is not None}")
@@ -269,7 +276,142 @@ async def identify_signature_owner(
             logger.error(f"Database connection failed: {e}")
             return _get_fallback_response("identify", error_message=f"Database error: {str(e)}")
         
-        if latest_ai_model and latest_ai_model.get("status") == "completed":
+        # Prioritize global model if available, then AI model
+        if latest_global_model and latest_global_model.get("status") == "completed":
+            # Use global model for identification
+            logger.info(f"Using global model: {latest_global_model.get('id')}")
+            # Load global model and perform identification
+            try:
+                gsm = GlobalSignatureVerificationModel()
+                model_path = latest_global_model.get("model_path")
+                if model_path and model_path.startswith('https://') and 'amazonaws.com' in model_path:
+                    # Download global model from S3
+                    s3_key = model_path.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    
+                    import requests
+                    import tempfile
+                    import os
+                    
+                    response = requests.get(presigned_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp_file:
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    
+                    try:
+                        # Extract zip and load SavedModel
+                        import zipfile
+                        extract_dir = tempfile.mkdtemp()
+                        with zipfile.ZipFile(tmp_path, 'r') as zf:
+                            zf.extractall(extract_dir)
+                        
+                        # Find the SavedModel directory
+                        savedmodel_dir = None
+                        for root, dirs, files in os.walk(extract_dir):
+                            if 'saved_model.pb' in files:
+                                savedmodel_dir = root
+                                break
+                        
+                        if savedmodel_dir:
+                            gsm.load_model(savedmodel_dir)
+                        else:
+                            raise Exception("SavedModel directory not found in zip")
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                            import shutil
+                            shutil.rmtree(extract_dir, ignore_errors=True)
+                        except:
+                            pass
+                
+                # Compute test embedding
+                test_emb = gsm.embed_images([processed_signature])[0]
+                
+                # Load centroids
+                centroids = await _load_cached_centroids(latest_global_model) or {}
+                
+                # Find best match
+                import numpy as np
+                best_sid = None
+                best_score = -1.0
+                best_cos = -1.0
+                
+                if centroids:
+                    for sid, centroid in centroids.items():
+                        centroid = np.array(centroid)
+                        num = float((test_emb * centroid).sum())
+                        den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
+                        cosine = num / den
+                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
+                        if score01 > best_score:
+                            best_score = score01
+                            best_cos = cosine
+                            best_sid = sid
+                
+                if best_sid is not None and best_score >= 0.5:
+                    # Get student name from mappings
+                    student_name = "Unknown"
+                    mappings_path = latest_global_model.get("mappings_path")
+                    if mappings_path:
+                        try:
+                            import requests
+                            mappings_response = requests.get(mappings_path, timeout=10)
+                            mappings_response.raise_for_status()
+                            mappings_data = mappings_response.json()
+                            ci2name = mappings_data.get('class_index_to_student_name', {})
+                            ci2sid = mappings_data.get('class_index_to_student_id', {})
+                            
+                            # Find class index for this student_id
+                            for ci_str, sid_str in ci2sid.items():
+                                if int(sid_str) == int(best_sid):
+                                    student_name = ci2name.get(ci_str, f"Student_{best_sid}")
+                                    break
+                        except Exception as e:
+                            logger.warning(f"Failed to load mappings: {e}")
+                    
+                    return {
+                        "predicted_student": {
+                            "id": int(best_sid),
+                            "name": student_name
+                        },
+                        "is_match": True,
+                        "confidence": float(best_score),
+                        "score": float(best_score),
+                        "global_score": float(best_score),
+                        "student_confidence": float(best_score),
+                        "authenticity_score": 0.0,
+                        "is_unknown": False,
+                        "model_type": "global_ai_signature_verification",
+                        "ai_architecture": "signature_embedding_network",
+                        "success": True,
+                        "top_k": [{"student_id": int(best_sid), "name": student_name, "prob": float(best_score)}],
+                        "status": "ok"
+                    }
+                else:
+                    return {
+                        "predicted_student": {"id": 0, "name": "Unknown"},
+                        "is_match": False,
+                        "confidence": 0.0,
+                        "score": 0.0,
+                        "global_score": float(best_score) if best_score >= 0 else 0.0,
+                        "student_confidence": 0.0,
+                        "authenticity_score": 0.0,
+                        "is_unknown": True,
+                        "model_type": "global_ai_signature_verification",
+                        "ai_architecture": "signature_embedding_network",
+                        "success": True,
+                        "top_k": [],
+                        "status": "unknown"
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Global model identification failed: {e}")
+                # Fall through to AI model or legacy models
+        
+        elif latest_ai_model and latest_ai_model.get("status") == "completed":
             # Use new AI model
             logger.info(f"Using AI model: {latest_ai_model.get('id')}")
             model_paths = {
