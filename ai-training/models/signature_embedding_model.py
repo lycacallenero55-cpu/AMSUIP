@@ -46,6 +46,8 @@ class SignatureEmbeddingModel:
         # Student mappings
         self.student_to_id = {}
         self.id_to_student = {}
+        # Optional external mapping from display name -> numeric student_id
+        self.external_student_id_map: dict[str, int] | None = None
         
         logger.info(f"Initialized SignatureEmbeddingModel: {embedding_dim}D embeddings, {image_size}x{image_size} input")
     
@@ -782,7 +784,7 @@ class SignatureEmbeddingModel:
         student_confidence = 0.0
         # Predict identification strictly via classification head
         student_probs = self.classification_head.predict(X_test, verbose=0)[0]
-        predicted_student_id = int(np.argmax(student_probs))
+        predicted_class_index = int(np.argmax(student_probs))
         student_confidence = float(np.max(student_probs))
         logger.info(f"Classification prediction: class {predicted_student_id}, confidence {student_confidence:.3f}")
         
@@ -790,11 +792,12 @@ class SignatureEmbeddingModel:
         authenticity_score = 0.0
         is_genuine = True  # Always true since we're not doing forgery detection
         
-        # Get student name - predicted_student_id is the class index (0, 1, 2, 3, 4, 5, 6, 7)
-        predicted_student_name = self.id_to_student.get(predicted_student_id, f"Unknown_{predicted_student_id}")
-        
-        # The predicted_student_id is already the correct class index, no mapping needed
-        actual_student_id = predicted_student_id
+        # Get student name and map class index to numeric student_id
+        predicted_student_name = self.id_to_student.get(predicted_class_index, f"Unknown_{predicted_class_index}")
+        if self.external_student_id_map and predicted_student_name in self.external_student_id_map:
+            actual_student_id = int(self.external_student_id_map[predicted_student_name])
+        else:
+            actual_student_id = predicted_class_index
         
         # Calculate overall confidence
         overall_confidence = student_confidence
@@ -802,8 +805,20 @@ class SignatureEmbeddingModel:
         # Determine if signature is unknown - stricter threshold to avoid false 100%
         is_unknown = (
             (student_confidence < 0.5) or
-            predicted_student_id == 0
+            predicted_class_index == 0
         )
+
+        # Build top-k outputs for debug/inference (top-3)
+        try:
+            top_k = 3 if student_probs.shape[0] >= 3 else student_probs.shape[0]
+            top_indices = np.argsort(-student_probs)[:top_k]
+            top_list = []
+            for idx in top_indices:
+                name = self.id_to_student.get(int(idx), f"Unknown_{int(idx)}")
+                sid = int(self.external_student_id_map.get(name)) if (self.external_student_id_map and name in self.external_student_id_map) else int(idx)
+                top_list.append({'student_id': sid, 'name': name, 'prob': float(student_probs[int(idx)])})
+        except Exception:
+            top_list = []
         
         result = {
             'predicted_student_id': actual_student_id,  # Use actual student ID
@@ -813,7 +828,8 @@ class SignatureEmbeddingModel:
             'authenticity_score': authenticity_score,
             'overall_confidence': overall_confidence,
             'is_unknown': is_unknown,
-            'embedding': embedding.tolist()  # For similarity comparisons
+            'embedding': embedding.tolist(),  # For similarity comparisons
+            'top_k': top_list
         }
         
         return result
@@ -836,17 +852,33 @@ class SignatureEmbeddingModel:
             self.siamese_model.save(f"{base_path}_siamese.keras")
             logger.info(f"Siamese model saved to {base_path}_siamese.keras")
         
-        # Save mappings
+        # Save mappings (ID-first schema)
         import json
         mappings_path = f"{base_path}_mappings.json"
+        class_index_to_student_id: dict[str, int] = {}
+        class_index_to_student_name: dict[str, str] = {}
+        student_id_to_class_index: dict[str, int] = {}
+        for class_index, student_name in self.id_to_student.items():
+            try:
+                class_index_int = int(class_index)
+            except Exception:
+                continue
+            if self.external_student_id_map and student_name in self.external_student_id_map:
+                numeric_id = int(self.external_student_id_map[student_name])
+            else:
+                numeric_id = class_index_int
+            class_index_to_student_id[str(class_index_int)] = numeric_id
+            class_index_to_student_name[str(class_index_int)] = student_name
+            student_id_to_class_index[str(numeric_id)] = class_index_int
         with open(mappings_path, 'w') as f:
             json.dump({
-                'student_to_id': self.student_to_id,
-                'id_to_student': self.id_to_student,
+                'class_index_to_student_id': class_index_to_student_id,
+                'class_index_to_student_name': class_index_to_student_name,
+                'student_id_to_class_index': student_id_to_class_index,
                 'embedding_dim': self.embedding_dim,
                 'image_size': self.image_size
             }, f, indent=2)
-        logger.info(f"Model mappings saved to {mappings_path}")
+        logger.info(f"Model mappings (ID-first) saved to {mappings_path}")
     
     def load_models(self, base_path: str) -> bool:
         """

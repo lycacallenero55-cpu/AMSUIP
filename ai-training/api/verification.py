@@ -346,8 +346,17 @@ async def identify_signature_owner(
                         mappings_response = requests.get(mappings_path, timeout=10)
                         mappings_response.raise_for_status()
                         mappings_data = mappings_response.json()
-                        request_model_manager.student_to_id = mappings_data['student_to_id']
-                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                        # Support both legacy and ID-first schemas
+                        if 'class_index_to_student_id' in mappings_data:
+                            ci2sid = mappings_data.get('class_index_to_student_id', {})
+                            ci2name = mappings_data.get('class_index_to_student_name', {})
+                            request_model_manager.id_to_student = {int(k): str(ci2name.get(k, f"Unknown_{k}")) for k in ci2sid.keys()}
+                            # external map: display name -> numeric ID
+                            request_model_manager.external_student_id_map = {str(ci2name.get(k, f"Unknown_{k}")): int(v) for k, v in ci2sid.items()}
+                            request_model_manager.student_to_id = {v: int(k) for k, v in request_model_manager.id_to_student.items()}
+                        else:
+                            request_model_manager.student_to_id = mappings_data['student_to_id']
+                            request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
                     except Exception as e:
                         logger.error(f"Failed to load student mappings: {e}")
                         # Continue without mappings - will use fallback
@@ -1127,7 +1136,9 @@ async def identify_signature_owner(
             "success": True,
             "message": "Match found" if is_match else "No match found",
             "decision": decision,
-            "candidates": candidates
+            "candidates": candidates,
+            "top_k": result.get("top_k", []) ,
+            "status": ("ok" if not result.get("is_unknown") else "unknown")
         }
         # Back-compat fields for UI
         response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
@@ -1646,7 +1657,9 @@ async def verify_signature(
             "success": True,
             "message": "Match found" if is_match else "No match found",
             "decision": decision,
-            "candidates": candidates
+            "candidates": candidates,
+            "top_k": result.get("top_k", []),
+            "status": ("ok" if not result.get("is_unknown") else "unknown")
         }
         
     except HTTPException:
