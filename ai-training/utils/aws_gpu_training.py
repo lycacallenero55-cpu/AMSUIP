@@ -469,24 +469,26 @@ echo "Instance setup completed at $(date)"
             # Create training script
             training_script = self._generate_training_script()
             
-            # Upload script to S3 first (base64-encoded to avoid quoting/newline mangling)
-            script_key = f'scripts/{job_id}/train_gpu.py.b64'
-            encoded = base64.b64encode(training_script.encode('utf-8'))
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key=script_key,
-                Body=encoded,
-                ContentType='text/plain'
-            )
+            # Package script as zip and base64 for maximum integrity
+            import zipfile
+            import io as _io
+            buf = _io.BytesIO()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('train_gpu.py', training_script)
+            zip_bytes = buf.getvalue()
+            encoded = base64.b64encode(zip_bytes)
+            script_key = f'scripts/{job_id}/train_gpu_py_zip.b64'
+            self.s3_client.put_object(Bucket=self.s3_bucket, Key=script_key, Body=encoded, ContentType='text/plain')
             
             # Download and setup script on instance using SSM
             setup_commands = [
                 f'mkdir -p {self.training_script_path}',
                 f'cd {self.training_script_path}',
-                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py.b64',
-                'base64 -d train_gpu.py.b64 > train_gpu.py',
+                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu_py_zip.b64',
+                # Decode and unzip using Python to avoid missing unzip
+                'python3 - <<\'PY\'\nimport base64,sys,zipfile,io\nenc=open("train_gpu_py_zip.b64","rb").read()\nraw=base64.b64decode(enc)\nzipfile.ZipFile(io.BytesIO(raw)).extractall(".")\nprint("Decoded and extracted train_gpu.py")\nPY',
                 'chmod +x train_gpu.py',
-                'rm -f train_gpu.py.b64',
+                'rm -f train_gpu_py_zip.b64',
                 # Preflight syntax check with context dump on failure
                 'python3 -m py_compile train_gpu.py || (echo "Syntax check failed"; nl -ba train_gpu.py | sed -n "220,260p"; exit 1)',
                 f'echo "Setup complete for job {job_id}"'
