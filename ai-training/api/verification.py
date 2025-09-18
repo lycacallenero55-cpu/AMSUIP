@@ -326,13 +326,20 @@ async def identify_signature_owner(
                                 try:
                                     print("DEBUG: Attempting database fallback for student info...")
                                     # Get all students to build a mapping
-                                    students_resp = await db_manager.client.table("students").select("id, name").execute()
+                                    students_resp = await db_manager.client.table("students").select("id, student_name, full_name, name").execute()
                                     if hasattr(students_resp, 'data') and students_resp.data:
                                         # Create a simple mapping based on alphabetical order
-                                        students = sorted(students_resp.data, key=lambda x: x['name'])
+                                        # Try to get the name from available columns
+                                        def get_student_name(student):
+                                            return (student.get('student_name') or 
+                                                   student.get('full_name') or 
+                                                   student.get('name') or 
+                                                   f"Student_{student['id']}")
+                                        
+                                        students = sorted(students_resp.data, key=lambda x: get_student_name(x))
                                         for i, student in enumerate(students):
                                             id_to_student[i] = int(student['id'])
-                                            id_to_name[i] = student['name']
+                                            id_to_name[i] = get_student_name(student)
                                         print(f"DEBUG: Database fallback loaded {len(students)} students")
                                         print(f"DEBUG: id_to_student: {id_to_student}")
                                         print(f"DEBUG: id_to_name: {id_to_name}")
