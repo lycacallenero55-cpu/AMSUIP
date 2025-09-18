@@ -440,14 +440,54 @@ echo "Instance setup completed at $(date)"
             if isinstance(signatures, dict):
                 for key in ['genuine', 'forged']:
                     if key in signatures:
-                        serializable_data[student_name][key] = [
-                            img.tolist() if hasattr(img, 'tolist') else img 
-                            for img in signatures[key]
-                        ]
+                        wrapped = []
+                        for img in signatures[key]:
+                            try:
+                                # If numpy-like
+                                if hasattr(img, 'tolist'):
+                                    arr = img.tolist()
+                                    shape = list(getattr(img, 'shape', []))
+                                    if not shape and isinstance(arr, list):
+                                        # Best-effort infer shape later
+                                        shape = []
+                                    wrapped.append({"array": arr, "shape": shape})
+                                elif isinstance(img, (list, tuple)):
+                                    # If list, attempt to record shape recursively
+                                    def _infer_shape(x):
+                                        s = []
+                                        while isinstance(x, (list, tuple)):
+                                            s.append(len(x))
+                                            x = x[0] if len(x) > 0 else []
+                                        return s
+                                    wrapped.append({"array": list(img), "shape": _infer_shape(img)})
+                                elif isinstance(img, str):
+                                    wrapped.append({"base64": img})
+                                else:
+                                    # Unknown, store raw
+                                    wrapped.append({"raw": str(type(img))})
+                            except Exception:
+                                wrapped.append({"raw": "unserializable"})
+                        serializable_data[student_name][key] = wrapped
             else:
                 # If it's a list, treat as genuine signatures
+                wrapped = []
+                for img in signatures:
+                    if hasattr(img, 'tolist'):
+                        wrapped.append({"array": img.tolist(), "shape": list(getattr(img, 'shape', []))})
+                    elif isinstance(img, (list, tuple)):
+                        def _infer_shape(x):
+                            s = []
+                            while isinstance(x, (list, tuple)):
+                                s.append(len(x))
+                                x = x[0] if len(x) > 0 else []
+                            return s
+                        wrapped.append({"array": list(img), "shape": _infer_shape(img)})
+                    elif isinstance(img, str):
+                        wrapped.append({"base64": img})
+                    else:
+                        wrapped.append({"raw": str(type(img))})
                 serializable_data[student_name] = {
-                    'genuine': [img.tolist() if hasattr(img, 'tolist') else img for img in signatures],
+                    'genuine': wrapped,
                     'forged': []
                 }
         
