@@ -469,9 +469,13 @@ echo "Instance setup completed at $(date)"
             # Create training script
             training_script = self._generate_training_script()
             
-            # Package script as zip and base64 for maximum integrity
+            # Package script from local template to zip+b64 for maximum integrity
             import zipfile
             import io as _io
+            from pathlib import Path as _Path
+            tmpl_path = _Path(__file__).parent.parent / 'scripts' / 'train_gpu_template.py'
+            with open(tmpl_path, 'r') as _f:
+                training_script = _f.read()
             buf = _io.BytesIO()
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr('train_gpu.py', training_script)
