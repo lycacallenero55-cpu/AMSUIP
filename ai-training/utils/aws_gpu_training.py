@@ -487,6 +487,8 @@ echo "Instance setup completed at $(date)"
                 'base64 -d train_gpu.py.b64 > train_gpu.py',
                 'chmod +x train_gpu.py',
                 'rm -f train_gpu.py.b64',
+                # Preflight syntax check with context dump on failure
+                'python3 -m py_compile train_gpu.py || (echo "Syntax check failed"; nl -ba train_gpu.py | sed -n "220,260p"; exit 1)',
                 f'echo "Setup complete for job {job_id}"'
             ]
             
