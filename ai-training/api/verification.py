@@ -235,6 +235,540 @@ async def identify_signature_owner(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
+        # Fast path: try latest global classifier (MobileNetV2) directly
+        try:
+            latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
+            if latest_global and latest_global.get("status") == "completed" and latest_global.get("model_path"):
+                model_url = latest_global.get("model_path")
+                mappings_url = (
+                    latest_global.get("mappings_path")
+                    or latest_global.get("mappings_url")
+                    or (latest_global.get("training_metrics") or {}).get("mappings_path")
+                )
+                # Derive fallback mappings URL from model URL if not explicitly stored
+                if (not mappings_url) and model_url and 'amazonaws.com' in model_url:
+                    try:
+                        after = model_url.split('amazonaws.com/', 1)[-1]
+                        # Expecting models/<job_id>/classification.keras
+                        if after.startswith('models/') and after.endswith('/classification.keras'):
+                            base = model_url.rsplit('/', 1)[0]
+                            mappings_url = f"{base}/mappings.json"
+                            logger.info("Derived mappings_url from model_url fallback")
+                    except Exception:
+                        pass
+                if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Initialize mappings for centroid path
+                    id_to_student = {}
+                    id_to_name = {}
+                    # Centroid fast-path: try to load centroids/spec and use embedding nearest neighbor
+                    try:
+                        after = model_url.split('amazonaws.com/', 1)[-1]
+                        folder = after.rsplit('/', 1)[0]
+                        from utils.s3_storage import create_presigned_get as _presign
+                        centroids_url = _presign(f"{folder}/centroids.json", expires_seconds=3600)
+                        emb_spec_url = _presign(f"{folder}/embedding_spec.json", expires_seconds=3600)
+                        # Ensure mappings URL is available and presigned
+                        if not mappings_url:
+                            try:
+                                mappings_url = _presign(f"{folder}/mappings.json", expires_seconds=3600)
+                                print(f"DEBUG: Generated mappings URL: {mappings_url}")
+                            except Exception as e:
+                                print(f"DEBUG: Failed to generate mappings URL: {e}")
+                                mappings_url = None
+                        import requests as _rq
+                        c_resp = _rq.get(centroids_url, timeout=30); c_resp.raise_for_status()
+                        centroids_raw = c_resp.json()
+                        # Support both formats: {"idx_to_centroid": {"0": [...]}} or {"0": [...]}
+                        centroids_dict = centroids_raw.get('idx_to_centroid') if isinstance(centroids_raw, dict) and 'idx_to_centroid' in centroids_raw else centroids_raw
+                        s_resp = _rq.get(emb_spec_url, timeout=30); s_resp.raise_for_status()
+                        # Ensure mappings are loaded for exact id/name
+                        id_to_student = id_to_student or {}
+                        id_to_name = id_to_name or {}
+                        if not id_to_name and mappings_url:
+                            try:
+                                mresp = _rq.get(mappings_url, timeout=15); mresp.raise_for_status()
+                                mdata2 = mresp.json()
+                                print(f"DEBUG: Loaded mappings keys: {list(mdata2.keys())}")
+
+                                # New schema preferred: class_index_to_student_id/name
+                                if isinstance(mdata2.get('class_index_to_student_id'), dict):
+                                    try:
+                                        id_to_student = {int(k): int(v) for k, v in (mdata2.get('class_index_to_student_id') or {}).items()}
+                                        print(f"DEBUG: Loaded id_to_student from class_index_to_student_id: {id_to_student}")
+                                    except Exception:
+                                        pass
+                                if isinstance(mdata2.get('class_index_to_student_name'), dict):
+                                    try:
+                                        id_to_name = {int(k): str(v) for k, v in (mdata2.get('class_index_to_student_name') or {}).items()}
+                                        print(f"DEBUG: Loaded id_to_name from class_index_to_student_name: {id_to_name}")
+                                    except Exception:
+                                        pass
+
+                                # Back-compat: use explicit id_to_student_id and id_to_student_name
+                                if isinstance(mdata2.get('id_to_student_id'), dict):
+                                    id_to_student = {int(k): int(v) for k, v in (mdata2.get('id_to_student_id') or {}).items()}
+                                    print(f"DEBUG: Loaded id_to_student (ids): {id_to_student}")
+                                if isinstance(mdata2.get('id_to_student_name'), dict):
+                                    id_to_name = {int(k): str(v) for k, v in (mdata2.get('id_to_student_name') or {}).items()}
+                                    print(f"DEBUG: Loaded id_to_name: {id_to_name}")
+
+                                # Support simplified mappings produced by trainer
+                                if (not id_to_name) and isinstance(mdata2.get('id_to_student'), dict):
+                                    try:
+                                        id_to_name = {int(k): str(v) for k, v in (mdata2.get('id_to_student') or {}).items()}
+                                        print(f"DEBUG: Loaded id_to_name from id_to_student: {id_to_name}")
+                                    except Exception:
+                                        pass
+                                if (not id_to_name) and isinstance(mdata2.get('student_to_id'), dict):
+                                    try:
+                                        # Invert name->idx to idx->name
+                                        id_to_name = {int(idx): str(name) for name, idx in (mdata2.get('student_to_id') or {}).items()}
+                                        print(f"DEBUG: Built id_to_name from student_to_id: {id_to_name}")
+                                    except Exception:
+                                        pass
+                                
+                                # Fallback: parse from students list with "id:name" format
+                                if (not id_to_name) and isinstance(mdata2.get('students'), list):
+                                    tmp_student = {}; tmp_name = {}
+                                    for i, entry in enumerate(mdata2['students']):
+                                        if isinstance(entry, str) and ':' in entry:
+                                            parts = entry.split(':', 1)
+                                            try:
+                                                sid = int(parts[0]); name = parts[1].strip()
+                                                tmp_student[i] = sid; tmp_name[i] = name
+                                            except Exception:
+                                                tmp_name[i] = entry
+                                        else:
+                                            tmp_name[i] = str(entry)
+                                    if tmp_student: id_to_student.update(tmp_student)
+                                    if tmp_name: id_to_name.update(tmp_name)
+                                    print(f"DEBUG: Parsed from students list - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
+                                
+                                # Final fallback: use classes list
+                                if (not id_to_name) and isinstance(mdata2.get('classes'), list):
+                                    id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['classes'])}
+                                    print(f"DEBUG: Fallback to classes list: {id_to_name}")
+                                # Restrict mappings strictly to trained classes only
+                                try:
+                                    allowed_classes = set(int(k) for k in (centroids_dict or {}).keys()) if isinstance(centroids_dict, dict) else set()
+                                except Exception:
+                                    allowed_classes = set()
+                                if not allowed_classes:
+                                    # If centroids are unavailable, fall back to whatever the mapping provides (do NOT expand from DB)
+                                    allowed_classes = set(int(k) for k in (id_to_name or id_to_student).keys()) if (id_to_name or id_to_student) else set()
+                                if allowed_classes:
+                                    id_to_name = {int(k): v for k, v in (id_to_name or {}).items() if int(k) in allowed_classes}
+                                    id_to_student = {int(k): int(v) for k, v in (id_to_student or {}).items() if int(k) in allowed_classes}
+                                    print(f"DEBUG: Filtered mappings to trained classes: {sorted(list(allowed_classes))}")
+
+                            except Exception as e:
+                                print(f"DEBUG: Mappings loading failed: {e}")
+                                # Skip DB-based fallbacks to avoid expanding beyond trained classes
+                                id_to_student = id_to_student or {}
+                                id_to_name = id_to_name or {}
+                                
+                        # Define classifier-aligned preprocessing (signature preprocessor)
+                        def _classifier_preprocess(img_pil):
+                            try:
+                                import cv2
+                                import numpy as _np
+                                from PIL import Image as _PIL  # use global Image module alias if needed
+                                if not isinstance(img_pil, _PIL.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(_np.array(img_pil))
+                                img_pil = img_pil.convert('RGB')
+                                arr = _np.asarray(img_pil)
+                                # Background removal
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                if contours:
+                                    largest_contour = max(contours, key=cv2.contourArea)
+                                    x, y, w, h = cv2.boundingRect(largest_contour)
+                                    arr = arr[y:y+h, x:x+w]
+                                # Contrast enhancement
+                                lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+                                l, a, b = cv2.split(lab)
+                                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                                l = clahe.apply(l)
+                                lab = cv2.merge([l, a, b])
+                                arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+                                # Orientation correction
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                coords = _np.column_stack(_np.where(gray > 0))
+                                if len(coords) > 0:
+                                    angle = cv2.minAreaRect(coords)[-1]
+                                    if angle < -45:
+                                        angle += 90
+                                    (h, w) = arr.shape[:2]
+                                    center = (w // 2, h // 2)
+                                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                                    arr = cv2.warpAffine(arr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+                                # Center and pad
+                                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                                coords = _np.column_stack(_np.where(gray > 0))
+                                if len(coords) > 0:
+                                    y_min, x_min = coords.min(axis=0)
+                                    y_max, x_max = coords.max(axis=0)
+                                    arr = arr[y_min:y_max+1, x_min:x_max+1]
+                                # Resize to 224x224
+                                arr = cv2.resize(arr, (224, 224), interpolation=cv2.INTER_AREA)
+                                # Normalize to [0,1]
+                                arr = arr.astype(_np.float32) / 255.0
+                                return arr
+                            except Exception as e:
+                                logger.warning(f"Preprocessing failed: {e}, using fallback")
+                                # Fallback: simple resize and normalize
+                                if not isinstance(img_pil, _PIL.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(_np.array(img_pil))
+                                img_pil = img_pil.convert('RGB')
+                                arr = _np.asarray(img_pil.resize((224, 224), _PIL.Image.Resampling.LANCZOS))
+                                return arr.astype(_np.float32) / 255.0
+
+                        # Build embedder
+                        import tensorflow as tf
+                        base_e = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+                        inp_e = tf.keras.Input(shape=(224,224,3))
+                        xe = tf.keras.applications.mobilenet_v2.preprocess_input(inp_e)
+                        xe = base_e(xe, training=False)
+                        xe = tf.keras.layers.GlobalAveragePooling2D()(xe)
+                        embedder = tf.keras.Model(inp_e, xe)
+                        # Preprocess and embed query
+                        arr_e = _classifier_preprocess(test_image)
+                        import numpy as np
+                        vec = embedder.predict(np.expand_dims(arr_e, 0), verbose=0)[0]
+                        vn = np.linalg.norm(vec) + 1e-8
+                        vec = vec / vn
+                        best_idx = -1; best_sim = -1.0
+                        print(f"DEBUG: Centroids dict keys: {list(centroids_dict.keys()) if centroids_dict else 'None'}")
+                        print(f"DEBUG: Available mappings - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
+                        for k, centroid in (centroids_dict or {}).items():
+                            ci = int(k)
+                            c = np.array(centroid, dtype=np.float32)
+                            cn = np.linalg.norm(c) + 1e-8
+                            c = c / cn
+                            sim = float(np.dot(vec, c))
+                            print(f"DEBUG: Class {ci} similarity: {sim}")
+                            if sim > best_sim:
+                                best_sim = sim; best_idx = ci
+                        print(f"DEBUG: Best match - idx: {best_idx}, sim: {best_sim}")
+                        if best_idx >= 0:
+                            import numpy as np
+                            class_idx = int(best_idx)
+                            confidence = float((best_sim + 1.0) / 2.0)
+                            predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
+                            predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
+                            print(f"DEBUG: Final centroid match - class_idx: {class_idx}, sim: {best_sim}, confidence: {confidence}, predicted_id: {predicted_id}, predicted_name: {predicted_name}")
+                            # Apply a minimum similarity threshold; if below, fall back to classifier
+                            min_sim = 0.60
+                            if best_sim >= min_sim:
+                                # Build top-k candidates for display (IDs drive identity)
+                                try:
+                                    sims = []
+                                    for k, centroid in (centroids_dict or {}).items():
+                                        c = np.array(centroid, dtype=np.float32); cn = np.linalg.norm(c) + 1e-8; c = c / cn
+                                        sims.append((int(k), float(np.dot(vec, c))))
+                                    sims.sort(key=lambda t: t[1], reverse=True)
+                                    topk = []
+                                    for ci, s in sims[:3]:
+                                        sid = int(id_to_student.get(ci)) if ci in id_to_student else 0
+                                        nm = id_to_name.get(ci) or f"class_{ci}"
+                                        conf = float((s + 1.0) / 2.0)
+                                        topk.append({"student_id": sid, "name": nm, "prob": conf})
+                                except Exception:
+                                    topk = []
+                                return {
+                                    "predicted_student": {"id": predicted_id, "name": predicted_name},
+                                    "predicted_student_id": predicted_id,
+                                    "is_match": True,
+                                    "confidence": confidence,
+                                    "score": confidence,
+                                    "global_score": confidence,
+                                    "student_confidence": confidence,
+                                    "authenticity_score": 0.0,
+                                    "is_unknown": (predicted_id == 0),
+                                    "status": "ok" if predicted_id > 0 else "unknown",
+                                    "model_type": "global_centroid",
+                                    "ai_architecture": "mobilenet_v2_embedding",
+                                    "success": True,
+                                    "decision": "match",
+                                    "candidates": [
+                                        {"id": predicted_id, "name": predicted_name, "confidence": confidence}
+                                    ],
+                                    "top_k": topk
+                                }
+                            else:
+                                print(f"DEBUG: Centroid similarity {best_sim:.3f} below threshold {min_sim:.2f}; deferring to classifier path")
+
+                    except Exception as ce:
+                        logger.info(f"Centroid fast-path unavailable or failed: {ce}")
+                    # Download model via presigned GET
+                    s3_key = model_url.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    import requests, tempfile, os, json
+                    from tensorflow import keras
+                    # Download model
+                    resp = requests.get(presigned_url, timeout=60)
+                    resp.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
+                        tmp_model.write(resp.content)
+                        model_path_local = tmp_model.name
+                    # Define classifier-aligned preprocessing (signature preprocessor)
+                    def _classifier_preprocess(img_pil):
+                        try:
+                            import cv2
+                            import numpy as _np
+                            from PIL import Image as _PIL
+                            if not isinstance(img_pil, _PIL.Image):
+                                img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(_np.array(img_pil))
+                            img_pil = img_pil.convert('RGB')
+                            arr = _np.asarray(img_pil)
+                            # Background removal
+                            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            if _np.mean(binary) > 127:
+                                binary = 255 - binary
+                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+                            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+                            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if contours:
+                                min_area = (arr.shape[0] * arr.shape[1]) * 0.001
+                                for c in contours:
+                                    if cv2.contourArea(c) < min_area:
+                                        cv2.fillPoly(binary, [c], 0)
+                            mask = binary.astype(_np.uint8)
+                            for i in range(3):
+                                arr[:, :, i] = _np.where(mask == 0, 255, arr[:, :, i])
+                            # Enhancement (CLAHE)
+                            lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+                            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+                            arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+                            # Orientation and centering
+                            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                            if _np.mean(binary) > 127:
+                                binary = 255 - binary
+                            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if contours:
+                                largest = max(contours, key=cv2.contourArea)
+                                rect = cv2.minAreaRect(largest)
+                                angle = rect[2]
+                                if angle < -45:
+                                    angle = 90 + angle
+                                if abs(angle) > 1:
+                                    h, w = arr.shape[:2]
+                                    center = (float(w // 2), float(h // 2))
+                                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                                    arr = cv2.warpAffine(arr, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+                            # Final resize with aspect preservation
+                            h, w = arr.shape[:2]
+                            target = 224
+                            scale = min(target / w, target / h)
+                            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+                            resized = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                            canvas = _np.full((target, target, 3), 255, dtype=_np.uint8)
+                            y0 = (target - new_h) // 2
+                            x0 = (target - new_w) // 2
+                            canvas[y0:y0+new_h, x0:x0+new_w] = resized
+                            out = canvas.astype('float32')
+                            if out.max() > 1.0:
+                                out = out / 255.0
+                            return out
+                        except Exception:
+                            return preprocessor.preprocess_signature(img_pil)
+                    # Download mappings if available
+                    id_to_student = {}
+                    id_to_name = {}
+                    class_to_idx = {}
+                    inferred_num_classes = None
+                    try:
+                        if mappings_url:
+                            # If mappings is on S3, presign access just like model
+                            if 'amazonaws.com' in mappings_url:
+                                try:
+                                    mkey = mappings_url.split('amazonaws.com/', 1)[-1]
+                                    from utils.s3_storage import create_presigned_get as _presign
+                                    mappings_url = _presign(mkey, expires_seconds=3600)
+                                except Exception:
+                                    pass
+                            mresp = requests.get(mappings_url, timeout=15)
+                            mresp.raise_for_status()
+                            mdata = mresp.json()
+                            # Preferred explicit mappings from trainer
+                            if mdata.get('id_to_student_id'):
+                                id_to_student = {int(k): int(v) for k, v in (mdata.get('id_to_student_id') or {}).items()}
+                            if mdata.get('id_to_student_name'):
+                                id_to_name = {int(k): str(v) for k, v in (mdata.get('id_to_student_name') or {}).items()}
+                            if mdata.get('class_to_idx'):
+                                class_to_idx = {str(k): int(v) for k, v in (mdata.get('class_to_idx') or {}).items()}
+                            if isinstance(mdata.get('num_classes'), int) and mdata['num_classes'] > 0:
+                                inferred_num_classes = int(mdata['num_classes'])
+                            # Backward compatibility
+                            # Fallback keys
+                            if not mdata.get('students') and isinstance(mdata.get('classes'), list):
+                                mdata['students'] = mdata['classes']
+                            if isinstance(mdata.get('students'), list):
+                                students_list = mdata['students']
+                                # Parse possible "id:name" entries to fill both maps when explicit maps are absent
+                                parsed_any = False
+                                for i, s in enumerate(students_list):
+                                    try:
+                                        if isinstance(s, str) and ':' in s:
+                                            sid_str, sname = s.split(':', 1)
+                                            sid_val = int(sid_str)
+                                            id_to_student.setdefault(i, sid_val)
+                                            id_to_name.setdefault(i, sname.strip())
+                                            parsed_any = True
+                                        else:
+                                            id_to_name.setdefault(i, str(s))
+                                    except Exception:
+                                        id_to_name.setdefault(i, str(s))
+                                if (not id_to_name) and (not parsed_any):
+                                    id_to_name = {int(i): str(n) for i, n in enumerate(students_list)}
+                                if inferred_num_classes is None:
+                                    inferred_num_classes = len(students_list)
+                    except Exception:
+                        id_to_student = {}
+                    try:
+                        # Try full-model load first
+                        try:
+                            classifier = keras.models.load_model(model_path_local, compile=False)
+                        except Exception as load_err:
+                            # Attempt weights + spec fallback (MobileNetV2 head)
+                            logger.warning(f"Full model load failed, attempting weights+spec fallback: {load_err}")
+                            # Download weights and spec if available
+                            weights_url = None
+                            spec_url = None
+                            if latest_global.get('training_metrics'):
+                                pass
+                            # Try derive URLs from model_url base
+                            base_url = model_url.rsplit('/', 1)[0] if '/' in model_url else None
+                            import requests as _rq
+                            import tempfile as _tf
+                            import json as _json
+                            weights_local = None
+                            spec_local = None
+                            try:
+                                if base_url:
+                                    # Build S3 keys and presign both spec and weights
+                                    after = model_url.split('amazonaws.com/', 1)[-1]
+                                    folder = after.rsplit('/', 1)[0]
+                                    spec_key = f"{folder}/classifier_spec.json"
+                                    weights_key = f"{folder}/classification.weights.h5"
+                                    try:
+                                        from utils.s3_storage import create_presigned_get as _presign
+                                        spec_url = _presign(spec_key, expires_seconds=3600)
+                                        weights_url = _presign(weights_key, expires_seconds=3600)
+                                    except Exception:
+                                        spec_url = f"{base_url}/classifier_spec.json"
+                                        weights_url = f"{base_url}/classification.weights.h5"
+                                    # Fetch spec
+                                    spec_resp = _rq.get(spec_url, timeout=30)
+                                    spec_resp.raise_for_status()
+                                    spec_data = spec_resp.json()
+                                    # Fetch weights
+                                    w_resp = _rq.get(weights_url, timeout=120)
+                                    w_resp.raise_for_status()
+                                    with _tf.NamedTemporaryFile(suffix='.h5', delete=False) as tmpw:
+                                        tmpw.write(w_resp.content)
+                                        weights_local = tmpw.name
+                                    # Build model by spec
+                                    arch = spec_data.get('architecture')
+                                    num_classes = int(spec_data.get('num_classes') or (inferred_num_classes or 2))
+                                    if arch != 'mobilenet_v2_classifier':
+                                        raise RuntimeError('Unsupported classifier architecture in spec')
+                                    import tensorflow as tf
+                                    base = tf.keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
+                                    inputs_b = tf.keras.Input(shape=(224,224,3))
+                                    x_b = tf.keras.applications.mobilenet_v2.preprocess_input(inputs_b)
+                                    x_b = base(x_b, training=False)
+                                    x_b = tf.keras.layers.GlobalAveragePooling2D()(x_b)
+                                    x_b = tf.keras.layers.Dropout(float(spec_data.get('head', {}).get('dropout1', 0.5)))(x_b)
+                                    x_b = tf.keras.layers.Dense(int(spec_data.get('head', {}).get('dense_units', 512)), activation='relu')(x_b)
+                                    x_b = tf.keras.layers.Dropout(float(spec_data.get('head', {}).get('dropout2', 0.4)))(x_b)
+                                    out_b = tf.keras.layers.Dense(num_classes, activation='softmax')(x_b)
+                                    classifier = tf.keras.Model(inputs_b, out_b)
+                                    # Load only matching head weights; base uses ImageNet weights
+                                    classifier.load_weights(weights_local, by_name=True, skip_mismatch=True)
+                                else:
+                                    raise RuntimeError('No base URL available to fetch weights/spec')
+                            finally:
+                                try:
+                                    if weights_local:
+                                        os.unlink(weights_local)
+                                except Exception:
+                                    pass
+                        # After building/choosing classifier, limit mappings to trained classes only
+                        try:
+                            allowed_classes = set(range(int(num_classes)))
+                            id_to_name = {int(k): v for k, v in (id_to_name or {}).items() if int(k) in allowed_classes}
+                            id_to_student = {int(k): int(v) for k, v in (id_to_student or {}).items() if int(k) in allowed_classes}
+                            logger.info(f"Filtered classifier mappings to classes 0..{num_classes-1}")
+                        except Exception as _filter_err:
+                            logger.warning(f"Failed to filter mappings to trained classes: {_filter_err}")
+                        # Preprocess and predict (use trainer-aligned pipeline)
+                        arr = _classifier_preprocess(test_image)
+                        import numpy as np
+                        probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                        
+                        # Debug logging
+                        logger.info(f"Model prediction probabilities: {probs}")
+                        logger.info(f"Number of classes: {len(probs)}")
+                        # Top-1 class prediction
+                        class_idx = int(np.argmax(probs))
+                        confidence = float(probs[class_idx])
+                        predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
+                        predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
+                        # Top-k for display
+                        try:
+                            import numpy as _np
+                            top_indices = _np.argsort(-probs)[:3]
+                            top_k = []
+                            for ci in top_indices:
+                                ci = int(ci)
+                                sid = int(id_to_student.get(ci)) if ci in id_to_student else 0
+                                nm = id_to_name.get(ci) or f"class_{ci}"
+                                top_k.append({"student_id": sid, "name": nm, "prob": float(probs[ci])})
+                        except Exception:
+                            top_k = []
+
+                        # Apply confidence threshold gating
+                        thr = getattr(settings, 'CONFIDENCE_THRESHOLD', 0.5)
+                        below_thr = confidence < float(thr)
+                        out_id = 0 if below_thr else predicted_id
+                        out_name = predicted_name if not below_thr else "Unknown"
+
+                        # Return identification result using global classifier
+                        return {
+                            "predicted_student": {"id": out_id, "name": out_name},
+                            "predicted_student_id": out_id,
+                            "is_match": not below_thr,
+                            "confidence": confidence,
+                            "score": confidence,
+                            "global_score": confidence,
+                            "student_confidence": confidence,
+                            "authenticity_score": 0.0,
+                            "is_unknown": (out_id == 0),
+                            "status": "unknown" if below_thr or out_id == 0 else "ok",
+                            "model_type": "global_classifier",
+                            "ai_architecture": "simple_cnn_classifier",
+                            "success": True,
+                            "decision": "match" if not below_thr else "unknown",
+                            "candidates": [
+                                {"id": out_id, "name": out_name, "confidence": confidence}
+                            ],
+                            "top_k": top_k
+                        }
+                    finally:
+                        try:
+                            os.unlink(model_path_local)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Global classifier fast-path failed: {e}")
+
         # Try to get latest AI model first, fallback to legacy models
         latest_ai_model = None
         try:
@@ -356,103 +890,8 @@ async def identify_signature_owner(
                 signature_ai_manager = request_model_manager
                 
                 # CRITICAL FIX: Ensure mappings are loaded
-                if not signature_ai_manager.id_to_student:
-                    logger.warning("No student mappings loaded, loading from database...")
-                    try:
-                        # Try to get only the students that were used in training
-                        try:
-                            # Get students that have signatures (these are the ones used in training)
-                            students_with_signatures = await db_manager.list_students_with_images()
-                            if students_with_signatures:
-                                # Extract unique student IDs from signatures
-                                trained_student_ids = set()
-                                for student_data in students_with_signatures:
-                                    if 'student_id' in student_data:
-                                        trained_student_ids.add(student_data['student_id'])
-                                
-                                logger.info(f"DEBUG: Found {len(trained_student_ids)} students with signatures: {list(trained_student_ids)}")
-                                
-                                # Get student details for only the trained students
-                                students = []
-                                for student_id in trained_student_ids:
-                                    try:
-                                        student_response = db_manager.client.table("students").select("*").eq("id", student_id).execute()
-                                        if student_response.data:
-                                            student = student_response.data[0]
-                                            logger.info(f"DEBUG: Student {student_id} fields: {list(student.keys())}")
-                                            
-                                            # Try to construct a proper name from available fields
-                                            name = None
-                                            
-                                            # Try to combine firstname and surname (based on the actual field names)
-                                            if student.get('firstname') and student.get('surname'):
-                                                name = f"{student['firstname']} {student['surname']}"
-                                            elif student.get('firstname'):
-                                                name = student['firstname']
-                                            elif student.get('surname'):
-                                                name = student['surname']
-                                            # Try other name field combinations
-                                            elif student.get('first_name') and student.get('last_name'):
-                                                name = f"{student['first_name']} {student['last_name']}"
-                                            elif student.get('first_name'):
-                                                name = student['first_name']
-                                            elif student.get('last_name'):
-                                                name = student['last_name']
-                                            # Try other name fields
-                                            elif student.get('full_name'):
-                                                name = student['full_name']
-                                            elif student.get('student_name'):
-                                                name = student['student_name']
-                                            elif student.get('name'):
-                                                name = student['name']
-                                            # If we have email, try to extract name from it
-                                            elif student.get('email'):
-                                                email = student['email']
-                                                # Extract name from email (before @)
-                                                email_name = email.split('@')[0]
-                                                # Convert dots and underscores to spaces and capitalize
-                                                name = email_name.replace('.', ' ').replace('_', ' ').title()
-                                            else:
-                                                name = f"Student_{student_id}"
-                                            
-                                            student['name'] = name
-                                            logger.info(f"DEBUG: Student {student_id} name: {name}")
-                                            students.append(student)
-                                    except Exception as student_error:
-                                        logger.warning(f"Failed to get student {student_id}: {student_error}")
-                                        continue
-                                
-                                logger.info(f"DEBUG: Loaded {len(students)} trained students")
-                            else:
-                                logger.warning("DEBUG: No students with signatures found")
-                                students = []
-                        except Exception as e:
-                            logger.error(f"Failed to get students from students table: {e}")
-                            students = []
-                        
-                        if students:
-                            logger.info(f"DEBUG: First student data structure: {students[0] if students else 'None'}")
-                            for i, student in enumerate(students):
-                                logger.info(f"DEBUG: Student {i}: {student}")
-                                student_id = student.get('id')
-                                student_name = student.get('name')
-                                logger.info(f"DEBUG: Extracted student_id={student_id}, name={student_name}")
-                                if student_id and student_name:
-                                    # Map model class index (i) to actual student ID
-                                    signature_ai_manager.student_to_id[student_name] = i
-                                    signature_ai_manager.id_to_student[i] = student_name
-                                    # Also map the actual student ID for reference
-                                    signature_ai_manager.id_to_student[student_id] = student_name
-                                    logger.info(f"DEBUG: Mapped student {student_name} (ID: {student_id}) to class index {i}")
-                            logger.info(f"Loaded emergency mappings: {len(signature_ai_manager.id_to_student)} students")
-                            # Only log first few mappings to avoid spam
-                            sample_mappings = dict(list(signature_ai_manager.id_to_student.items())[:5])
-                            logger.info(f"Sample student mappings: {sample_mappings}")
-                        else:
-                            logger.warning("DEBUG: No students returned from database")
-                    except Exception as e:
-                        logger.error(f"Failed to load emergency mappings: {e}")
-                
+                # DB emergency mapping disabled; rely only on artifact-provided mappings.
+                # If mappings are missing, the system will return unknown rather than guessing.
             except Exception as e:
                 logger.error(f"Failed to load AI models: {e}")
                 return _get_fallback_response("identify")
@@ -614,11 +1053,11 @@ async def identify_signature_owner(
                                         with open(tmp_path, 'rb') as f:
                                             model_data = f.read()
                                         model = _deserialize_model_from_bytes(model_data)
-                                        logger.info(f"Loaded {model_type} model using custom deserialization")
+                                        logger.info(f"Loaded model using custom deserialization")
                                     except Exception as custom_error:
                                         logger.warning(f"Custom deserialization failed, trying standard Keras: {custom_error}")
                                         model = keras.models.load_model(tmp_path)
-                                        logger.info(f"Loaded {model_type} model using standard Keras")
+                                        logger.info(f"Loaded model using standard Keras")
                                     
                                     # Set the appropriate model with safeguards
                                     if model_type == 'embedding':
@@ -667,11 +1106,11 @@ async def identify_signature_owner(
         # Preprocess test signature with advanced preprocessing
         processed_signature = preprocessor.preprocess_signature(test_image)
         
-        # Global-first selection (restricted to trained students)
+        # Global-first selection (restricted to students present in artifacts)
         hybrid = {"global_score": 0.0, "global_margin": 0.0, "global_margin_raw": 0.0}
         predicted_owner_id = None
+        artifact_ids: set[int] = set()
         try:
-            trained_ids = await _get_trained_student_ids()
             latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
             if latest_global and latest_global.get("model_path"):
                 gsm = GlobalSignatureVerificationModel()
@@ -711,10 +1150,14 @@ async def identify_signature_owner(
                 best_cos = -1.0
                 second_cos = -1.0
                 if centroids:
+                    try:
+                        artifact_ids = {int(sid) for sid in centroids.keys()}
+                    except Exception:
+                        artifact_ids = set()
                     for sid, centroid in centroids.items():
-                        # Restrict to trained students only
+                        # Restrict strictly to artifact-defined students
                         try:
-                            if trained_ids and int(sid) not in trained_ids:
+                            if artifact_ids and int(sid) not in artifact_ids:
                                 continue
                         except Exception:
                             pass
@@ -734,28 +1177,8 @@ async def identify_signature_owner(
                             second_best = score01
                             second_cos = cosine
                 else:
-                    # Fallback: compute quick centroids online (only consider trained IDs if present)
-                    candidate_ids = await _list_candidate_student_ids(limit=50, allowed_ids=trained_ids if trained_ids else None)
-                    for sid in candidate_ids:
-                        arrays = await _fetch_genuine_arrays_for_student(int(sid), max_images=3)
-                        if not arrays:
-                            continue
-                        ref_embs = gsm.embed_images(arrays)
-                        centroid = np.mean(ref_embs, axis=0)
-                        num = float((test_emb * centroid).sum())
-                        den = float((np.linalg.norm(test_emb) * np.linalg.norm(centroid)) + 1e-8)
-                        cosine = num / den
-                        # Tuned scaling to avoid near-1.0 inflation
-                        score01 = max(0.0, min(1.0, (cosine - 0.5) / 0.5))
-                        if score01 > best_score:
-                            second_best = best_score
-                            second_cos = best_cos
-                            best_score = score01
-                            best_cos = cosine
-                            best_sid = sid
-                        elif score01 > second_best:
-                            second_best = score01
-                            second_cos = cosine
+                    # No artifact centroids available; skip online centroid fallback to avoid DB expansion
+                    pass
                 if best_sid is not None:
                     predicted_owner_id = int(best_sid)
                     hybrid["global_score"] = float(best_score)
@@ -838,7 +1261,7 @@ async def identify_signature_owner(
         
         # Improved unknown thresholding with configurable confidence threshold
         is_unknown = True
-        trained_ids = await _get_trained_student_ids()
+        trained_ids = artifact_ids
         
         # If we already accepted a high-score zero-margin global prediction, finalize early
         if accepted_zero_margin_high and predicted_owner_id is not None and (not trained_ids or int(predicted_owner_id) in trained_ids):
@@ -884,10 +1307,7 @@ async def identify_signature_owner(
         if predicted_owner_id is not None and predicted_owner_id > 0:
             # Accept if global is confident AND has good separation
             if global_score >= 0.70 and (global_margin >= 0.05 or global_margin_raw >= 0.02):
-                if has_auth:
-                    is_unknown = not bool(result.get("is_genuine", False))
-                else:
-                    is_unknown = False
+                is_unknown = False
             # Also accept if individual model is confident (even without global)
             elif student_confidence >= 0.60:
                 is_unknown = False
@@ -914,8 +1334,6 @@ async def identify_signature_owner(
             (global_score >= confidence_threshold + 0.1 and (global_margin >= 0.01 or global_margin_raw >= 0.01)) or
             (student_confidence >= confidence_threshold - 0.1 and global_score >= confidence_threshold)
         )
-        
-        # Do not auto-accept individual prediction if global was rejected (avoid false positives)
         
         # Forgery detection is disabled system-wide - focus on owner identification only
         auth_ok = True  # Always pass since we're not doing forgery detection
@@ -1155,6 +1573,95 @@ async def verify_signature(
 
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
+
+        # Fast path: try latest global classifier (MobileNetV2) directly
+        try:
+            latest_global = await db_manager.get_latest_global_model() if hasattr(db_manager, 'get_latest_global_model') else None
+            if latest_global and latest_global.get("status") == "completed" and latest_global.get("model_path"):
+                model_url = latest_global.get("model_path")
+                mappings_url = latest_global.get("mappings_path") or latest_global.get("mappings_url")
+                if model_url.startswith('https://') and 'amazonaws.com' in model_url:
+                    # Download model via presigned GET
+                    s3_key = model_url.split('amazonaws.com/')[-1]
+                    from utils.s3_storage import create_presigned_get
+                    presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+                    import requests, tempfile, os, json
+                    from tensorflow import keras
+                    # Download model
+                    resp = requests.get(presigned_url, timeout=60)
+                    resp.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_model:
+                        tmp_model.write(resp.content)
+                        model_path_local = tmp_model.name
+                    # Download mappings if available
+                    id_to_student = {}
+                    try:
+                        if mappings_url:
+                            mresp = requests.get(mappings_url, timeout=15)
+                            mresp.raise_for_status()
+                            mdata = mresp.json()
+                            id_to_student = {int(k): v for k, v in (mdata.get('id_to_student') or {}).items()}
+                    except Exception:
+                        id_to_student = {}
+                    try:
+                        # Try full-model load first
+                        try:
+                            classifier = keras.models.load_model(model_path_local, compile=False)
+                        except Exception as load_err:
+                            logger.warning(f"Keras model load failed (verify), trying weights-only path: {load_err}")
+                            # Rebuild MobileNetV2 classifier and load weights
+                            num_classes = 2
+                            try:
+                                # If mappings present, set num_classes accordingly
+                                num_classes = max(2, len(id_to_student) or 2)
+                            except Exception:
+                                pass
+                            import tensorflow as tf
+                            base = tf.keras.applications.MobileNetV2(include_top=False, weights=None, input_shape=(settings.MODEL_IMAGE_SIZE, settings.MODEL_IMAGE_SIZE, 3))
+                            x = tf.keras.layers.GlobalAveragePooling2D()(base.output)
+                            out = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+                            classifier = tf.keras.Model(inputs=base.input, outputs=out)
+                            try:
+                                classifier.load_weights(model_path_local)
+                            except Exception as werr:
+                                raise RuntimeError(f"Failed to load weights into reconstructed classifier: {werr}")
+                        # Preprocess and predict
+                        arr = preprocessor.preprocess_signature(test_image)
+                        import numpy as np
+                        probs = classifier.predict(np.expand_dims(arr, 0), verbose=0)[0]
+                        class_idx = int(np.argmax(probs))
+                        confidence = float(np.max(probs))
+                        predicted_name = id_to_student.get(class_idx, f"class_{class_idx}")
+                        predicted_id = class_idx if class_idx in id_to_student else 0
+                        is_correct_student = (student_id is None) or (predicted_id == student_id)
+                        return {
+                            "is_match": is_correct_student,
+                            "confidence": confidence,
+                            "score": confidence,
+                            "global_score": confidence,
+                            "student_confidence": confidence,
+                            "authenticity_score": 0.0,
+                            "predicted_student": {"id": predicted_id, "name": predicted_name},
+                            "target_student_id": student_id,
+                            "is_correct_student": is_correct_student,
+                            "is_genuine": True,
+                            "is_unknown": False,
+                            "model_type": "global_classifier",
+                            "ai_architecture": "simple_cnn_classifier",
+                            "success": True,
+                            "message": "Match found" if is_correct_student else "No match found",
+                            "decision": "match" if is_correct_student else "no_match",
+                            "candidates": [
+                                {"id": predicted_id, "name": predicted_name, "confidence": confidence}
+                            ]
+                        }
+                    finally:
+                        try:
+                            os.unlink(model_path_local)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Global classifier fast-path (verify) failed: {e}")
 
         # Use the same AI model loading logic as identify
         latest_ai_model = None

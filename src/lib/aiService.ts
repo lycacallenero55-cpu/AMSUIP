@@ -471,13 +471,15 @@ export class AIService {
     genuineFiles: File[],
     forgedFiles: File[],
     useGPU: boolean = true,
-    useS3Upload: boolean = false
+    saveToS3: boolean = true
   ): Promise<AsyncTrainingResponse> {
     try {
       const formData = new FormData();
       formData.append('student_id', studentId);
       formData.append('use_gpu', useGPU.toString());
-      formData.append('use_s3_upload', useS3Upload.toString());
+      // Backend expects `use_s3_upload`; keep legacy `save_to_s3` for backward compatibility
+      formData.append('use_s3_upload', saveToS3.toString());
+      formData.append('save_to_s3', saveToS3.toString());
       
       for (const file of genuineFiles) {
         formData.append('genuine_files', file);

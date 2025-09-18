@@ -1,0 +1,11 @@
+cd ai-training
+venv/Scripts/activate
+python main.py
+
+
+npm run dev
+
+
+git fetch origin
+git reset --hard origin/main
+That guarantees your local main is an exact copy of the remote main. 🚀
