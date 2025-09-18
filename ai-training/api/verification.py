@@ -326,15 +326,21 @@ async def identify_signature_owner(
                                 try:
                                     print("DEBUG: Attempting database fallback for student info...")
                                     # Get all students to build a mapping
-                                    students_resp = await db_manager.client.table("students").select("id, student_name, full_name, name").execute()
+                                    students_resp = await db_manager.client.table("students").select("id, firstname, surname").execute()
                                     if hasattr(students_resp, 'data') and students_resp.data:
                                         # Create a simple mapping based on alphabetical order
                                         # Try to get the name from available columns
                                         def get_student_name(student):
-                                            return (student.get('student_name') or 
-                                                   student.get('full_name') or 
-                                                   student.get('name') or 
-                                                   f"Student_{student['id']}")
+                                            firstname = student.get('firstname', '').strip()
+                                            surname = student.get('surname', '').strip()
+                                            if firstname and surname:
+                                                return f"{firstname} {surname}"
+                                            elif firstname:
+                                                return firstname
+                                            elif surname:
+                                                return surname
+                                            else:
+                                                return f"Student_{student['id']}"
                                         
                                         students = sorted(students_resp.data, key=lambda x: get_student_name(x))
                                         for i, student in enumerate(students):
