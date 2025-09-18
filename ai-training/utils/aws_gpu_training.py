@@ -469,21 +469,24 @@ echo "Instance setup completed at $(date)"
             # Create training script
             training_script = self._generate_training_script()
             
-            # Upload script to S3 first
-            script_key = f'scripts/{job_id}/train_gpu.py'
+            # Upload script to S3 first (base64-encoded to avoid quoting/newline mangling)
+            script_key = f'scripts/{job_id}/train_gpu.py.b64'
+            encoded = base64.b64encode(training_script.encode('utf-8'))
             self.s3_client.put_object(
                 Bucket=self.s3_bucket,
                 Key=script_key,
-                Body=training_script,
-                ContentType='text/x-python'
+                Body=encoded,
+                ContentType='text/plain'
             )
             
             # Download and setup script on instance using SSM
             setup_commands = [
                 f'mkdir -p {self.training_script_path}',
                 f'cd {self.training_script_path}',
-                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py',
+                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py.b64',
+                'base64 -d train_gpu.py.b64 > train_gpu.py',
                 'chmod +x train_gpu.py',
+                'rm -f train_gpu.py.b64',
                 f'echo "Setup complete for job {job_id}"'
             ]
             
