@@ -326,7 +326,7 @@ async def identify_signature_owner(
                                 try:
                                     print("DEBUG: Attempting database fallback for student info...")
                                     # Get all students to build a mapping
-                                    students_resp = await db_manager.client.table("students").select("id, firstname, surname").execute()
+                                    students_resp = db_manager.client.table("students").select("id, firstname, surname").execute()
                                     if hasattr(students_resp, 'data') and students_resp.data:
                                         # Create a simple mapping based on alphabetical order
                                         # Try to get the name from available columns
