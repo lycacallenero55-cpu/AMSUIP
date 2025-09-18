@@ -283,28 +283,40 @@ async def identify_signature_owner(
                             try:
                                 mresp = _rq.get(mappings_url, timeout=15); mresp.raise_for_status()
                                 mdata2 = mresp.json()
+                                print(f"DEBUG: Loaded mappings keys: {list(mdata2.keys())}")
+                                
+                                # Primary: use explicit id_to_student_id and id_to_student_name
                                 if mdata2.get('id_to_student_id'):
                                     id_to_student = {int(k): int(v) for k, v in (mdata2.get('id_to_student_id') or {}).items()}
+                                    print(f"DEBUG: Loaded id_to_student: {id_to_student}")
                                 if mdata2.get('id_to_student_name'):
                                     id_to_name = {int(k): str(v) for k, v in (mdata2.get('id_to_student_name') or {}).items()}
+                                    print(f"DEBUG: Loaded id_to_name: {id_to_name}")
+                                
+                                # Fallback: parse from students list with "id:name" format
                                 if (not id_to_name) and isinstance(mdata2.get('students'), list):
-                                    id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['students'])}
-                                if (not id_to_name) and isinstance(mdata2.get('classes'), list):
-                                    # Fallback: parse "id:name" strings
-                                    tmp = {}
-                                    for i, entry in enumerate(mdata2['classes']):
+                                    tmp_student = {}; tmp_name = {}
+                                    for i, entry in enumerate(mdata2['students']):
                                         if isinstance(entry, str) and ':' in entry:
                                             parts = entry.split(':', 1)
                                             try:
                                                 sid = int(parts[0]); name = parts[1].strip()
-                                                id_to_student[i] = sid; tmp[i] = name
+                                                tmp_student[i] = sid; tmp_name[i] = name
                                             except Exception:
-                                                tmp[i] = entry
+                                                tmp_name[i] = entry
                                         else:
-                                            tmp[i] = str(entry)
-                                    if tmp:
-                                        id_to_name = tmp
-                            except Exception:
+                                            tmp_name[i] = str(entry)
+                                    if tmp_student: id_to_student.update(tmp_student)
+                                    if tmp_name: id_to_name.update(tmp_name)
+                                    print(f"DEBUG: Parsed from students list - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
+                                
+                                # Final fallback: use classes list
+                                if (not id_to_name) and isinstance(mdata2.get('classes'), list):
+                                    id_to_name = {int(i): str(n) for i, n in enumerate(mdata2['classes'])}
+                                    print(f"DEBUG: Fallback to classes list: {id_to_name}")
+                                    
+                            except Exception as e:
+                                print(f"DEBUG: Mappings loading failed: {e}")
                                 pass
                         # Define classifier-aligned preprocessing (signature preprocessor)
                         def _classifier_preprocess(img_pil):
@@ -378,20 +390,25 @@ async def identify_signature_owner(
                         vn = _np.linalg.norm(vec) + 1e-8
                         vec = vec / vn
                         best_idx = -1; best_sim = -1.0
+                        print(f"DEBUG: Centroids dict keys: {list(centroids_dict.keys()) if centroids_dict else 'None'}")
+                        print(f"DEBUG: Available mappings - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
                         for k, centroid in (centroids_dict or {}).items():
                             ci = int(k)
                             c = _np.array(centroid, dtype=_np.float32)
                             cn = _np.linalg.norm(c) + 1e-8
                             c = c / cn
                             sim = float(_np.dot(vec, c))
+                            print(f"DEBUG: Class {ci} similarity: {sim}")
                             if sim > best_sim:
                                 best_sim = sim; best_idx = ci
+                        print(f"DEBUG: Best match - idx: {best_idx}, sim: {best_sim}")
                         if best_idx >= 0:
                             import numpy as np
                             class_idx = int(best_idx)
                             confidence = float((best_sim + 1.0) / 2.0)
                             predicted_name = id_to_name.get(class_idx) or f"class_{class_idx}"
                             predicted_id = int(id_to_student.get(class_idx)) if class_idx in id_to_student else 0
+                            print(f"DEBUG: Final prediction - class_idx: {class_idx}, predicted_id: {predicted_id}, predicted_name: {predicted_name}")
                             return {
                                 "predicted_student": {"id": predicted_id, "name": predicted_name},
                                 "is_match": True,
