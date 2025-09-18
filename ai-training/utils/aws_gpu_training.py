@@ -1063,6 +1063,11 @@ if __name__ == "__main__":
     
     train_on_gpu(training_data_key, job_id, student_id)
 '''
+        # Safety: eliminate f-strings to avoid accidental broken lines during transport
+        try:
+            script_content = script_content.replace('print(f"', 'print("')
+        except Exception:
+            pass
         return script_content
     
     async def _start_remote_training(self, instance_id: str, training_data_key: str, 
