@@ -392,6 +392,23 @@ def train_on_gpu(training_data_key, job_id, student_id):
                 }
             }
         }
+        # Ensure JSON-serializable
+        def _to_py(o):
+            try:
+                import numpy as _np
+                if isinstance(o, _np.generic):
+                    return o.item()
+                if isinstance(o, _np.ndarray):
+                    return o.tolist()
+            except Exception:
+                pass
+            if isinstance(o, dict):
+                return {k: _to_py(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_to_py(v) for v in o]
+            return o
+        results = _to_py(results)
+
         results_path = '/tmp/training_results.json'
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
