@@ -880,11 +880,22 @@ async def identify_signature_owner(
                         mappings_response = requests.get(mappings_path, timeout=10)
                         mappings_response.raise_for_status()
                         mappings_data = mappings_response.json()
-                        request_model_manager.student_to_id = mappings_data['student_to_id']
-                        request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
+                        # Support both legacy and ID-first schemas
+                        if 'class_index_to_student_id' in mappings_data:
+                            ci2sid = mappings_data.get('class_index_to_student_id', {})
+                            ci2name = mappings_data.get('class_index_to_student_name', {})
+                            request_model_manager.id_to_student = {int(k): str(ci2name.get(k, f"Unknown_{k}")) for k in ci2sid.keys()}
+                            # external map: display name -> numeric ID
+                            request_model_manager.external_student_id_map = {str(ci2name.get(k, f"Unknown_{k}")): int(v) for k, v in ci2sid.items()}
+                            request_model_manager.student_to_id = {v: int(k) for k, v in request_model_manager.id_to_student.items()}
+                        else:
+                            request_model_manager.student_to_id = mappings_data['student_to_id']
+                            request_model_manager.id_to_student = {int(k): v for k, v in mappings_data['id_to_student'].items()}
                     except Exception as e:
                         logger.error(f"Failed to load student mappings: {e}")
                         # Continue without mappings - will use fallback
+                else:
+                    logger.warning("mappings_path missing in latest_ai_model; proceeding without mappings")
                 
                 # Use the request-specific model manager
                 signature_ai_manager = request_model_manager
@@ -1140,7 +1151,11 @@ async def identify_signature_owner(
                             os.unlink(tmp_path)
                         except:
                             pass
-                test_emb = gsm.embed_images([processed_signature])[0]
+                try:
+                    test_emb = gsm.embed_images([processed_signature])[0]
+                except Exception as e:
+                    logger.warning(f"Failed to embed with global model: {e}")
+                    test_emb = None
                 # Try cached centroids first
                 centroids = await _load_cached_centroids(latest_global) or {}
                 import numpy as np
@@ -1190,7 +1205,7 @@ async def identify_signature_owner(
         except Exception as e:
             logger.warning(f"Global-first selection failed: {e}")
 
-        # Individual model inference to get overall confidence
+        # Individual model inference to get overall confidence and top-k
         try:
             # Check if we have any loaded models
             has_any_model = signature_ai_manager.embedding_model is not None
@@ -1201,6 +1216,24 @@ async def identify_signature_owner(
             
             result = signature_ai_manager.verify_signature(processed_signature)
             combined_confidence = result["overall_confidence"]
+            # If global classifier exists, compute top-k on it too (best-effort)
+            try:
+                # Attempt to reuse embedding and classification if available
+                if hasattr(signature_ai_manager, 'classification_head') and signature_ai_manager.classification_head is not None:
+                    import numpy as np
+                    probs = signature_ai_manager.classification_head.predict(np.expand_dims(processed_signature, 0), verbose=0)[0]
+                    topk = int(min(3, probs.shape[0]))
+                    idx = np.argsort(-probs)[:topk]
+                    candidates = []
+                    for i in idx:
+                        name = signature_ai_manager.id_to_student.get(int(i), f"Unknown_{int(i)}")
+                        sid = int(signature_ai_manager.external_student_id_map.get(name)) if getattr(signature_ai_manager, 'external_student_id_map', None) and name in signature_ai_manager.external_student_id_map else int(i)
+                        candidates.append({"id": sid, "name": name, "confidence": float(probs[int(i)])})
+                    # Merge with result.top_k if not present
+                    if not result.get("top_k"):
+                        result["top_k"] = [{"student_id": c["id"], "name": c["name"], "prob": c["confidence"]} for c in candidates]
+            except Exception:
+                pass
         except ValueError as e:
             logger.error(f"Model verification failed: {e}")
             return _get_fallback_response("identify")
@@ -1545,7 +1578,9 @@ async def identify_signature_owner(
             "success": True,
             "message": "Match found" if is_match else "No match found",
             "decision": decision,
-            "candidates": candidates
+            "candidates": candidates,
+            "top_k": result.get("top_k", []) ,
+            "status": ("ok" if not result.get("is_unknown") else "unknown")
         }
         # Back-compat fields for UI
         response_obj["predicted_student_id"] = 0 if is_unknown else result["predicted_student_id"]
@@ -2153,7 +2188,9 @@ async def verify_signature(
             "success": True,
             "message": "Match found" if is_match else "No match found",
             "decision": decision,
-            "candidates": candidates
+            "candidates": candidates,
+            "top_k": result.get("top_k", []),
+            "status": ("ok" if not result.get("is_unknown") else "unknown")
         }
         
     except HTTPException:

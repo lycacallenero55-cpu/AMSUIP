@@ -205,6 +205,77 @@ class GlobalSignatureVerificationModel:
         )
         
         return history
+
+    def create_global_classifier(self, num_classes: int):
+        """Create a global classifier head over embeddings for owner identification."""
+        if self.embedding_model is None:
+            self.create_global_embedding_model()
+        x = layers.Dense(256, activation='relu')(self.embedding_model.output)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.4)(x)
+        outputs = layers.Dense(num_classes, activation='softmax', name='student_softmax')(x)
+        self.classifier = keras.Model(self.embedding_model.input, outputs, name='global_classifier')
+        self.classifier.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate),
+            loss='sparse_categorical_crossentropy',
+            metrics=[
+                'accuracy',
+                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
+            ],
+        )
+        return self.classifier
+
+    def train_global_classifier(self, all_student_data: Dict[int, Dict], epochs: int = 15):
+        """Train a single classifier across all owners. Uses basic numpy arrays input."""
+        images = []
+        labels = []
+        id_to_class_index = {}
+        class_index_to_student_id = {}
+        class_index = 0
+        for student_id, data in all_student_data.items():
+            if len(data.get('genuine_images', [])) == 0:
+                continue
+            id_to_class_index[int(student_id)] = class_index
+            class_index_to_student_id[class_index] = int(student_id)
+            for arr in data['genuine_images']:
+                images.append(arr)
+                labels.append(class_index)
+            class_index += 1
+        if not images:
+            raise ValueError("No images for global classifier")
+        import numpy as np
+        X = np.array(images, dtype=np.float32)
+        y = np.array(labels, dtype=np.int32)
+        # Build tf.data pipeline with augmentation only on train
+        from utils.tfdata import split_train_val, make_tfdata_from_numpy
+        train_x, train_y, val_x, val_y = split_train_val(X, y, val_fraction=0.2)
+        train_ds = make_tfdata_from_numpy(train_x, train_y, self.image_size, self.batch_size, shuffle=True, augment=True)
+        val_ds = make_tfdata_from_numpy(val_x, val_y, self.image_size, self.batch_size, shuffle=False, augment=False)
+        # Build model
+        self.create_global_embedding_model()
+        clf = self.create_global_classifier(num_classes=class_index)
+        callbacks = [
+            keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True),
+            keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6),
+        ]
+        history = clf.fit(train_ds, validation_data=val_ds, epochs=epochs, verbose=1, callbacks=callbacks)
+        self.id_to_class_index = id_to_class_index
+        self.class_index_to_student_id = class_index_to_student_id
+        return history
+
+    def evaluate_global_classifier(self, val_ds):
+        if not hasattr(self, 'classifier'):
+            raise ValueError('Classifier not created')
+        return self.classifier.evaluate(val_ds, verbose=0)
+
+    def predict_topk(self, images: np.ndarray, k: int = 3):
+        if not hasattr(self, 'classifier'):
+            raise ValueError('Classifier not created')
+        probs = self.classifier.predict(images, verbose=0)
+        import numpy as np
+        top_idx = np.argsort(-probs, axis=1)[:, :k]
+        top_prob = np.take_along_axis(probs, top_idx, axis=1)
+        return top_idx, top_prob
     
     def embed_images(self, images: List[np.ndarray]) -> np.ndarray:
         """Generate embeddings for a list of images"""

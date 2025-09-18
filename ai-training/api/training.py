@@ -36,6 +36,7 @@ from models.global_signature_model import GlobalSignatureVerificationModel
 from utils.s3_storage import create_presigned_get, download_bytes
 from utils.s3_storage import upload_model_file as upload_file_generic
 from utils.storage import cleanup_local_file
+from utils.artifacts import package_global_classifier_artifacts, build_classifier_spec
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -970,40 +971,75 @@ async def train_global_model():
             (bucket["genuine_images"] if label == "genuine" else bucket["forged_images"]).append(image)
 
         gsm = GlobalSignatureVerificationModel()
-        history = gsm.train_global_model(data_by_student)
+        # Train global classifier with tf.data and validation metrics
+        history = gsm.train_global_classifier(data_by_student, epochs=settings.MODEL_EPOCHS)
         
-        # Save global model directly to S3 (no local files)
+        # Build artifacts for classifier
         model_uuid = str(uuid.uuid4())
+        # Build mappings in ID-first format
+        ci2sid = {str(ci): sid for ci, sid in getattr(gsm, 'class_index_to_student_id', {}).items()}
+        ci2name = {str(ci): str(ci) for ci in getattr(gsm, 'class_index_to_student_id', {}).keys()}
         try:
-            # Use direct S3 saving to eliminate two-step process
-            from utils.direct_s3_saving import save_global_model_directly
-            s3_key, s3_url = save_global_model_directly(gsm, "global", model_uuid)
-            logger.info(f"✅ Global model {model_uuid} saved directly to S3")
-            
+            # Try to use latest DB student names for nicer mapping (optional)
+            for sid, ci in getattr(gsm, 'id_to_class_index', {}).items():
+                try:
+                    student = await db_manager.get_student(int(sid))
+                    if student:
+                        name = f"{student.get('firstname','')} {student.get('surname','')}".strip() or student.get('name') or f"Student_{sid}"
+                        ci2name[str(ci)] = name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        id_first_mappings = {
+            "class_index_to_student_id": ci2sid,
+            "class_index_to_student_name": ci2name,
+            "student_id_to_class_index": {str(v): int(k) for k, v in getattr(gsm, 'class_index_to_student_id', {}).items()}
+        }
+        # Training results summary
+        tr = {
+            "final_accuracy": float(history.history.get('accuracy', [0])[-1]) if history.history.get('accuracy') else None,
+            "final_val_accuracy": float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
+            "final_loss": float(history.history.get('loss', [0])[-1]) if history.history.get('loss') else None,
+            "final_val_loss": float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None,
+            "history": {k: [float(x) for x in v] for k, v in history.history.items()},
+        }
+        spec = build_classifier_spec(num_classes=len(ci2sid), image_size=settings.MODEL_IMAGE_SIZE)
+        # Compute centroids for faster verification (optional)
+        try:
+            centroids_arr = gsm.compute_student_centroids(data_by_student)
+            centroids_json = {int(k): v.tolist() for k, v in centroids_arr.items()}
         except Exception as e:
-            logger.error(f"❌ Failed to save global model directly to S3: {e}")
-            # Fallback to original method if direct S3 saving fails
-            base_path = os.path.join(settings.LOCAL_MODELS_DIR, f"global_model_{model_uuid}")
-            os.makedirs(settings.LOCAL_MODELS_DIR, exist_ok=True)
-            
-            # Save model locally first
-            gsm.save_model(f"{base_path}.keras")
-            
-            # Upload to S3
-            with open(f"{base_path}.keras", 'rb') as f:
-                model_data = f.read()
-            
-            s3_key, s3_url = upload_model_file(
-                model_data, "global", f"global_{model_uuid}", "keras"
-            )
-            
-            # Clean up local file
-            cleanup_local_file(f"{base_path}.keras")
+            logger.warning(f"Failed to compute centroids: {e}")
+            centroids_json = None
+        # Package locally
+        artifacts = package_global_classifier_artifacts(
+            model_uuid,
+            settings.LOCAL_MODELS_DIR,
+            getattr(gsm, 'classifier'),
+            getattr(gsm, 'embedding_model', None),
+            id_first_mappings,
+            centroids_json,
+            tr,
+            spec,
+        )
+        # Upload artifacts to S3 under models/global/<uuid>
+        s3_urls = {}
+        s3_keys = {}
+        for key_name, path in artifacts.items():
+            if not path:
+                continue
+            with open(path, 'rb') as f:
+                ext = os.path.splitext(path)[1].lstrip('.') or 'bin'
+                up_key, up_url = upload_file_generic(f.read(), "global", f"{model_uuid}_{key_name}", ext)
+                s3_keys[key_name] = up_key
+                s3_urls[key_name] = up_url
         
         # Store global model record in dedicated global table
+        # Consistently point model_path to classifier SavedModel zip URL
         model_record = await db_manager.create_global_model({
-            "model_path": s3_url,
-            "s3_key": s3_key,
+            "model_path": s3_urls.get("savedmodel_zip", ""),
+            "s3_key": s3_keys.get("savedmodel_zip", ""),
             "model_uuid": model_uuid,
             "status": "completed",
             "sample_count": sum(len(data['genuine_images']) + len(data['forged_images']) for data in data_by_student.values()),
@@ -1019,7 +1055,10 @@ async def train_global_model():
                 'epochs_trained': len(history.history.get('accuracy', [])),
                 'val_accuracy': float(history.history.get('val_accuracy', [0])[-1]) if history.history.get('val_accuracy') else None,
                 'val_loss': float(history.history.get('val_loss', [0])[-1]) if history.history.get('val_loss') else None
-            }
+            },
+            "mappings_path": s3_urls.get("mappings_path", ""),
+            "centroids_path": s3_urls.get("centroids_path", ""),
+            "embedding_spec_path": s3_urls.get("classifier_spec_path", "")
         })
         
         return {

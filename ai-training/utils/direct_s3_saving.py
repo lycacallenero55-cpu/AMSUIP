@@ -1,6 +1,8 @@
 """
-Direct S3 Model Saving Utilities
-Eliminates the two-step process of saving locally then uploading to S3
+Direct S3 Model Saving Utilities (LEGACY PATHS)
+This module supports older flows that upload .keras models directly.
+For new global classifier training, prefer artifacts packaging (ID-first mappings
+and SavedModel zips). Leave this as legacy-only for backward compatibility.
 """
 
 import io
@@ -157,8 +159,27 @@ class DirectS3ModelSaver:
         return s3_key, s3_url
     
     def save_mappings(self, student_to_id: Dict, id_to_student: Dict) -> Tuple[str, str]:
-        """Save student mappings directly to S3"""
+        """Save student mappings directly to S3 (writes both legacy and ID-first fields)."""
+        # Build ID-first schema
+        class_index_to_student_id = {}
+        class_index_to_student_name = {}
+        student_id_to_class_index = {}
+        for class_index, name in id_to_student.items():
+            try:
+                ci = int(class_index)
+            except Exception:
+                continue
+            # Legacy flows do not know numeric IDs; fall back to class index
+            sid = ci
+            class_index_to_student_id[str(ci)] = sid
+            class_index_to_student_name[str(ci)] = name
+            student_id_to_class_index[str(sid)] = ci
         mappings_data = {
+            # New schema
+            'class_index_to_student_id': class_index_to_student_id,
+            'class_index_to_student_name': class_index_to_student_name,
+            'student_id_to_class_index': student_id_to_class_index,
+            # Legacy fields (kept for backward compatibility)
             'student_to_id': student_to_id,
             'id_to_student': {str(k): v for k, v in id_to_student.items()}
         }

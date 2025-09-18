@@ -81,14 +81,31 @@ class LocalModelSaver:
         }
         return filepath, f"file://{filepath}"
     
-    def save_mappings(self, student_to_id: Dict, id_to_student: Dict) -> Tuple[str, str]:
+    def save_mappings(self, student_to_id: Dict, id_to_student: Dict, external_student_id_map: Dict | None = None) -> Tuple[str, str]:
         """Save mappings locally"""
         filename = f"{self.model_uuid}_mappings.json"
         filepath = os.path.join(self.local_models_dir, filename)
         
+        # Write ID-first schema
+        class_index_to_student_id = {}
+        class_index_to_student_name = {}
+        student_id_to_class_index = {}
+        for class_index, name in id_to_student.items():
+            try:
+                ci = int(class_index)
+            except Exception:
+                continue
+            if external_student_id_map and name in external_student_id_map:
+                sid = int(external_student_id_map[name])
+            else:
+                sid = ci
+            class_index_to_student_id[str(ci)] = sid
+            class_index_to_student_name[str(ci)] = name
+            student_id_to_class_index[str(sid)] = ci
         mappings = {
-            'student_to_id': student_to_id,
-            'id_to_student': id_to_student,
+            'class_index_to_student_id': class_index_to_student_id,
+            'class_index_to_student_name': class_index_to_student_name,
+            'student_id_to_class_index': student_id_to_class_index,
             'created_at': datetime.utcnow().isoformat(),
             'model_uuid': self.model_uuid
         }
@@ -147,7 +164,7 @@ def save_signature_models_locally(
         if (hasattr(signature_manager, 'student_to_id') and 
             hasattr(signature_manager, 'id_to_student') and
             signature_manager.student_to_id and signature_manager.id_to_student):
-            saver.save_mappings(signature_manager.student_to_id, signature_manager.id_to_student)
+            saver.save_mappings(signature_manager.student_to_id, signature_manager.id_to_student, getattr(signature_manager, 'external_student_id_map', None))
         
         total_time = time.time() - start_time
         logger.info(f"🎉 All models saved locally in {total_time:.2f}s (INSTANT compared to S3!)")
