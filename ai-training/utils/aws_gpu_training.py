@@ -438,10 +438,20 @@ echo "Instance setup completed at $(date)"
             
             # Handle different data structures
             if isinstance(signatures, dict):
-                for key in ['genuine', 'forged']:
-                    if key in signatures:
+                # Accept both new and legacy keys
+                key_aliases = {
+                    'genuine': ['genuine', 'genuine_images'],
+                    'forged': ['forged', 'forged_images'],
+                }
+                for norm_key, aliases in key_aliases.items():
+                    found_key = None
+                    for k in aliases:
+                        if k in signatures and signatures[k]:
+                            found_key = k
+                            break
+                    if found_key is not None:
                         wrapped = []
-                        for img in signatures[key]:
+                        for img in signatures[found_key]:
                             try:
                                 # If numpy-like
                                 if hasattr(img, 'tolist'):
@@ -467,7 +477,7 @@ echo "Instance setup completed at $(date)"
                                     wrapped.append({"raw": str(type(img))})
                             except Exception:
                                 wrapped.append({"raw": "unserializable"})
-                        serializable_data[student_name][key] = wrapped
+                        serializable_data[student_name][norm_key] = wrapped
             else:
                 # If it's a list, treat as genuine signatures
                 wrapped = []

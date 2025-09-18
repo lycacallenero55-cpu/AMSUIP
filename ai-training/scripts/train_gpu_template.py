@@ -275,7 +275,10 @@ def train_on_gpu(training_data_key, job_id, student_id):
             print("\nProcessing student: {}".format(student_name))
             genuine_images = []
             forged_images = []
-            genuine_raw = data.get('genuine', [])
+            # Accept both new and legacy keys
+            genuine_raw = data.get('genuine')
+            if not genuine_raw:
+                genuine_raw = data.get('genuine_images', [])
             print("  Found {} genuine images".format(len(genuine_raw)))
             for i, img_data in enumerate(genuine_raw):
                 print("    Processing genuine image {}/{}".format(i+1, len(genuine_raw)))
@@ -285,7 +288,9 @@ def train_on_gpu(training_data_key, job_id, student_id):
                     print("      \u2713 Successfully processed")
                 else:
                     print("      x Failed to process")
-            forged_raw = data.get('forged', [])
+            forged_raw = data.get('forged')
+            if not forged_raw:
+                forged_raw = data.get('forged_images', [])
             print("  Found {} forged images".format(len(forged_raw)))
             for i, img_data in enumerate(forged_raw):
                 print("    Processing forged image {}/{}".format(i+1, len(forged_raw)))
