@@ -32,7 +32,46 @@ class SignaturePreprocessor:
     def preprocess_signature(self, img_data, debug_name="unknown"):
         try:
             img = None
-            if isinstance(img_data, str):
+            if isinstance(img_data, dict):
+                # New wrapped format: {array: [...], shape: [...]} or {base64: "..."}
+                if 'base64' in img_data:
+                    try:
+                        b = base64.b64decode(img_data['base64'])
+                        img = Image.open(io.BytesIO(b))
+                        print("  Loaded base64 image for {}".format(debug_name))
+                    except Exception as e:
+                        print("  Failed to decode base64 for {}: {}".format(debug_name, e))
+                        return None
+                elif 'array' in img_data:
+                    arr = np.array(img_data['array'], dtype=np.float32)
+                    shape = img_data.get('shape') or []
+                    # Try to reshape using provided shape
+                    try:
+                        if shape:
+                            arr = arr.reshape(shape)
+                        # If still flat, try to square or 3-channel heuristics
+                        if arr.ndim == 1:
+                            total = arr.size
+                            side = int(np.sqrt(total))
+                            if side*side == total:
+                                arr = arr.reshape(side, side)
+                            elif (total % 3) == 0:
+                                side = int(np.sqrt(total//3))
+                                if side*side*3 == total:
+                                    arr = arr.reshape(side, side, 3)
+                        if arr.ndim == 2:
+                            arr = np.stack([arr]*3, axis=-1)
+                        elif arr.ndim == 3 and arr.shape[2] == 1:
+                            arr = np.repeat(arr, 3, axis=2)
+                        img = Image.fromarray(np.clip(arr*255 if arr.max()<=1.0 else arr, 0, 255).astype(np.uint8))
+                        print("  Reconstructed image from wrapped array for {} with shape {}".format(debug_name, arr.shape))
+                    except Exception as e:
+                        print("  Failed to reconstruct image for {}: {}".format(debug_name, e))
+                        return None
+                else:
+                    print("  Unknown wrapped dict for {}".format(debug_name))
+                    return None
+            elif isinstance(img_data, str):
                 try:
                     if img_data.startswith('data:'):
                         img_data = img_data.split(',')[1]
@@ -109,7 +148,12 @@ class SignaturePreprocessor:
                 img = img.convert('RGB')
                 print("    Converted to RGB mode")
             original_size = img.size
-            img = img.resize(self.target_size, Image.Resampling.LANCZOS)
+            # Pillow compatibility: handle older versions without Image.Resampling
+            try:
+                resample_filter = Image.Resampling.LANCZOS
+            except Exception:
+                resample_filter = Image.LANCZOS if hasattr(Image, 'LANCZOS') else Image.BICUBIC
+            img = img.resize(self.target_size, resample_filter)
             print("    Resized from {} to {}".format(original_size, img.size))
             img_array = np.array(img, dtype=np.float32) / 255.0
             self.processed_count += 1
