@@ -109,7 +109,12 @@ class SignaturePreprocessor:
                 img = img.convert('RGB')
                 print("    Converted to RGB mode")
             original_size = img.size
-            img = img.resize(self.target_size, Image.Resampling.LANCZOS)
+            # Pillow compatibility: handle older versions without Image.Resampling
+            try:
+                resample_filter = Image.Resampling.LANCZOS
+            except Exception:
+                resample_filter = Image.LANCZOS if hasattr(Image, 'LANCZOS') else Image.BICUBIC
+            img = img.resize(self.target_size, resample_filter)
             print("    Resized from {} to {}".format(original_size, img.size))
             img_array = np.array(img, dtype=np.float32) / 255.0
             self.processed_count += 1
