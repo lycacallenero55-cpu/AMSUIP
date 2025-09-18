@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 import asyncio
 import os
 from datetime import datetime
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +95,9 @@ class AWSGPUTrainingManager:
             await self._setup_training_environment(instance_id, job_id)
             
             job_queue.update_job_progress(job_id, 40.0, "Starting training on GPU instance...")
-            logger.info(f"DEBUG: About to start remote training with data key: {training_data_key}")
             training_result = await self._start_remote_training(
                 instance_id, training_data_key, job_id, student_id, job_queue
             )
-            logger.info(f"DEBUG: Remote training result: {training_result}")
             
             if training_result.get('status') != 'success':
                 raise Exception(f"Training failed: {training_result.get('error', 'Unknown error')}")
@@ -228,7 +227,7 @@ class AWSGPUTrainingManager:
     
     def _generate_user_data(self) -> str:
         """Generate user data script for instance initialization"""
-        return f"""#!/bin/bash
+        script_template = """#!/bin/bash
 set -e
 
 # Log output
@@ -262,16 +261,17 @@ fi
 
 # Install Python packages
 pip3 install --upgrade pip
-pip3 install tensorflow tensorflow-addons boto3 numpy pillow opencv-python scikit-learn requests
+pip3 install tensorflow boto3 numpy pillow opencv-python scikit-learn requests
 
 # Create training directory
-mkdir -p {self.training_script_path}
-chown -R ubuntu:ubuntu {self.training_script_path}
+mkdir -p {training_path}
+chown -R ubuntu:ubuntu {training_path}
 
 # Mark setup as complete
 touch /tmp/setup_complete
 echo "Instance setup completed at $(date)"
 """
+        return script_template.format(training_path=self.training_script_path)
     
     async def _wait_for_instance_ready(self, instance_id: str, timeout: int = 300):
         """Wait for instance to be ready - Fixed version with proper status handling"""
@@ -430,27 +430,20 @@ echo "Instance setup completed at $(date)"
             return 'N/A'
     
     async def _upload_training_data(self, training_data: Dict, job_id: str) -> str:
-        """Upload training data to S3 (gzip-compressed to reduce time)."""
-        import gzip
+        """Upload training data to S3"""
         # Convert images to serializable format
         serializable_data = {}
         for student_name, signatures in training_data.items():
             serializable_data[student_name] = {}
-            # Handle different data structures; map legacy keys to 'genuine'
+            
+            # Handle different data structures
             if isinstance(signatures, dict):
-                # Prefer 'genuine' if present
-                if 'genuine' in signatures and signatures['genuine']:
-                    serializable_data[student_name]['genuine'] = [
-                        (img.tolist() if hasattr(img, 'tolist') else img) for img in signatures['genuine']
-                    ]
-                elif 'genuine_images' in signatures and signatures['genuine_images']:
-                    serializable_data[student_name]['genuine'] = [
-                        (img.tolist() if hasattr(img, 'tolist') else img) for img in signatures['genuine_images']
-                    ]
-                else:
-                    serializable_data[student_name]['genuine'] = []
-                # Explicitly ignore forged for owner detection
-                serializable_data[student_name]['forged'] = []
+                for key in ['genuine', 'forged']:
+                    if key in signatures:
+                        serializable_data[student_name][key] = [
+                            img.tolist() if hasattr(img, 'tolist') else img 
+                            for img in signatures[key]
+                        ]
             else:
                 # If it's a list, treat as genuine signatures
                 serializable_data[student_name] = {
@@ -458,16 +451,13 @@ echo "Instance setup completed at $(date)"
                     'forged': []
                 }
         
-        # Upload to S3 (gzip)
-        payload = json.dumps(serializable_data).encode('utf-8')
-        compressed = gzip.compress(payload)
-        key = f'training_data/{job_id}.json.gz'
+        # Upload to S3
+        key = f'training_data/{job_id}.json'
         self.s3_client.put_object(
             Bucket=self.s3_bucket,
             Key=key,
-            Body=compressed,
-            ContentType='application/json',
-            ContentEncoding='gzip'
+            Body=json.dumps(serializable_data),
+            ContentType='application/json'
         )
         
         logger.info(f"Uploaded training data to s3://{self.s3_bucket}/{key}")
@@ -478,7 +468,6 @@ echo "Instance setup completed at $(date)"
         try:
             # Create training script
             training_script = self._generate_training_script()
-            logger.info(f"DEBUG: Generated training script length: {len(training_script)} characters")
             
             # Upload script to S3 first
             script_key = f'scripts/{job_id}/train_gpu.py'
@@ -488,7 +477,6 @@ echo "Instance setup completed at $(date)"
                 Body=training_script,
                 ContentType='text/x-python'
             )
-            logger.info(f"DEBUG: Uploaded training script to s3://{self.s3_bucket}/{script_key}")
             
             # Download and setup script on instance using SSM
             setup_commands = [
@@ -516,8 +504,8 @@ echo "Instance setup completed at $(date)"
             raise
     
     def _generate_training_script(self) -> str:
-        """Generate the training script without outer f-string to avoid brace conflicts."""
-        script = '''#!/usr/bin/env python3
+        """Generate the training script"""
+        script_content = '''#!/usr/bin/env python3
 import sys
 import os
 import json
@@ -525,13 +513,12 @@ import boto3
 import numpy as np
 from PIL import Image
 import io
-import requests
-import traceback
+import traceback  # Add missing import
 import tensorflow as tf
 from tensorflow import keras
-import tensorflow_addons as tfa
 import tempfile
 import shutil
+import base64
 
 # Set up TensorFlow to use GPU
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -545,679 +532,475 @@ if gpus:
 else:
     print("No GPU found, using CPU")
 
+class SignaturePreprocessor:
+    """Enhanced preprocessor for signatures with better error handling"""
+    def __init__(self, target_size=(224, 224)):
+        self.target_size = target_size
+        self.processed_count = 0
+        self.error_count = 0
+    
+    def preprocess_signature(self, img_data, debug_name="unknown"):
+        """Preprocess a signature image with comprehensive error handling"""
+        try:
+            img = None
+            
+            # Handle different input types
+            if isinstance(img_data, str):
+                # Try base64 decoding
+                try:
+                    # Remove data URL prefix if present
+                    if img_data.startswith('data:'):
+                        img_data = img_data.split(',')[1]
+                    
+                    img_bytes = base64.b64decode(img_data)
+                    img = Image.open(io.BytesIO(img_bytes))
+                    print(f"  Successfully loaded base64 image for {debug_name}")
+                except Exception as e:
+                    print(f"  Failed to decode base64 for {debug_name}: {e}")
+                    return None
+                    
+            elif isinstance(img_data, list):
+                # Convert list to numpy array
+                img_array = np.array(img_data, dtype=np.float32)
+                print(f"  Processing array data for {debug_name}, shape: {img_array.shape}")
+                
+                # Handle different array shapes
+                if len(img_array.shape) == 1:
+                    # Flat array - try to reshape to square
+                    total_pixels = len(img_array)
+                    side = int(np.sqrt(total_pixels))
+                    if side * side == total_pixels:
+                        img_array = img_array.reshape(side, side)
+                        print(f"    Reshaped flat array to {img_array.shape}")
+                    else:
+                        # Try common image sizes
+                        common_sizes = [(224, 224), (256, 256), (128, 128), (64, 64)]
+                        reshaped = False
+                        for h, w in common_sizes:
+                            if h * w == total_pixels:
+                                img_array = img_array.reshape(h, w)
+                                print(f"    Reshaped to common size: {img_array.shape}")
+                                reshaped = True
+                                break
+                        if not reshaped:
+                            # Try 3-channel formats
+                            for h, w in common_sizes:
+                                if h * w * 3 == total_pixels:
+                                    img_array = img_array.reshape(h, w, 3)
+                                    print(f"    Reshaped to 3-channel: {img_array.shape}")
+                                    reshaped = True
+                                    break
+                        if not reshaped:
+                            print(f"    Cannot reshape array of size {total_pixels} to known image format")
+                            return None
+                
+                elif len(img_array.shape) == 3:
+                    if img_array.shape[0] in [1, 3, 4]:  # Channel-first format
+                        img_array = np.transpose(img_array, (1, 2, 0))
+                        print(f"    Transposed from CHW to HWC: {img_array.shape}")
+                    elif img_array.shape[2] not in [1, 3, 4]:  # Unexpected channel dimension
+                        print(f"    Unexpected shape: {img_array.shape}")
+                        return None
+                
+                # Normalize pixel values
+                if img_array.max() <= 1.0 and img_array.min() >= 0.0:
+                    # Already normalized, scale to 0-255
+                    img_array = (img_array * 255).astype(np.uint8)
+                    print(f"    Scaled normalized values to 0-255 range")
+                elif img_array.max() > 255 or img_array.min() < 0:
+                    # Clamp to valid range
+                    img_array = np.clip(img_array, 0, 255).astype(np.uint8)
+                    print(f"    Clamped values to 0-255 range")
+                else:
+                    img_array = img_array.astype(np.uint8)
+                
+                # Handle grayscale
+                if len(img_array.shape) == 2:
+                    img_array = np.stack([img_array] * 3, axis=-1)
+                    print(f"    Converted grayscale to RGB: {img_array.shape}")
+                elif len(img_array.shape) == 3 and img_array.shape[2] == 1:
+                    img_array = np.repeat(img_array, 3, axis=2)
+                    print(f"    Converted single channel to RGB: {img_array.shape}")
+                
+                # Create PIL image
+                try:
+                    img = Image.fromarray(img_array)
+                    print(f"    Created PIL image from array: {img.size}")
+                except Exception as e:
+                    print(f"    Failed to create PIL image: {e}")
+                    return None
+                    
+            elif hasattr(img_data, 'size'):  # Already a PIL Image
+                img = img_data
+                print(f"  Using existing PIL image for {debug_name}: {img.size}")
+                
+            else:
+                print(f"  Unknown image data type for {debug_name}: {type(img_data)}")
+                return None
+            
+            if img is None:
+                return None
+            
+            # Convert to RGB if needed
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+                print(f"    Converted to RGB mode")
+            
+            # Resize to target size
+            original_size = img.size
+            img = img.resize(self.target_size, Image.Resampling.LANCZOS)
+            print(f"    Resized from {original_size} to {img.size}")
+            
+            # Convert to numpy array and normalize
+            img_array = np.array(img, dtype=np.float32) / 255.0
+            
+            self.processed_count += 1
+            return img_array
+            
+        except Exception as e:
+            print(f"  Error processing {debug_name}: {str(e)}")
+            print(f"  Stack trace: {traceback.format_exc()}")
+            self.error_count += 1
+            return None
+
+class SignatureEmbeddingModel:
+    """Simplified embedding model for GPU training"""
+    def __init__(self, max_students=150):
+        self.max_students = max_students
+        self.embedding_dim = 128
+        self.student_to_id = {}
+        self.id_to_student = {}
+        self.embedding_model = None
+        self.classification_head = None
+        self.siamese_model = None
+    
+    def train_models(self, training_data, epochs=25, validation_split=0.2):
+        """Train the signature models with enhanced error handling"""
+        print("Starting model training...")
+        
+        # Prepare data
+        all_images = []
+        all_labels = []
+        
+        print(f"Processing {len(training_data)} students...")
+        
+        for idx, (student_name, data) in enumerate(training_data.items()):
+            self.student_to_id[student_name] = idx
+            self.id_to_student[idx] = student_name
+            
+            genuine_count = len(data.get('genuine', []))
+            forged_count = len(data.get('forged', []))
+            
+            print(f"Student {student_name} (ID: {idx}): {genuine_count} genuine, {forged_count} forged")
+            
+            # Process genuine signatures
+            for i, img in enumerate(data.get('genuine', [])):
+                if img is not None:  # Only add non-None images
+                    all_images.append(img)
+                    all_labels.append(idx)
+                else:
+                    print(f"    Skipping None genuine image {i} for {student_name}")
+            
+            # Process forged signatures
+            for i, img in enumerate(data.get('forged', [])):
+                if img is not None:  # Only add non-None images
+                    all_images.append(img)
+                    all_labels.append(idx)
+                else:
+                    print(f"    Skipping None forged image {i} for {student_name}")
+        
+        print(f"Total images for training: {len(all_images)}")
+        print(f"Unique student IDs: {len(set(all_labels))}")
+        
+        if len(all_images) == 0:
+            raise ValueError("No valid training samples found after processing")
+        
+        if len(all_images) < 5:
+            print("WARNING: Very few samples for training. Results may be poor.")
+            validation_split = 0.0
+        
+        # Convert to numpy arrays
+        print("Converting to numpy arrays...")
+        X = np.array(all_images)
+        y = keras.utils.to_categorical(all_labels, num_classes=len(training_data))
+        
+        print(f"Final training data shape: {X.shape}")
+        print(f"Labels shape: {y.shape}")
+        print(f"Data type: {X.dtype}, range: [{X.min():.3f}, {X.max():.3f}]")
+        
+        # Create simple CNN model
+        print("Creating CNN model...")
+        model = keras.Sequential([
+            keras.layers.InputLayer(input_shape=(224, 224, 3)),
+            keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same'),
+            keras.layers.BatchNormalization(),
+            keras.layers.MaxPooling2D((2, 2)),
+            keras.layers.Dropout(0.25),
+            
+            keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
+            keras.layers.BatchNormalization(),
+            keras.layers.MaxPooling2D((2, 2)),
+            keras.layers.Dropout(0.25),
+            
+            keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+            keras.layers.BatchNormalization(),
+            keras.layers.GlobalAveragePooling2D(),
+            keras.layers.Dropout(0.5),
+            
+            keras.layers.Dense(256, activation='relu'),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dropout(0.5),
+            keras.layers.Dense(len(training_data), activation='softmax')
+        ])
+        
+        model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=0.001),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print(f"Model summary:")
+        model.summary()
+        
+        # Train model
+        print(f"Starting training with validation_split={validation_split}...")
+        
+        callbacks = [
+            keras.callbacks.EarlyStopping(
+                monitor='val_accuracy' if validation_split > 0 else 'accuracy',
+                patience=5,
+                restore_best_weights=True
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss' if validation_split > 0 else 'loss',
+                factor=0.5,
+                patience=3,
+                min_lr=0.0001
+            )
+        ]
+        
+        try:
+            if validation_split > 0:
+                history = model.fit(
+                    X, y,
+                    batch_size=min(32, len(X)),
+                    epochs=epochs,
+                    validation_split=validation_split,
+                    callbacks=callbacks,
+                    verbose=1
+                )
+            else:
+                history = model.fit(
+                    X, y,
+                    batch_size=min(32, len(X)),
+                    epochs=epochs,
+                    callbacks=callbacks,
+                    verbose=1
+                )
+        except Exception as e:
+            print(f"Training failed: {e}")
+            traceback.print_exc()
+            raise
+        
+        self.classification_head = model
+        
+        # Create embedding model (features from second-to-last layer)
+        self.embedding_model = keras.Model(
+            inputs=model.input,
+            outputs=model.layers[-3].output  # Get embeddings from Dense(256) layer
+        )
+        
+        print("Training completed successfully!")
+        
+        return {
+            'classification_history': history.history,
+            'siamese_history': {}
+        }
+    
+    def save_models(self, base_path):
+        """Save models"""
+        try:
+            if self.embedding_model:
+                embedding_path = f"{base_path}_embedding.keras"
+                self.embedding_model.save(embedding_path)
+                print(f"Saved embedding model to {embedding_path}")
+                
+            if self.classification_head:
+                classification_path = f"{base_path}_classification.keras"
+                self.classification_head.save(classification_path)
+                print(f"Saved classification model to {classification_path}")
+            
+            # Save mappings
+            mappings_path = f"{base_path}_mappings.json"
+            with open(mappings_path, 'w') as f:
+                json.dump({
+                    'student_to_id': self.student_to_id,
+                    'id_to_student': self.id_to_student
+                }, f, indent=2)
+            print(f"Saved mappings to {mappings_path}")
+            
+        except Exception as e:
+            print(f"Error saving models: {e}")
+            traceback.print_exc()
+            raise
+
 def train_on_gpu(training_data_key, job_id, student_id):
-    """Train model on GPU instance"""
+    """Train model on GPU instance with enhanced error handling"""
     try:
         # Initialize S3 client
         s3 = boto3.client('s3')
-        bucket = '__S3_BUCKET__'
+        bucket = os.environ.get('S3_BUCKET', 'signatureai-uploads')
         
-        print(f"Starting REAL training for job {job_id}")
+        print(f"Starting training for job {job_id}")
+        print(f"S3 bucket: {bucket}")
+        print(f"Training data key: {training_data_key}")
         
-        # Download training data from S3 (supports gzip)
+        # Download training data from S3
         print(f"Downloading training data from s3://{bucket}/{training_data_key}")
-        local_path = '/tmp/training_data.json'
-        if training_data_key.endswith('.gz'):
-            local_path += '.gz'
-        s3.download_file(bucket, training_data_key, local_path)
+        try:
+            response = s3.get_object(Bucket=bucket, Key=training_data_key)
+            training_data_raw = json.loads(response['Body'].read())
+            print(f"Successfully downloaded training data")
+        except Exception as e:
+            print(f"Failed to download training data: {e}")
+            traceback.print_exc()
+            raise
         
-        if local_path.endswith('.gz'):
-            import gzip
-            with gzip.open(local_path, 'rb') as f:
-                training_data = json.loads(f.read().decode('utf-8'))
-        else:
-            with open(local_path, 'r') as f:
-                training_data = json.load(f)
+        print(f"Raw training data contains {len(training_data_raw)} students")
         
-        print(f"Loaded training data for {len(training_data)} students")
+        # Create preprocessor and model
+        preprocessor = SignaturePreprocessor(target_size=(224, 224))
+        model_manager = SignatureEmbeddingModel(max_students=150)
         
-        # Install required packages
-        print("Installing required packages...")
-        os.system("pip install tensorflow pillow numpy scikit-learn")
-        
-        # Self-contained signature preprocessor (production-grade)
-        import cv2
-        class _Preproc:
-            def __init__(self, target_size=224):
-                self.target_size = target_size
-            def _remove_background(self, image: np.ndarray) -> np.ndarray:
-                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                if np.mean(binary) > 127:
-                    binary = 255 - binary
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-                binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if contours:
-                    min_area = (image.shape[0] * image.shape[1]) * 0.001
-                    for c in contours:
-                        if cv2.contourArea(c) < min_area:
-                            cv2.fillPoly(binary, [c], 0)
-                mask = binary.astype(np.uint8)
-                result = image.copy()
-                for i in range(3):
-                    result[:, :, i] = np.where(mask == 0, 255, result[:, :, i])
-                return result
-            def _enhance(self, image: np.ndarray) -> np.ndarray:
-                lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-                return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-            def _normalize_geometry(self, image: np.ndarray) -> np.ndarray:
-                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                if np.mean(binary) > 127:
-                    binary = 255 - binary
-                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if not contours:
-                    return image
-                largest = max(contours, key=cv2.contourArea)
-                rect = cv2.minAreaRect(largest)
-                angle = rect[2]
-                if angle < -45:
-                    angle = 90 + angle
-                if abs(angle) > 1:
-                    h, w = image.shape[:2]
-                    center = (float(w // 2), float(h // 2))
-                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                    image = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=255)
-                return image
-            def _final_resize(self, image: np.ndarray) -> np.ndarray:
-                h, w = image.shape[:2]
-                scale = min(self.target_size / w, self.target_size / h)
-                new_w = max(1, int(w * scale))
-                new_h = max(1, int(h * scale))
-                resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-                canvas = np.full((self.target_size, self.target_size, 3), 255, dtype=np.uint8)
-                y0 = (self.target_size - new_h) // 2
-                x0 = (self.target_size - new_w) // 2
-                canvas[y0:y0+new_h, x0:x0+new_w] = resized
-                return canvas
-            def preprocess_signature(self, img):
-                if isinstance(img, Image.Image):
-                    img = np.array(img)
-                if img.ndim == 2:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                if img.shape[-1] == 4:
-                    img = img[:, :, :3]
-                img = self._remove_background(img)
-                img = self._enhance(img)
-                img = self._normalize_geometry(img)
-                img = self._final_resize(img)
-                img = img.astype(np.float32)
-                if img.max() > 1.0:
-                    img = img / 255.0
-                return img
-        
-        # Process training data
+        # Process training data with detailed logging
         print("Processing training data...")
         processed_data = {}
-        preprocessor = _Preproc(target_size=224)
         
-        for student_name, data in training_data.items():
-            print(f"Processing {student_name}...")
+        for student_name, data in training_data_raw.items():
+            print(f"\nProcessing student: {student_name}")
             genuine_images = []
             forged_images = []
             
-            # Compatible with {'genuine': [...] } and legacy {'genuine_images': [...]}
-            raw_genuine = data.get('genuine')
-            if raw_genuine is None:
-                raw_genuine = data.get('genuine_images', [])
-            raw_forged = data.get('forged')
-            if raw_forged is None:
-                raw_forged = data.get('forged_images', [])
-            
             # Process genuine images
-            for img_data in raw_genuine:
-                try:
-                    if isinstance(img_data, str):
-                        import base64
-                        img_bytes = base64.b64decode(img_data)
-                        img = Image.open(io.BytesIO(img_bytes))
-                    else:
-                        img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
-                    processed_img = preprocessor.preprocess_signature(img)
+            genuine_raw = data.get('genuine', [])
+            print(f"  Found {len(genuine_raw)} genuine images")
+            
+            for i, img_data in enumerate(genuine_raw):
+                print(f"    Processing genuine image {i+1}/{len(genuine_raw)}")
+                processed_img = preprocessor.preprocess_signature(
+                    img_data, 
+                    debug_name=f"{student_name}_genuine_{i}"
+                )
+                if processed_img is not None:
                     genuine_images.append(processed_img)
-                except Exception as e:
-                    print(f"Error processing image: {e}")
-                    continue
+                    print(f"      ✓ Successfully processed")
+                else:
+                    print(f"      ✗ Failed to process")
             
             # Process forged images
-            for img_data in raw_forged:
-                try:
-                    if isinstance(img_data, str):
-                        import base64
-                        img_bytes = base64.b64decode(img_data)
-                        img = Image.open(io.BytesIO(img_bytes))
-                    else:
-                        img = Image.fromarray((np.array(img_data) * 255).astype(np.uint8))
-                    processed_img = preprocessor.preprocess_signature(img)
-                    forged_images.append(processed_img)
-                except Exception as e:
-                    print(f"Error processing forged image: {e}")
-                    continue
+            forged_raw = data.get('forged', [])
+            print(f"  Found {len(forged_raw)} forged images")
             
-            if len(genuine_images) > 0:
-                processed_data[student_name] = {
-                    'genuine': genuine_images,
-                    'forged': forged_images
-                }
-                print(f"{student_name}: {len(genuine_images)} genuine, {len(forged_images)} forged")
-            else:
-                print(f"Skipping {student_name} (no genuine images)")
-        
-        # Build dataset
-        classes = sorted(list(processed_data.keys()))
-        # Build exact mappings: class index -> student id and name
-        class_to_student_id = {}
-        class_to_student_name = {}
-        for idx, cls in enumerate(classes):
-            try:
-                # Parse "id:name" format from class key
-                if isinstance(cls, str) and ':' in cls:
-                    parts = cls.split(':', 1)
-                    if len(parts) == 2:
-                        try:
-                            sid = int(parts[0])
-                            name = parts[1].strip()
-                            class_to_student_id[idx] = sid
-                            class_to_student_name[idx] = name
-                        except ValueError:
-                            # Fallback to using the whole string as name
-                            class_to_student_name[idx] = str(cls)
-                    else:
-                        class_to_student_name[idx] = str(cls)
-                else:
-                    # Fallback for old format
-                    class_to_student_name[idx] = str(cls)
-            except Exception:
-                class_to_student_name[idx] = str(cls)
-        # Build sample lists (will feed tf.data)
-        X_all, y_all = [], []
-        for cname, data in processed_data.items():
-            for img in data.get('genuine', []):
-                X_all.append(img)
-                y_all.append(classes.index(cname))
-        total_samples = int(len(X_all))
-        num_classes = int(len(classes))
-
-        if total_samples == 0 or num_classes == 0:
-            print("No training samples available after preprocessing. Writing zero-accuracy results.")
-            results = {
-                'job_id': job_id,
-                'student_id': student_id,
-                'model_urls': {},
-                'accuracy': 0.0,
-                'training_metrics': {
-                    'accuracy': 0.0,
-                    'epochs_trained': 0,
-                    'final_loss': 0.0,
-                    'val_accuracy': 0.0,
-                    'val_loss': 0.0
-                }
-            }
-            results_path = '/tmp/training_results.json'
-            with open(results_path, 'w') as f:
-                json.dump(results, f)
-            s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
-            print(f"Training completed with no data for job {job_id}. Final accuracy: 0.0")
-            return
-        
-        # Train a simple real classifier (MobileNetV2 backbone) with tf.data pipeline
-        print("Starting model training...")
-        print(f"Dataset summary: classes={num_classes}, total_samples={total_samples}")
-        import tensorflow as tf
-        import numpy as _np
-        import random as _random
-        tf.random.set_seed(42)
-        _np.random.seed(42)
-        _random.seed(42)
-
-        # Stratified 80/20 split without sklearn
-        per_class_indices = {i: [] for i in range(num_classes)}
-        for idx, label in enumerate(y_all):
-            per_class_indices[int(label)].append(idx)
-        train_idx, val_idx = [], []
-        for c, idxs in per_class_indices.items():
-            _random.shuffle(idxs)
-            if len(idxs) > 1:
-                split = max(1, int(len(idxs) * 0.8))
-            else:
-                split = len(idxs)
-            train_idx.extend(idxs[:split])
-            val_idx.extend(idxs[split:])
-        # Fallback if validation empty
-        if len(val_idx) == 0 and len(train_idx) > 1:
-            val_idx.append(train_idx[-1])
-
-        # Build lists for datasets
-        X_train = [X_all[i] for i in train_idx]
-        y_train = [int(y_all[i]) for i in train_idx]
-        X_val = [X_all[i] for i in val_idx]
-        y_val = [int(y_all[i]) for i in val_idx]
-
-        # tf.data pipeline
-        AUTOTUNE = tf.data.AUTOTUNE
-        target_size = (224, 224)
-
-        def _to_tensor(image, label):
-            image = tf.convert_to_tensor(image, dtype=tf.float32)
-            # If not normalized, normalize to [0,1]
-            image = tf.cond(tf.reduce_max(image) > 1.5, lambda: image / 255.0, lambda: image)
-            image = tf.image.resize(image, target_size, method=tf.image.ResizeMethod.BILINEAR)
-            return image, tf.cast(label, tf.int32)
-
-        def _augment(image, label):
-            image = tf.image.random_flip_left_right(image)
-            # Mild random zoom via central crop and resize back
-            zoom = tf.random.uniform([], 0.0, 0.10)  # up to 10%
-            crop_h = tf.cast(tf.round((1.0 - zoom) * tf.cast(tf.shape(image)[0], tf.float32)), tf.int32)
-            crop_w = tf.cast(tf.round((1.0 - zoom) * tf.cast(tf.shape(image)[1], tf.float32)), tf.int32)
-            image = tf.image.resize_with_crop_or_pad(image, crop_h, crop_w)
-            image = tf.image.resize(image, target_size)
-            image = tf.image.random_brightness(image, 0.15)
-            image = tf.image.random_contrast(image, 0.8, 1.2)
-            # Small rotation using tensorflow-addons if available
-            try:
-                angle = tf.random.uniform([], -0.05, 0.05)  # ~±3 degrees
-                image = tfa.image.rotate(image, angles=angle, interpolation='BILINEAR')
-            except Exception:
-                pass
-            image = tf.clip_by_value(image, 0.0, 1.0)
-            return image, label
-
-        def _is_valid(image, label):
-            # Basic sanity checks to drop corrupts
-            cond = tf.logical_and(
-                tf.reduce_all(tf.math.is_finite(image)),
-                tf.greater(tf.size(image), 0)
-            )
-            return cond
-
-        buffer_size = max(128, min(1000, total_samples * 4))
-        batch_size = 16
-
-        train_ds = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-        train_ds = (train_ds
-                    .shuffle(buffer_size, seed=42, reshuffle_each_iteration=True)
-                    .map(_to_tensor, num_parallel_calls=AUTOTUNE)
-                    .filter(_is_valid)
-                    .map(_augment, num_parallel_calls=AUTOTUNE)
-                    .batch(batch_size)
-                    .prefetch(AUTOTUNE))
-        val_ds = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-        val_ds = (val_ds
-                  .map(_to_tensor, num_parallel_calls=AUTOTUNE)
-                  .filter(_is_valid)
-                  .batch(batch_size)
-                  .prefetch(AUTOTUNE))
-        # Try to prefetch to device for GPU efficiency
-        try:
-            train_ds = train_ds.apply(tf.data.experimental.copy_to_device('/GPU:0')).prefetch(1)
-            val_ds = val_ds.apply(tf.data.experimental.copy_to_device('/GPU:0')).prefetch(1)
-        except Exception:
-            pass
-        
-        # Prepare output directory early (for checkpoints)
-        temp_dir = f'/tmp/{job_id}_models'
-        os.makedirs(temp_dir, exist_ok=True)
-
-        # Transfer learning model: MobileNetV2 backbone + classifier head
-        from tensorflow.keras import regularizers
-        aug = keras.Sequential([
-            keras.layers.RandomFlip('horizontal'),
-            keras.layers.RandomRotation(0.05),
-            keras.layers.RandomZoom(0.15),
-            keras.layers.RandomTranslation(0.05, 0.05),
-            keras.layers.RandomContrast(0.1)
-        ])
-        l2 = regularizers.l2(1e-4)
-        base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
-        base.trainable = False  # phase 1: freeze backbone
-        inputs = keras.Input(shape=(224,224,3))
-        x = aug(inputs)
-        x = keras.applications.mobilenet_v2.preprocess_input(x)
-        x = base(x, training=False)
-        x = keras.layers.GlobalAveragePooling2D()(x)
-        x = keras.layers.Dropout(0.5)(x)
-        x = keras.layers.Dense(512, activation='relu', kernel_regularizer=l2)(x)
-        x = keras.layers.Dropout(0.4)(x)
-        outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
-        model = keras.Model(inputs, outputs)
-        model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-        
-        # Compute class weights to reduce collapse to majority class
-        class_weight = None
-        try:
-            y_np = _np.array(y_all, dtype=_np.int64) if len(y_all) > 0 else _np.array([])
-            if len(y_np) > 0:
-                counts = _np.bincount(y_np, minlength=num_classes)
-                total = counts.sum()
-                # Avoid division by zero
-                class_weight = {i: (total / (num_classes * counts[i])) if counts[i] > 0 else 0.0 for i in range(num_classes)}
-                print(f"Class counts: {counts}, class_weight: {class_weight}")
-        except Exception as e:
-            print(f"Failed to compute class weights: {e}")
-
-        if len(y_train) == 0:
-            # Safety: if still empty, skip training
-            hist = type('H', (), {'history': {'accuracy': [0.0], 'val_accuracy': [0.0], 'loss': [0.0], 'val_loss': [0.0]}})()
-        else:
-            class EpochLogger(keras.callbacks.Callback):
-                def on_epoch_end(self, epoch, logs=None):
-                    logs = logs or {}
-                    acc = logs.get('accuracy', 0.0)
-                    val_acc = logs.get('val_accuracy', 0.0)
-                    loss = logs.get('loss', 0.0)
-                    val_loss = logs.get('val_loss', 0.0)
-                    print(f"Epoch {epoch+1}: loss={loss:.4f} acc={acc:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
-            # Callbacks: early stopping and best checkpoint
-            ckpt_path = f"{temp_dir}/best.keras"
-            callbacks = [
-                EpochLogger(),
-                keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-5),
-                keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=5, restore_best_weights=True),
-                keras.callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', mode='max', save_best_only=True, save_weights_only=False)
-            ]
-            # Phase 1: train head only
-            print("Phase 1: training classifier head with frozen backbone...")
-            hist = model.fit(
-                train_ds,
-                validation_data=val_ds if len(y_val) > 0 else None,
-                epochs=10,
-                verbose=0,
-                class_weight=class_weight,
-                callbacks=callbacks
-            )
-
-            # Phase 2: fine-tune last blocks
-            print("Phase 2: fine-tuning last backbone blocks...")
-            try:
-                # Unfreeze last 30 layers
-                for layer in base.layers[-30:]:
-                    if not isinstance(layer, keras.layers.BatchNormalization):
-                        layer.trainable = True
-                model.compile(optimizer=keras.optimizers.Adam(1e-4), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-                hist2 = model.fit(
-                    train_ds,
-                    validation_data=val_ds if len(y_val) > 0 else None,
-                    epochs=20,
-                    verbose=0,
-                    class_weight=class_weight,
-                    callbacks=callbacks
+            for i, img_data in enumerate(forged_raw):
+                print(f"    Processing forged image {i+1}/{len(forged_raw)}")
+                processed_img = preprocessor.preprocess_signature(
+                    img_data, 
+                    debug_name=f"{student_name}_forged_{i}"
                 )
-                # Merge histories for final reporting
-                for k, v in hist2.history.items():
-                    hist.history.setdefault(k, []).extend(v)
-            except Exception as e:
-                print(f"Fine-tuning skipped due to error: {e}")
-
+                if processed_img is not None:
+                    forged_images.append(processed_img)
+                    print(f"      ✓ Successfully processed")
+                else:
+                    print(f"      ✗ Failed to process")
+            
+            processed_data[student_name] = {
+                'genuine': genuine_images,
+                'forged': forged_images
+            }
+            
+            total_processed = len(genuine_images) + len(forged_images)
+            total_raw = len(genuine_raw) + len(forged_raw)
+            success_rate = (total_processed / total_raw * 100) if total_raw > 0 else 0
+            
+            print(f"  Final: {len(genuine_images)} genuine, {len(forged_images)} forged")
+            print(f"  Success rate: {total_processed}/{total_raw} ({success_rate:.1f}%)")
+        
+        # Print preprocessing summary
+        print(f"\n=== PREPROCESSING SUMMARY ===")
+        print(f"Total images processed successfully: {preprocessor.processed_count}")
+        print(f"Total processing errors: {preprocessor.error_count}")
+        
+        # Check if we have enough data before training
+        total_samples = sum(
+            len(data['genuine']) + len(data['forged']) 
+            for data in processed_data.values()
+        )
+        print(f"Total processed samples available for training: {total_samples}")
+        
+        if total_samples == 0:
+            raise ValueError("No valid training samples found after processing")
+        
+        if total_samples < 5:
+            print("WARNING: Very few samples for training. Disabling validation split.")
+            validation_split = 0.0
+        else:
+            validation_split = 0.2
+        
+        # Train the model
+        print("\n=== STARTING MODEL TRAINING ===")
+        training_result = model_manager.train_models(
+            processed_data, 
+            epochs=25, 
+            validation_split=validation_split
+        )
+        
         print("Training completed! Saving models...")
         
-        # Debug: Check if model actually learned anything
-        print(f"Final training accuracy: {hist.history.get('accuracy', [0.0])[-1]:.4f}")
-        print(f"Final validation accuracy: {hist.history.get('val_accuracy', [0.0])[-1]:.4f}")
+        # Save models to temporary directory
+        temp_dir = f'/tmp/{job_id}_models'
+        os.makedirs(temp_dir, exist_ok=True)
         
-        # Test prediction on a few samples to see if model is working
-        if len(y_val) > 0:
-            for batch in val_ds.take(1):
-                bx, by = batch
-                bx_small = bx[:3]
-                test_preds = model.predict(bx_small, verbose=0)
-                print(f"Sample predictions on validation batch: {test_preds}")
-                print(f"Predicted classes: {np.argmax(test_preds, axis=1)}")
-                try:
-                    print(f"True classes: {by[:3].numpy()}")
-                except Exception:
-                    pass
+        # Save all models
+        model_manager.save_models(f'{temp_dir}/signature_model')
         
-        # If checkpoint exists, load best model before saving
-        try:
-            best_path = f"{temp_dir}/best.keras"
-            if os.path.exists(best_path):
-                best_model = keras.models.load_model(best_path, compile=False)
-                model = best_model
-                print("Loaded best checkpoint before saving final model")
-        except Exception as e:
-            print(f"Failed to load best checkpoint: {e}")
-        
-        # Save only the global classification model
+        # Upload models to S3
+        model_files = ['embedding', 'classification']
         model_urls = {}
-        cls_path = f'{temp_dir}/classification.keras'
-        model.save(cls_path)
-        s3_key = f'models/{job_id}/classification.keras'
-        s3.upload_file(cls_path, bucket, s3_key)
-        model_urls['classification'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
-        print("Uploaded classification model to S3")
-        # Also save weights and spec for robust loading across environments
-        weights_path = f'{temp_dir}/classification.weights.h5'
-        model.save_weights(weights_path)
-        s3_key_w = f'models/{job_id}/classification.weights.h5'
-        s3.upload_file(weights_path, bucket, s3_key_w)
-        model_urls['weights'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_w}'
-        # Additionally save TensorFlow SavedModel and upload as zip for portability
-        try:
-            saved_dir = f'{temp_dir}/classification_saved_model'
-            model.save(saved_dir)
-            import shutil as _shutil
-            zip_path = f'{temp_dir}/classification_saved_model.zip'
-            _shutil.make_archive(saved_dir, 'zip', saved_dir)
-            s3_key_sm = f'models/{job_id}/classification_saved_model.zip'
-            s3.upload_file(f'{saved_dir}.zip', bucket, s3_key_sm)
-            model_urls['saved_model'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_sm}'
-            print("Uploaded SavedModel zip to S3")
-        except Exception as e:
-            print(f"SavedModel export failed: {e}")
-        spec = {
-            'architecture': 'mobilenet_v2_classifier',
-            'input_shape': [224, 224, 3],
-            'num_classes': int(num_classes),
-            'head': {
-                'dense_units': 512,
-                'dropout1': 0.5,
-                'dropout2': 0.4
-            }
-        }
-        import json as _json
-        spec_path = f'{temp_dir}/classifier_spec.json'
-        with open(spec_path, 'w') as _f:
-            _json.dump(spec, _f)
-        s3_key_s = f'models/{job_id}/classifier_spec.json'
-        s3.upload_file(spec_path, bucket, s3_key_s)
-        model_urls['spec'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_s}'
-
-        # Save mappings (new schema with back-compat)
-        class_to_idx = {c: i for i, c in enumerate(classes)}
-        ci_to_sid = {str(int(idx)): int(sid) for idx, sid in class_to_student_id.items()}
-        ci_to_sname = {str(int(idx)): str(class_to_student_name.get(idx, str(classes[int(idx)]))) for idx in range(num_classes)}
-        sid_to_ci = {str(int(sid)): int(idx) for idx, sid in class_to_student_id.items()}
-        mappings = {
-            'class_index_to_student_id': ci_to_sid,
-            'class_index_to_student_name': ci_to_sname,
-            'student_id_to_class_index': sid_to_ci,
-            'num_classes': int(num_classes),
-            'preprocessing': 'signature_preprocessor_v1',
-            # Back-compat fields
-            'students': classes,
-            'class_to_idx': class_to_idx,
-            'id_to_student_id': class_to_student_id,
-            'id_to_student_name': class_to_student_name
-        }
-        mappings_path = f'/tmp/{job_id}_mappings.json'
-        with open(mappings_path, 'w') as f:
-            json.dump(mappings, f)
-        s3_key = f'models/{job_id}/mappings.json'
-        s3.upload_file(mappings_path, bucket, s3_key)
-        model_urls['mappings'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
-
-# Train a simple real classifier (MobileNetV2 backbone)
-print("Starting model training...")
-print(f"Dataset summary: classes={num_classes}, total_samples={total_samples}")
-from sklearn.model_selection import train_test_split
-import tensorflow as tf
-import numpy as _np
-import random as _random
-tf.random.set_seed(42)
-_np.random.seed(42)
-_random.seed(42)
-if total_samples > 4 and len(np.unique(y)) > 1:
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-else:
-    X_train, X_val, y_train, y_val = X, X, y, y
-
-# Prepare output directory early (for checkpoints)
-temp_dir = f'/tmp/{job_id}_models'
-os.makedirs(temp_dir, exist_ok=True)
-
-# Transfer learning model: MobileNetV2 backbone + classifier head
-from tensorflow.keras import regularizers
-aug = keras.Sequential([
-    keras.layers.RandomFlip('horizontal'),
-    keras.layers.RandomRotation(0.05),
-    keras.layers.RandomZoom(0.15),
-    keras.layers.RandomTranslation(0.05, 0.05),
-    keras.layers.RandomContrast(0.1)
-])
-l2 = regularizers.l2(1e-4)
-base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
-base.trainable = False  # phase 1: freeze backbone
-inputs = keras.Input(shape=(224,224,3))
-x = aug(inputs)
-x = keras.applications.mobilenet_v2.preprocess_input(x)
-x = base(x, training=False)
-x = keras.layers.GlobalAveragePooling2D()(x)
-x = keras.layers.Dropout(0.5)(x)
-x = keras.layers.Dense(512, activation='relu', kernel_regularizer=l2)(x)
-x = keras.layers.Dropout(0.4)(x)
-outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
-model = keras.Model(inputs, outputs)
-model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-
-# Compute class weights to reduce collapse to majority class
-class_weight = None
-try:
-    if len(y) > 0:
-        counts = _np.bincount(y, minlength=num_classes)
-        total = counts.sum()
-        # Avoid division by zero
-        class_weight = {i: (total / (num_classes * counts[i])) if counts[i] > 0 else 0.0 for i in range(num_classes)}
-        print(f"Class counts: {counts}, class_weight: {class_weight}")
-except Exception as e:
-    print(f"Failed to compute class weights: {e}")
-
-if len(X_train) == 0:
-    # Safety: if still empty, skip training
-    hist = type('H', (), {'history': {'accuracy': [0.0], 'val_accuracy': [0.0], 'loss': [0.0], 'val_loss': [0.0]}})()
-else:
-    class EpochLogger(keras.callbacks.Callback):
-        def on_epoch_end(self, epoch, logs=None):
-            logs = logs or {}
-            acc = logs.get('accuracy', 0.0)
-            val_acc = logs.get('val_accuracy', 0.0)
-            loss = logs.get('loss', 0.0)
-            val_loss = logs.get('val_loss', 0.0)
-            print(f"Epoch {epoch+1}: loss={loss:.4f} acc={acc:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
-    # Callbacks: early stopping and best checkpoint
-    ckpt_path = f"{temp_dir}/best.keras"
-    callbacks = [
-        EpochLogger(),
-        keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-5),
-        keras.callbacks.EarlyStopping(monitor='val_accuracy', mode='max', patience=5, restore_best_weights=True),
-        keras.callbacks.ModelCheckpoint(ckpt_path, monitor='val_accuracy', mode='max', save_best_only=True, save_weights_only=False)
-    ]
-    # Phase 1: train head only
-    print("Phase 1: training classifier head with frozen backbone...")
-    hist = model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val if len(X_val)>0 else y_train),
-        epochs=10,
-        batch_size=16,
-        verbose=0,
-        shuffle=True,
-        class_weight=class_weight,
-        callbacks=callbacks
-    )
-
-    # Phase 2: fine-tune last blocks
-    print("Phase 2: fine-tuning last backbone blocks...")
-    try:
-        # Unfreeze last 30 layers
-        for layer in base.layers[-30:]:
-            if not isinstance(layer, keras.layers.BatchNormalization):
-                layer.trainable = True
-        model.compile(optimizer=keras.optimizers.Adam(1e-4), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-        hist2 = model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val if len(X_val)>0 else y_train),
-            epochs=20,
-            batch_size=16,
-            verbose=0,
-            shuffle=True,
-            class_weight=class_weight,
-            callbacks=callbacks
-        )
-        # Merge histories for final reporting
-        for k, v in hist2.history.items():
-            hist.history.setdefault(k, []).extend(v)
-            print("Computing embeddings and centroids for few-shot...")
-            embed_base = keras.applications.MobileNetV2(input_shape=(224,224,3), include_top=False, weights='imagenet')
-            embed_inp = keras.Input(shape=(224,224,3))
-            x = keras.applications.mobilenet_v2.preprocess_input(embed_inp)
-            x = embed_base(x, training=False)
-            x = keras.layers.GlobalAveragePooling2D()(x)
-            embed_model = keras.Model(embed_inp, x)
-            # Build per-class embeddings
-            idx_to_centroid = {}
-            for idx, cname in enumerate(classes):
-                imgs = processed_data.get(cname, {}).get('genuine', [])
-                if len(imgs) == 0:
-                    continue
-                arr = np.stack(imgs, axis=0)
-                embs = embed_model.predict(arr, verbose=0)
-                centroid = embs.mean(axis=0)
-                # Normalize to unit vector for cosine similarity
-                norm = np.linalg.norm(centroid) + 1e-8
-                centroid = (centroid / norm).tolist()
-                idx_to_centroid[idx] = centroid
-            centroids = {
-                'embedding_dim': int(next(iter(idx_to_centroid.values())).__len__()) if idx_to_centroid else 1280,
-                'idx_to_centroid': idx_to_centroid
-            }
-            centroids_path = f'/tmp/{job_id}_centroids.json'
-            with open(centroids_path, 'w') as f:
-                json.dump(centroids, f)
-            s3_key_c = f'models/{job_id}/centroids.json'
-            s3.upload_file(centroids_path, bucket, s3_key_c)
-            model_urls['centroids'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_c}'
-            # Save embedding spec
-            emb_spec = {
-                'architecture': 'mobilenet_v2_embedding',
-                'input_shape': [224,224,3],
-                'pooling': 'gap',
-                'preprocessing': 'mobilenet_v2_preprocess_input'
-            }
-            emb_spec_path = f'/tmp/{job_id}_embedding_spec.json'
-            with open(emb_spec_path, 'w') as f:
-                json.dump(emb_spec, f)
-            s3_key_es = f'models/{job_id}/embedding_spec.json'
-            s3.upload_file(emb_spec_path, bucket, s3_key_es)
-            model_urls['embedding_spec'] = f'https://{bucket}.s3.amazonaws.com/{s3_key_es}'
-            print("Saved centroids and embedding spec")
-        except Exception as e:
-            print(f"Failed to compute centroids: {e}")
         
-        # Calculate final accuracy (always numeric)
-        final_accuracy = 0.0
-        try:
-            if hist.history.get('val_accuracy'):
-                final_accuracy = float(hist.history['val_accuracy'][-1])
-            elif hist.history.get('accuracy'):
-                final_accuracy = float(hist.history['accuracy'][-1])
-        except Exception:
-            final_accuracy = 0.0
+        for model_type in model_files:
+            file_path = f'{temp_dir}/signature_model_{model_type}.keras'
+            if os.path.exists(file_path):
+                s3_key = f'models/{job_id}/{model_type}.keras'
+                s3.upload_file(file_path, bucket, s3_key)
+                model_urls[model_type] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+                print(f"Uploaded {model_type} model to S3: {s3_key}")
+            else:
+                print(f"WARNING: {model_type} model file not found: {file_path}")
+        
+        # Upload mappings file
+        mappings_path = f'{temp_dir}/signature_model_mappings.json'
+        if os.path.exists(mappings_path):
+            s3_key = f'models/{job_id}/mappings.json'
+            s3.upload_file(mappings_path, bucket, s3_key)
+            model_urls['mappings'] = f'https://{bucket}.s3.amazonaws.com/{s3_key}'
+            print(f"Uploaded mappings to S3: {s3_key}")
+        
+        # Calculate final accuracy
+        classification_history = training_result.get('classification_history', {})
+        final_accuracy = None
+        if 'accuracy' in classification_history:
+            accuracies = classification_history['accuracy']
+            if accuracies:
+                final_accuracy = float(accuracies[-1])
+                print(f"Final training accuracy: {final_accuracy:.4f}")
+        
+        # Calculate validation accuracy if available
+        final_val_accuracy = None
+        if 'val_accuracy' in classification_history:
+            val_accuracies = classification_history['val_accuracy']
+            if val_accuracies:
+                final_val_accuracy = float(val_accuracies[-1])
+                print(f"Final validation accuracy: {final_val_accuracy:.4f}")
         
         # Save training results
         results = {
@@ -1225,27 +1008,41 @@ else:
             'student_id': student_id,
             'model_urls': model_urls,
             'accuracy': final_accuracy,
+            'val_accuracy': final_val_accuracy,
             'training_metrics': {
-                'accuracy': final_accuracy,
-                'epochs_trained': len(hist.history.get('loss', [])) if hasattr(hist, 'history') else 0,
-                'final_loss': float(hist.history.get('loss', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('loss') else 0.0,
-                'val_accuracy': float(hist.history.get('val_accuracy', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('val_accuracy') else 0.0,
-                'val_loss': float(hist.history.get('val_loss', [0])[-1]) if hasattr(hist, 'history') and hist.history.get('val_loss') else 0.0
+                'final_accuracy': final_accuracy,
+                'final_val_accuracy': final_val_accuracy,
+                'classification_history': classification_history,
+                'epochs_trained': len(classification_history.get('loss', [])),
+                'total_samples': total_samples,
+                'students_count': len(processed_data),
+                'preprocessing_stats': {
+                    'processed_count': preprocessor.processed_count,
+                    'error_count': preprocessor.error_count
+                }
             }
         }
         
         results_path = '/tmp/training_results.json'
         with open(results_path, 'w') as f:
-            json.dump(results, f)
+            json.dump(results, f, indent=2)
         
         s3.upload_file(results_path, bucket, f'training_results/{job_id}.json')
-        print(f"Training completed successfully for job {job_id}! Final accuracy: {final_accuracy}")
+        print(f"Uploaded training results to S3")
+        
+        print(f"\n=== TRAINING COMPLETED SUCCESSFULLY ===")
+        print(f"Job ID: {job_id}")
+        print(f"Final accuracy: {final_accuracy}")
+        print(f"Models uploaded: {len(model_urls)} files")
+        print(f"Total training samples: {total_samples}")
         
         # Cleanup
         shutil.rmtree(temp_dir, ignore_errors=True)
         
     except Exception as e:
-        print(f"Training failed: {str(e)}")
+        print(f"\n=== TRAINING FAILED ===")
+        print(f"Error: {str(e)}")
+        print("Full traceback:")
         traceback.print_exc()
         raise
 
@@ -1258,9 +1055,15 @@ if __name__ == "__main__":
     job_id = sys.argv[2]
     student_id = int(sys.argv[3])
     
+    print(f"Starting GPU training with arguments:")
+    print(f"  Training data key: {training_data_key}")
+    print(f"  Job ID: {job_id}")
+    print(f"  Student ID: {student_id}")
+    print(f"  TensorFlow version: {tf.__version__}")
+    
     train_on_gpu(training_data_key, job_id, student_id)
 '''
-        return script.replace('__S3_BUCKET__', self.s3_bucket)
+        return script_content
     
     async def _start_remote_training(self, instance_id: str, training_data_key: str, 
                                    job_id: str, student_id: int, job_queue) -> Dict:
@@ -1269,12 +1072,9 @@ if __name__ == "__main__":
             # Run training command
             training_command = [
                 f'cd {self.training_script_path}',
-                f'ls -la',  # Debug: list files
-                f'head -20 train_gpu.py',  # Debug: show first 20 lines of script
                 f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
             ]
             
-            logger.info(f"DEBUG: Running training commands: {training_command}")
             response = self.ssm_client.send_command(
                 InstanceIds=[instance_id],
                 DocumentName='AWS-RunShellScript',
@@ -1334,11 +1134,6 @@ if __name__ == "__main__":
             
             if status == 'Success':
                 logger.info(f"Training completed successfully for job {job_id}")
-                # Validate that results JSON exists and has model_urls
-                try:
-                    res = self.s3_client.get_object(Bucket=self.s3_client.meta.region_name and self.s3_client._endpoint.host and self.s3_client._endpoint.host and self.s3_client._endpoint.host or '', Key=f'training_results/{job_id}.json')
-                except Exception:
-                    pass
                 return {
                     'status': 'success', 
                     'output': result.get('StandardOutputContent', ''),
@@ -1556,7 +1351,6 @@ echo "SSM agent installation/restart attempted at $(date)" >> /var/log/ssm-insta
 """
             
             # Update instance user data
-            import base64
             encoded_script = base64.b64encode(ssm_install_script.encode()).decode()
             
             # Note: This requires stopping the instance first
