@@ -250,6 +250,29 @@ class SignatureEmbeddingModel:
         print("Training completed successfully!")
         return {'classification_history': history.history, 'siamese_history': {}}
 
+    def save_models(self, base_path):
+        try:
+            if self.embedding_model is not None:
+                emb_path = "{}_embedding.keras".format(base_path)
+                self.embedding_model.save(emb_path)
+                print("Saved embedding model to {}".format(emb_path))
+            if self.classification_head is not None:
+                cls_path = "{}_classification.keras".format(base_path)
+                self.classification_head.save(cls_path)
+                print("Saved classification model to {}".format(cls_path))
+            # Write mappings (legacy-compatible)
+            map_path = "{}_mappings.json".format(base_path)
+            with open(map_path, 'w') as f:
+                json.dump({
+                    'student_to_id': self.student_to_id,
+                    'id_to_student': {int(k) if isinstance(k,str) and k.isdigit() else k: v for k, v in self.id_to_student.items()}
+                }, f, indent=2)
+            print("Saved mappings to {}".format(map_path))
+        except Exception as e:
+            print("Error saving models: {}".format(e))
+            traceback.print_exc()
+            raise
+
 def train_on_gpu(training_data_key, job_id, student_id):
     try:
         s3 = boto3.client('s3')
