@@ -358,8 +358,8 @@ async def identify_signature_owner(
                                 import cv2
                                 import numpy as _np
                                 from PIL import Image as _PIL  # use global Image module alias if needed
-                                if not isinstance(img_pil, Image.Image):
-                                    img_pil = Image.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else Image.fromarray(_np.array(img_pil))
+                                if not isinstance(img_pil, _PIL.Image.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(_np.array(img_pil))
                                 img_pil = img_pil.convert('RGB')
                                 arr = _np.asarray(img_pil)
                                 # Background removal
@@ -403,10 +403,10 @@ async def identify_signature_owner(
                             except Exception as e:
                                 logger.warning(f"Preprocessing failed: {e}, using fallback")
                                 # Fallback: simple resize and normalize
-                                if not isinstance(img_pil, Image.Image):
-                                    img_pil = Image.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else Image.fromarray(_np.array(img_pil))
+                                if not isinstance(img_pil, _PIL.Image.Image):
+                                    img_pil = _PIL.open(io.BytesIO(img_pil)) if isinstance(img_pil, (bytes, bytearray)) else _PIL.Image.fromarray(_np.array(img_pil))
                                 img_pil = img_pil.convert('RGB')
-                                arr = _np.asarray(img_pil.resize((224, 224), Image.Resampling.LANCZOS))
+                                arr = _np.asarray(img_pil.resize((224, 224), _PIL.Image.Resampling.LANCZOS))
                                 return arr.astype(_np.float32) / 255.0
 
                         # Build embedder
@@ -419,19 +419,19 @@ async def identify_signature_owner(
                         embedder = tf.keras.Model(inp_e, xe)
                         # Preprocess and embed query
                         arr_e = _classifier_preprocess(test_image)
-                        import numpy as _np
-                        vec = embedder.predict(_np.expand_dims(arr_e, 0), verbose=0)[0]
-                        vn = _np.linalg.norm(vec) + 1e-8
+                        import numpy as np
+                        vec = embedder.predict(np.expand_dims(arr_e, 0), verbose=0)[0]
+                        vn = np.linalg.norm(vec) + 1e-8
                         vec = vec / vn
                         best_idx = -1; best_sim = -1.0
                         print(f"DEBUG: Centroids dict keys: {list(centroids_dict.keys()) if centroids_dict else 'None'}")
                         print(f"DEBUG: Available mappings - id_to_student: {id_to_student}, id_to_name: {id_to_name}")
                         for k, centroid in (centroids_dict or {}).items():
                             ci = int(k)
-                            c = _np.array(centroid, dtype=_np.float32)
-                            cn = _np.linalg.norm(c) + 1e-8
+                            c = np.array(centroid, dtype=np.float32)
+                            cn = np.linalg.norm(c) + 1e-8
                             c = c / cn
-                            sim = float(_np.dot(vec, c))
+                            sim = float(np.dot(vec, c))
                             print(f"DEBUG: Class {ci} similarity: {sim}")
                             if sim > best_sim:
                                 best_sim = sim; best_idx = ci
