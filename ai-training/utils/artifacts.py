@@ -46,6 +46,7 @@ def package_global_classifier_artifacts(
     model_uuid: str,
     base_dir: str,
     classifier: keras.Model,
+    embedding_model: keras.Model | None,
     mappings_id_first: Dict,
     centroids: Dict[int, list] | None,
     training_results: Dict,
@@ -53,11 +54,18 @@ def package_global_classifier_artifacts(
 ) -> Dict[str, str]:
     out_dir = os.path.join(base_dir, model_uuid)
     os.makedirs(out_dir, exist_ok=True)
-    # SavedModel directory and zip
+    # SavedModel directory and zip (classifier)
     savedmodel_dir = os.path.join(out_dir, f"{model_uuid}_classification.tf")
     save_savedmodel(classifier, savedmodel_dir)
     zip_path = os.path.join(out_dir, f"{model_uuid}_classification_savedmodel.zip")
     zip_directory(savedmodel_dir, zip_path)
+    # Optional embedding SavedModel
+    emb_zip_path = ""
+    if embedding_model is not None:
+        emb_dir = os.path.join(out_dir, f"{model_uuid}_embedding.tf")
+        save_savedmodel(embedding_model, emb_dir)
+        emb_zip_path = os.path.join(out_dir, f"{model_uuid}_embedding_savedmodel.zip")
+        zip_directory(emb_dir, emb_zip_path)
     # Write JSON artifacts
     mappings_path = os.path.join(out_dir, f"{model_uuid}_mappings.json")
     write_json(mappings_path, mappings_id_first)
@@ -73,6 +81,7 @@ def package_global_classifier_artifacts(
     return {
         "savedmodel_dir": savedmodel_dir,
         "savedmodel_zip": zip_path,
+        "embedding_savedmodel_zip": emb_zip_path,
         "mappings_path": mappings_path,
         "centroids_path": centroids_path or "",
         "training_results_path": results_path,

@@ -1011,6 +1011,7 @@ async def train_global_model():
             model_uuid,
             settings.LOCAL_MODELS_DIR,
             getattr(gsm, 'classifier'),
+            getattr(gsm, 'embedding_model', None),
             id_first_mappings,
             None,
             tr,
