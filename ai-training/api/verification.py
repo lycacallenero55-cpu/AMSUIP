@@ -269,7 +269,12 @@ async def identify_signature_owner(
                         emb_spec_url = _presign(f"{folder}/embedding_spec.json", expires_seconds=3600)
                         # Ensure mappings URL is available and presigned
                         if not mappings_url:
-                            mappings_url = _presign(f"{folder}/mappings.json", expires_seconds=3600)
+                            try:
+                                mappings_url = _presign(f"{folder}/mappings.json", expires_seconds=3600)
+                                print(f"DEBUG: Generated mappings URL: {mappings_url}")
+                            except Exception as e:
+                                print(f"DEBUG: Failed to generate mappings URL: {e}")
+                                mappings_url = None
                         import requests as _rq
                         c_resp = _rq.get(centroids_url, timeout=30); c_resp.raise_for_status()
                         centroids_raw = c_resp.json()
@@ -317,6 +322,22 @@ async def identify_signature_owner(
                                     
                             except Exception as e:
                                 print(f"DEBUG: Mappings loading failed: {e}")
+                                # Fallback: try to get student info from database
+                                try:
+                                    print("DEBUG: Attempting database fallback for student info...")
+                                    # Get all students to build a mapping
+                                    students_resp = await db_manager.client.table("students").select("id, name").execute()
+                                    if hasattr(students_resp, 'data') and students_resp.data:
+                                        # Create a simple mapping based on alphabetical order
+                                        students = sorted(students_resp.data, key=lambda x: x['name'])
+                                        for i, student in enumerate(students):
+                                            id_to_student[i] = int(student['id'])
+                                            id_to_name[i] = student['name']
+                                        print(f"DEBUG: Database fallback loaded {len(students)} students")
+                                        print(f"DEBUG: id_to_student: {id_to_student}")
+                                        print(f"DEBUG: id_to_name: {id_to_name}")
+                                except Exception as db_e:
+                                    print(f"DEBUG: Database fallback also failed: {db_e}")
                                 pass
                         # Define classifier-aligned preprocessing (signature preprocessor)
                         def _classifier_preprocess(img_pil):
