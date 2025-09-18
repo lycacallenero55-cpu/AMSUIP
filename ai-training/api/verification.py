@@ -217,7 +217,29 @@ async def _load_cached_centroids(latest_global: dict) -> dict | None:
         if resp.status_code != 200:
             return None
         data = resp.json()
-        return {int(k): v for k, v in data.items()}
+        # Accept both class-index keyed and student-id keyed; if we have mappings, remap
+        try:
+            # If keys look like class indices (small integers 0..N), try to remap via mappings
+            keys = list(data.keys())
+            if keys and all(str(k).isdigit() for k in keys):
+                # Try mappings_path for id-first mapping
+                murl = latest_global.get("mappings_path")
+                if murl:
+                    mresp = requests.get(murl, timeout=6)
+                    if mresp.status_code == 200:
+                        m = mresp.json()
+                        ci2sid = m.get('class_index_to_student_id') or {}
+                        remapped = {}
+                        for ci_str, centroid in data.items():
+                            sid = int(ci2sid.get(str(ci_str), -1))
+                            if sid >= 0:
+                                remapped[sid] = centroid
+                        if remapped:
+                            return remapped
+            # Otherwise assume already keyed by student id
+            return {int(k): v for k, v in data.items()}
+        except Exception:
+            return {int(k): v for k, v in data.items()}
     except Exception:
         return None
 

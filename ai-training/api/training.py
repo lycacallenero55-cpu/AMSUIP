@@ -1251,7 +1251,7 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 accuracy = None
                 
             model_record = await db_manager.create_global_model({
-                "model_path": gpu_result['model_urls'].get('classification', ''),
+                "model_path": gpu_result['model_urls'].get('classifier_savedmodel_zip', '') or gpu_result['model_urls'].get('classification', ''),
                 "s3_key": f"global_models/{job.job_id}",
                 "model_uuid": job.job_id,
                 "status": "completed",
@@ -1268,7 +1268,10 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                     'instance_type': 'g4dn.xlarge',
                     'gpu_acceleration': True,
                     'gpu_accuracy': gpu_accuracy
-                }
+                },
+                "mappings_path": gpu_result['model_urls'].get('mappings', ''),
+                "centroids_path": gpu_result['model_urls'].get('centroids', ''),
+                "embedding_spec_path": gpu_result['model_urls'].get('classifier_spec', '')
             })
 
             result = {
