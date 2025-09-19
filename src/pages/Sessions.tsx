@@ -1233,7 +1233,7 @@ const Schedule = () => {
           <div className="mb-16"></div>
           
           {/* Sessions Section */}
-          <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-base font-semibold text-education-navy">List of Sessions {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}</h3>
               <Button
@@ -1286,7 +1286,7 @@ const Schedule = () => {
                 </div>
               ) : paginatedSessions.length > 0 ? (
                 [...paginatedSessions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((session) => (
-                <Card key={session.id} className="bg-gradient-card border-0 shadow-card">
+                <Card key={session.id} className="bg-gradient-card border border-gray-200 shadow-card">
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-start gap-3">
@@ -1363,7 +1363,7 @@ const Schedule = () => {
                 </Card>
               ))
             ) : (
-              <Card className="bg-gradient-card border-0 shadow-card">
+              <Card className="bg-gradient-card border border-gray-200 shadow-card">
                 <CardContent className="p-8 text-center">
                   <CalendarClock className="w-10 h-10 mx-auto text-muted-foreground mb-2" />
                   <h4 className="text-lg font-medium text-education-navy">

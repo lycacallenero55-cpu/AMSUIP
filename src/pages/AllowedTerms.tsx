@@ -182,7 +182,7 @@ const AllowedTermsContent = () => {
       <div className="mb-16"></div>
       
       {/* Allowed Terms Section */}
-      <div className="bg-white rounded-lg shadow-sm p-4">
+      <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-semibold text-education-navy">List of Allowed Terms</h3>
           <Button 

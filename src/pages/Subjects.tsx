@@ -18,8 +18,11 @@ const Subjects = () => {
             </div>
           </div>
 
+          {/* Space between title and first card */}
+          <div className="mb-16"></div>
+
           {/* Under Development Message */}
-          <Card className="bg-gradient-card border-0 shadow-card">
+          <Card className="bg-gradient-card border border-gray-200 shadow-card">
             <CardContent className="p-12">
               <div className="flex flex-col items-center justify-center text-center space-y-4">
                 <div className="p-4 rounded-full bg-gradient-primary/10">
