@@ -161,6 +161,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         job_queue.update_job_progress(job.job_id, 92.0, f"Training individual model for student {student['id']} ({len(genuine_arrays)}G/{len(forged_arrays)}F)...")
     
     # Normalize arrays to float32 [H,W,3]
+    import numpy as np
     def _normalize(img):
         # Ensure it's a numpy array first
         if not isinstance(img, np.ndarray):
