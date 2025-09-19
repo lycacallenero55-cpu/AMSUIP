@@ -358,7 +358,7 @@ const DesktopNavigation = () => {
                     <TooltipTrigger asChild>
                       {menuItem}
                     </TooltipTrigger>
-                    <TooltipContent side="right" align="center">
+                    <TooltipContent side="right" align="center" variant="sidebar">
                       {item.label}
                     </TooltipContent>
                   </Tooltip>
