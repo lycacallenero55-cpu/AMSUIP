@@ -257,6 +257,15 @@ async def identify_signature_owner(
         test_data = await test_file.read()
         test_image = Image.open(io.BytesIO(test_data))
 
+        # Preprocess the signature image first
+        from utils.preprocessing import SignaturePreprocessor
+        from models.signature_embedding_model import SignatureEmbeddingModel
+        preprocessor = SignaturePreprocessor()
+        processed_signature = preprocessor.preprocess_signature(test_image)
+        
+        # Initialize signature_ai_manager for global model path
+        signature_ai_manager = SignatureEmbeddingModel(max_students=150)
+
         # Try to get latest global model first, then AI model, fallback to legacy models
         latest_global_model = None
         latest_ai_model = None
@@ -839,8 +848,7 @@ async def identify_signature_owner(
                 logger.error(f"Failed to load legacy model: {e}")
                 return _get_fallback_response("identify")
 
-        # Preprocess test signature with advanced preprocessing
-        processed_signature = preprocessor.preprocess_signature(test_image)
+        # Signature already preprocessed above
         
         # Global-first selection (restricted to trained students)
         hybrid = {"global_score": 0.0, "global_margin": 0.0, "global_margin_raw": 0.0}

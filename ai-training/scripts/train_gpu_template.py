@@ -232,9 +232,16 @@ class SignatureEmbeddingModel:
         print("Model summary:")
         model.summary()
         print("Starting training with validation_split={}".format(validation_split))
+        # Custom callback to print epoch progress
+        class EpochLogger(keras.callbacks.Callback):
+            def on_epoch_end(self, epoch, logs=None):
+                logs = logs or {}
+                print(f"Epoch {epoch + 1}: loss={logs.get('loss', 0):.4f}, accuracy={logs.get('accuracy', 0):.4f}, val_loss={logs.get('val_loss', 0):.4f}, val_accuracy={logs.get('val_accuracy', 0):.4f}")
+        
         callbacks = [
             keras.callbacks.EarlyStopping(monitor='val_accuracy' if validation_split>0 else 'accuracy', patience=5, restore_best_weights=True),
             keras.callbacks.ReduceLROnPlateau(monitor='val_loss' if validation_split>0 else 'loss', factor=0.5, patience=3, min_lr=0.0001),
+            EpochLogger(),
         ]
         try:
             if validation_split > 0:
@@ -245,6 +252,19 @@ class SignatureEmbeddingModel:
             print("Training failed: {}".format(e))
             traceback.print_exc()
             raise
+        
+        # Print final training results
+        final_loss = history.history['loss'][-1]
+        final_accuracy = history.history['accuracy'][-1]
+        final_val_loss = history.history.get('val_loss', [0])[-1]
+        final_val_accuracy = history.history.get('val_accuracy', [0])[-1]
+        epochs_trained = len(history.history['loss'])
+        
+        print(f"Training completed! Epochs trained: {epochs_trained}")
+        print(f"Final metrics - Loss: {final_loss:.4f}, Accuracy: {final_accuracy:.4f}")
+        if validation_split > 0:
+            print(f"Validation metrics - Val Loss: {final_val_loss:.4f}, Val Accuracy: {final_val_accuracy:.4f}")
+        
         self.classification_head = model
         self.embedding_model = keras.Model(inputs=model.input, outputs=model.layers[-3].output)
         print("Training completed successfully!")
