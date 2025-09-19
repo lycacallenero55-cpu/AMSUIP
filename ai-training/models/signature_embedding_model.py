@@ -43,11 +43,14 @@ class SignatureEmbeddingModel:
         # Note: authenticity_head removed - forgery detection is disabled
         self.siamese_model = None
         
-        # Student mappings
-        self.student_to_id = {}
-        self.id_to_student = {}
-        # Optional external mapping from display name -> numeric student_id
-        self.external_student_id_map: dict[str, int] | None = None
+        # ID-first mappings (Teachable Machine style)
+        self.student_id_to_class = {}  # Maps student_id -> class_index
+        self.class_to_student_id = {}  # Maps class_index -> student_id
+        self.student_id_to_name = {}   # Maps student_id -> student_name
+        
+        # Legacy mappings (deprecated - for backward compatibility only)
+        self.student_to_id = {}  # DEPRECATED: name -> class_index
+        self.id_to_student = {}  # DEPRECATED: class_index -> name
         
         logger.info(f"Initialized SignatureEmbeddingModel: {embedding_dim}D embeddings, {image_size}x{image_size} input")
     
@@ -194,10 +197,8 @@ class SignatureEmbeddingModel:
                 loss='categorical_crossentropy',
                 metrics=[
                     'accuracy',
-                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
-                    keras.metrics.Precision(name='precision'),
-                    keras.metrics.Recall(name='recall'),
-                    keras.metrics.AUC(name='auc')
+                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy')
+                    # Removed Precision, Recall, AUC due to Keras 3.x compatibility issues
                 ]
             )
         
@@ -292,8 +293,9 @@ class SignatureEmbeddingModel:
         """
         Prepare training data with proper preprocessing and augmentation
         Focus: Owner identification only (forgery detection disabled)
+        Uses ID-first approach for Teachable Machine compatibility
         """
-        logger.info("Preparing training data with signature-specific preprocessing and augmentation...")
+        logger.info("Preparing training data with ID-first approach...")
         
         all_images = []
         student_labels = []
@@ -308,14 +310,35 @@ class SignatureEmbeddingModel:
             blur_probability=0.2  # Reduced blur probability
         )
         
-        for student_name, signatures in training_data.items():
-            if student_name not in self.student_to_id:
-                student_id = len(self.student_to_id)
-                self.student_to_id[student_name] = student_id
-                self.id_to_student[student_id] = student_name
-                logger.info(f"Added student '{student_name}' with ID {student_id}")
+        class_index = 0
+        for student_key, signatures in training_data.items():
+            # Parse student ID from key (format: "ID_Name" or just "ID")
+            if isinstance(student_key, str) and '_' in student_key:
+                parts = student_key.split('_', 1)
+                try:
+                    student_id = int(parts[0])
+                    student_name = parts[1] if len(parts) > 1 else f"Student_{student_id}"
+                except:
+                    student_id = hash(student_key) % 100000
+                    student_name = student_key
+            else:
+                try:
+                    student_id = int(student_key)
+                    student_name = f"Student_{student_id}"
+                except:
+                    student_id = hash(student_key) % 100000
+                    student_name = str(student_key)
             
-            student_id = self.student_to_id[student_name]
+            # Store ID-first mappings
+            self.student_id_to_class[student_id] = class_index
+            self.class_to_student_id[class_index] = student_id
+            self.student_id_to_name[student_id] = student_name
+            
+            # Legacy mappings for backward compatibility
+            self.student_to_id[student_name] = class_index
+            self.id_to_student[class_index] = student_name
+            
+            logger.info(f"Added student ID {student_id} ('{student_name}') as class {class_index}")
             
             # Process genuine signatures with augmentation
             genuine_images = signatures['genuine']
@@ -326,7 +349,7 @@ class SignatureEmbeddingModel:
                     # Original image
                     processed_img = self._preprocess_signature(img)
                     all_images.append(processed_img)
-                    student_labels.append(student_id)
+                    student_labels.append(class_index)  # Use class index for labels
                     
                     # Augmented versions (3x augmentation for better balance)
                     for _ in range(3):
@@ -335,28 +358,30 @@ class SignatureEmbeddingModel:
                             # Validate augmented image
                             if augmented_img is not None and augmented_img.shape == processed_img.shape:
                                 all_images.append(augmented_img)
-                                student_labels.append(student_id)
+                                student_labels.append(class_index)  # Use class index for labels
                         except Exception as e:
-                            logger.warning(f"Augmentation failed for {student_name}: {e}")
+                            logger.warning(f"Augmentation failed for student {student_id}: {e}")
                             # Continue without this augmentation
                 except Exception as e:
-                    logger.warning(f"Preprocessing failed for {student_name}: {e}")
+                    logger.warning(f"Preprocessing failed for student {student_id}: {e}")
                     continue
             
             # Skip forged signatures - not used for owner identification training
             # (Forgery detection is disabled system-wide - focus on owner identification only)
+            
+            class_index += 1  # Increment class index for next student
         
         if not all_images:
             logger.warning("No valid training images found - returning empty arrays")
             return np.array([]).reshape(0, self.image_size, self.image_size, 3), np.array([]).reshape(0, 1)
         
         X = np.array(all_images, dtype=np.float32)
-        # Use actual number of students for categorical encoding
-        num_students = len(self.student_to_id)
-        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_students)
+        # Use actual number of classes for categorical encoding
+        num_classes = len(self.class_to_student_id)
+        y_student = tf.keras.utils.to_categorical(student_labels, num_classes=num_classes)
         
-        logger.info(f"Prepared {len(all_images)} images (including augmentations) across {len(self.student_to_id)} students")
-        logger.info(f"Student mappings: {self.student_to_id}")
+        logger.info(f"Prepared {len(all_images)} images (including augmentations) across {num_classes} classes")
+        logger.info(f"ID-first mappings: {num_classes} students mapped")
         logger.info(f"Training data shape: X={X.shape}, y_student={y_student.shape}")
         return X, y_student
     
@@ -535,10 +560,8 @@ class SignatureEmbeddingModel:
                 loss='categorical_crossentropy',
                 metrics=[
                     'accuracy',
-                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
-                    keras.metrics.Precision(name='precision'),
-                    keras.metrics.Recall(name='recall'),
-                    keras.metrics.AUC(name='auc')
+                    keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy')
+                    # Removed Precision, Recall, AUC due to Keras 3.x compatibility issues
                 ]
             )
         
@@ -645,10 +668,8 @@ class SignatureEmbeddingModel:
             loss='categorical_crossentropy',
             metrics=[
                 'accuracy',
-                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy'),
-                keras.metrics.Precision(name='precision'),
-                keras.metrics.Recall(name='recall'),
-                keras.metrics.AUC(name='auc')
+                keras.metrics.TopKCategoricalAccuracy(k=3, name='top3_accuracy')
+                # Removed Precision, Recall, AUC due to Keras 3.x compatibility issues
             ]
         )
         
@@ -836,49 +857,52 @@ class SignatureEmbeddingModel:
     
     def save_models(self, base_path: str):
         """
-        Save all trained models and mappings
+        Save all trained models to disk with ID-first mappings
         """
+        logger.info(f"Saving models to {base_path}...")
+        
         if self.embedding_model:
-            self.embedding_model.save(f"{base_path}_embedding.keras")
-            logger.info(f"Embedding model saved to {base_path}_embedding.keras")
+            embedding_path = f"{base_path}_embedding.keras"
+            self.embedding_model.save(embedding_path)
+            logger.info(f"Saved embedding model to {embedding_path}")
         
         if self.classification_head:
-            self.classification_head.save(f"{base_path}_classification.keras")
-            logger.info(f"Classification model saved to {base_path}_classification.keras")
+            classification_path = f"{base_path}_classification.keras"
+            self.classification_head.save(classification_path)
+            logger.info(f"Saved classification model to {classification_path}")
         
-        # Note: authenticity_head saving removed - forgery detection is disabled
+        # Note: authenticity_head removed - forgery detection is disabled
         
         if self.siamese_model:
-            self.siamese_model.save(f"{base_path}_siamese.keras")
-            logger.info(f"Siamese model saved to {base_path}_siamese.keras")
+            siamese_path = f"{base_path}_siamese.keras"
+            self.siamese_model.save(siamese_path)
+            logger.info(f"Saved Siamese model to {siamese_path}")
         
-        # Save mappings (ID-first schema)
-        import json
+        # Save ID-first mappings (Teachable Machine style)
         mappings_path = f"{base_path}_mappings.json"
-        class_index_to_student_id: dict[str, int] = {}
-        class_index_to_student_name: dict[str, str] = {}
-        student_id_to_class_index: dict[str, int] = {}
-        for class_index, student_name in self.id_to_student.items():
-            try:
-                class_index_int = int(class_index)
-            except Exception:
-                continue
-            if self.external_student_id_map and student_name in self.external_student_id_map:
-                numeric_id = int(self.external_student_id_map[student_name])
-            else:
-                numeric_id = class_index_int
-            class_index_to_student_id[str(class_index_int)] = numeric_id
-            class_index_to_student_name[str(class_index_int)] = student_name
-            student_id_to_class_index[str(numeric_id)] = class_index_int
         with open(mappings_path, 'w') as f:
-            json.dump({
-                'class_index_to_student_id': class_index_to_student_id,
-                'class_index_to_student_name': class_index_to_student_name,
-                'student_id_to_class_index': student_id_to_class_index,
-                'embedding_dim': self.embedding_dim,
-                'image_size': self.image_size
-            }, f, indent=2)
-        logger.info(f"Model mappings (ID-first) saved to {mappings_path}")
+            import json
+            mappings = {
+                # Primary ID-first schema
+                'class_index_to_student_id': {str(ci): int(sid) for ci, sid in self.class_to_student_id.items()},
+                'class_index_to_student_name': {str(ci): self.student_id_to_name.get(sid, f"Student_{sid}") 
+                                               for ci, sid in self.class_to_student_id.items()},
+                'student_id_to_class_index': {str(sid): int(ci) for sid, ci in self.student_id_to_class.items()},
+                
+                # Metadata
+                'metadata': {
+                    'num_classes': len(self.class_to_student_id),
+                    'image_size': self.image_size,
+                    'embedding_dim': self.embedding_dim,
+                    'schema_version': 'v2_id_first'
+                },
+                
+                # Legacy mappings (deprecated)
+                'student_to_id': self.student_to_id,  # For backward compatibility only
+                'id_to_student': self.id_to_student   # For backward compatibility only
+            }
+            json.dump(mappings, f, indent=2)
+        logger.info(f"Saved ID-first mappings to {mappings_path}")
     
     def load_models(self, base_path: str) -> bool:
         """

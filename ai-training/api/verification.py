@@ -1,9 +1,12 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from typing import Optional
+from typing import Optional, Dict, List
 from PIL import Image
 import io
 import logging
 from datetime import datetime
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
 
 from models.database import db_manager
 from models.signature_embedding_model import SignatureEmbeddingModel
@@ -18,6 +21,33 @@ from config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+class ModelArtifacts:
+    """Container for loaded model artifacts with ID-first approach"""
+    def __init__(self):
+        self.classification_model = None
+        self.embedding_model = None
+        self.mappings = {}
+        self.centroids = {}
+        self.trained_student_ids = set()
+        self.model_id = None
+        self.loaded_at = None
+    
+    def is_loaded(self):
+        return self.classification_model is not None and self.mappings
+
+# Global model cache
+_model_cache = ModelArtifacts()
+
+# Legacy global model manager (for backward compatibility)
+signature_ai_manager = SignatureEmbeddingModel(max_students=150)
+
+# Global preprocessor instance
+preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
+
+# Confidence thresholds for Teachable Machine behavior
+CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence to return a match
+TOP_K_PREDICTIONS = 5  # Number of top predictions to return
 
 @router.get("/health")
 async def verification_health():
@@ -107,9 +137,6 @@ async def debug_models():
             "timestamp": datetime.utcnow().isoformat()
         }
 
-# Global model instance
-signature_ai_manager = SignatureEmbeddingModel(max_students=150)
-preprocessor = SignaturePreprocessor(target_size=settings.MODEL_IMAGE_SIZE)
 
 def _get_fallback_response(endpoint_type="identify", student_id=None, error_message="System temporarily unavailable"):
     """Return a fallback response when system is unavailable"""
@@ -242,6 +269,238 @@ async def _load_cached_centroids(latest_global: dict) -> dict | None:
             return {int(k): v for k, v in data.items()}
     except Exception:
         return None
+
+async def load_latest_model() -> ModelArtifacts:
+    """Load the latest trained model and its artifacts with ID-first approach"""
+    global _model_cache
+    
+    # Check if we have a cached model (valid for 5 minutes)
+    if _model_cache.is_loaded() and _model_cache.loaded_at:
+        age = (datetime.utcnow() - _model_cache.loaded_at).total_seconds()
+        if age < 300:  # 5 minutes cache
+            return _model_cache
+    
+    try:
+        # Get latest global model first, then fall back to AI model
+        latest_model = None
+        
+        # Try global model
+        if hasattr(db_manager, 'get_latest_global_model'):
+            latest_model = await db_manager.get_latest_global_model()
+            if latest_model and latest_model.get("status") == "completed":
+                logger.info(f"Using global model: {latest_model.get('id')}")
+            else:
+                latest_model = None
+        
+        # Fall back to AI model
+        if not latest_model and hasattr(db_manager, 'get_latest_ai_model'):
+            latest_model = await db_manager.get_latest_ai_model()
+            if latest_model and latest_model.get("status") == "completed":
+                logger.info(f"Using AI model: {latest_model.get('id')}")
+            else:
+                latest_model = None
+        
+        if not latest_model:
+            raise Exception("No trained model available")
+        
+        # Load classification model
+        model_path = latest_model.get("model_path") or latest_model.get("classification_model_path")
+        if not model_path:
+            raise Exception("No classification model path found")
+        
+        # Download and load model
+        if model_path.startswith('https://') and 'amazonaws.com' in model_path:
+            import tempfile
+            import os
+            
+            # Extract S3 key and create presigned URL
+            s3_key = model_path.split('amazonaws.com/')[-1]
+            presigned_url = create_presigned_get(s3_key, expires_seconds=3600)
+            
+            response = requests.get(presigned_url, timeout=30)
+            response.raise_for_status()
+            
+            # Save to temp file and load
+            with tempfile.NamedTemporaryFile(suffix='.keras', delete=False) as tmp_file:
+                tmp_file.write(response.content)
+                tmp_path = tmp_file.name
+            
+            try:
+                _model_cache.classification_model = keras.models.load_model(tmp_path)
+                logger.info("Loaded classification model successfully")
+                
+                # Extract embedding model (without final classification layer)
+                if _model_cache.classification_model:
+                    try:
+                        # Find the layer before the final Dense layer
+                        for i in range(len(_model_cache.classification_model.layers) - 1, -1, -1):
+                            layer = _model_cache.classification_model.layers[i]
+                            if isinstance(layer, keras.layers.Dense) and i > 0:
+                                # Get the layer before this Dense layer
+                                _model_cache.embedding_model = keras.Model(
+                                    inputs=_model_cache.classification_model.input,
+                                    outputs=_model_cache.classification_model.layers[i-1].output
+                                )
+                                break
+                    except Exception as e:
+                        logger.warning(f"Could not extract embedding model: {e}")
+                
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        
+        # Load mappings (ID-first schema)
+        mappings_path = latest_model.get("mappings_path")
+        if mappings_path:
+            try:
+                response = requests.get(mappings_path, timeout=10)
+                response.raise_for_status()
+                mappings_data = response.json()
+                
+                # Parse ID-first mappings
+                if 'class_index_to_student_id' in mappings_data:
+                    # New ID-first schema
+                    _model_cache.mappings = {
+                        'class_to_id': {int(k): int(v) for k, v in mappings_data['class_index_to_student_id'].items()},
+                        'class_to_name': mappings_data.get('class_index_to_student_name', {}),
+                        'id_to_class': {int(v): int(k) for k, v in mappings_data['class_index_to_student_id'].items()},
+                        'id_to_name': {}
+                    }
+                    
+                    # Build id_to_name mapping
+                    for class_idx, student_id in _model_cache.mappings['class_to_id'].items():
+                        name = _model_cache.mappings['class_to_name'].get(str(class_idx), f"Student_{student_id}")
+                        _model_cache.mappings['id_to_name'][student_id] = name
+                    
+                    # Extract trained student IDs
+                    _model_cache.trained_student_ids = set(_model_cache.mappings['class_to_id'].values())
+                    
+                logger.info(f"Loaded mappings for {len(_model_cache.trained_student_ids)} trained students")
+                
+            except Exception as e:
+                logger.error(f"Failed to load mappings: {e}")
+        
+        # Load centroids (optional)
+        centroids_path = latest_model.get("centroids_path")
+        if centroids_path:
+            try:
+                response = requests.get(centroids_path, timeout=10)
+                response.raise_for_status()
+                centroids_data = response.json()
+                _model_cache.centroids = {int(k): np.array(v) for k, v in centroids_data.items()}
+                logger.info(f"Loaded centroids for {len(_model_cache.centroids)} students")
+            except Exception as e:
+                logger.warning(f"Failed to load centroids: {e}")
+        
+        _model_cache.model_id = latest_model.get("id")
+        _model_cache.loaded_at = datetime.utcnow()
+        
+        return _model_cache
+        
+    except Exception as e:
+        logger.error(f"Failed to load model artifacts: {e}")
+        raise HTTPException(status_code=503, detail="Model not available")
+
+
+async def predict_with_confidence(image: Image.Image, model_artifacts: ModelArtifacts) -> Dict:
+    """
+    Predict student identity with confidence scores
+    Returns only trained students, with "unknown" for low confidence
+    """
+    try:
+        # Preprocess image
+        processed_image = preprocessor.preprocess_signature(image)
+        input_batch = np.expand_dims(processed_image, axis=0)
+        
+        # Get predictions from classification model
+        predictions = model_artifacts.classification_model.predict(input_batch, verbose=0)[0]
+        
+        # Get top-k predictions
+        top_k_indices = np.argsort(predictions)[-TOP_K_PREDICTIONS:][::-1]
+        top_k_probs = predictions[top_k_indices]
+        
+        # Build top-k results with ID resolution
+        top_k_results = []
+        for class_idx, prob in zip(top_k_indices, top_k_probs):
+            if prob < 0.01:  # Skip very low probability predictions
+                continue
+            
+            # Resolve class index to student ID
+            student_id = model_artifacts.mappings['class_to_id'].get(int(class_idx))
+            if student_id and student_id in model_artifacts.trained_student_ids:
+                student_name = model_artifacts.mappings['id_to_name'].get(student_id, f"Student_{student_id}")
+                top_k_results.append({
+                    'student_id': int(student_id),
+                    'student_name': student_name,
+                    'confidence': float(prob),
+                    'class_index': int(class_idx)
+                })
+        
+        # Get best prediction
+        if top_k_results and top_k_results[0]['confidence'] >= CONFIDENCE_THRESHOLD:
+            best_result = top_k_results[0]
+            status = "match"
+        else:
+            # Low confidence or no match
+            best_result = {
+                'student_id': 0,
+                'student_name': "Unknown",
+                'confidence': 0.0,
+                'class_index': -1
+            }
+            status = "unknown"
+        
+        # Use embedding model for additional verification if available
+        if model_artifacts.embedding_model and model_artifacts.centroids and best_result['student_id'] > 0:
+            try:
+                # Get embedding for test image
+                test_embedding = model_artifacts.embedding_model.predict(input_batch, verbose=0)[0]
+                
+                # Compare with stored centroid
+                student_id = best_result['student_id']
+                if student_id in model_artifacts.centroids:
+                    centroid = model_artifacts.centroids[student_id]
+                    
+                    # Compute cosine similarity
+                    cosine_sim = np.dot(test_embedding, centroid) / (
+                        np.linalg.norm(test_embedding) * np.linalg.norm(centroid) + 1e-8
+                    )
+                    
+                    # Adjust confidence based on embedding similarity
+                    embedding_confidence = float(max(0.0, min(1.0, (cosine_sim + 1) / 2)))
+                    
+                    # Weighted average of classification and embedding confidence
+                    best_result['confidence'] = 0.7 * best_result['confidence'] + 0.3 * embedding_confidence
+                    
+                    # Re-check threshold
+                    if best_result['confidence'] < CONFIDENCE_THRESHOLD:
+                        best_result = {
+                            'student_id': 0,
+                            'student_name': "Unknown",
+                            'confidence': best_result['confidence'],
+                            'class_index': -1
+                        }
+                        status = "unknown"
+                    
+            except Exception as e:
+                logger.warning(f"Embedding verification failed: {e}")
+        
+        return {
+            'predicted_student_id': best_result['student_id'],
+            'predicted_student_name': best_result['student_name'],
+            'confidence': best_result['confidence'],
+            'top_k': top_k_results[:TOP_K_PREDICTIONS],
+            'status': status,
+            'model_id': model_artifacts.model_id,
+            'trained_students_count': len(model_artifacts.trained_student_ids)
+        }
+        
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        raise
+
 
 @router.post("/identify")
 async def identify_signature_owner(

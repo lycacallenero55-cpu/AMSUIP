@@ -118,11 +118,8 @@ const Reports = () => {
           </Button>
         </div>
 
-        {/* Space between title and first card */}
-        <div className="mb-16"></div>
-
         {/* Filters */}
-        <Card className="bg-gradient-card border border-gray-200 shadow-card">
+        <Card className="bg-gradient-card border-0 shadow-card">
           <CardContent className="p-4">
             <div className="flex items-center justify-between gap-4">
               <div className="flex flex-1 items-center gap-3">
@@ -175,7 +172,7 @@ const Reports = () => {
         {/* Reports List */}
         <div className="space-y-3">
           {mockReports.map((report) => (
-            <Card key={report.id} className="bg-gradient-card border border-gray-200 shadow-card">
+            <Card key={report.id} className="bg-gradient-card border-0 shadow-card">
               <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -236,19 +233,19 @@ const Reports = () => {
 
         {/* Summary Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Card className="bg-gradient-card border border-gray-200 shadow-card">
+          <Card className="bg-gradient-card border-0 shadow-card">
             <CardContent className="p-3 text-center">
               <div className="text-xl font-bold text-education-navy">156</div>
               <div className="text-xs text-muted-foreground">Total Sessions</div>
             </CardContent>
           </Card>
-          <Card className="bg-gradient-card border border-gray-200 shadow-card">
+          <Card className="bg-gradient-card border-0 shadow-card">
             <CardContent className="p-3 text-center">
               <div className="text-xl font-bold text-accent">91.2%</div>
               <div className="text-xs text-muted-foreground">Average Attendance</div>
             </CardContent>
           </Card>
-          <Card className="bg-gradient-card border border-gray-200 shadow-card">
+          <Card className="bg-gradient-card border-0 shadow-card">
             <CardContent className="p-3 text-center">
               <div className="text-xl font-bold text-primary">1,248</div>
               <div className="text-xs text-muted-foreground">Students Tracked</div>

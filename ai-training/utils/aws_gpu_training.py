@@ -22,27 +22,29 @@ class AWSGPUTrainingManager:
     """
     
     def __init__(self):
-        region_name = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION') or 'us-east-1'
-        self.ec2_client = boto3.client('ec2', region_name=region_name)
-        self.s3_client = boto3.client('s3', region_name=region_name)
-        self.ssm_client = boto3.client('ssm', region_name=region_name)
+        self.ec2_client = boto3.client('ec2', region_name=settings.AWS_REGION)
+        self.s3_client = boto3.client('s3', region_name=settings.AWS_REGION)
+        self.ssm_client = boto3.client('ssm', region_name=settings.AWS_REGION)
         
-        # GPU instance configuration
-        self.gpu_instance_type = os.getenv('AWS_GPU_INSTANCE_TYPE', 'g4dn.xlarge')
-        self.ami_id = os.getenv('AWS_GPU_AMI_ID', 'ami-0c02fb55956c7d316')
-        self.key_name = os.getenv('AWS_KEY_NAME', 'your-key-pair')
-        self.security_group_id = os.getenv('AWS_SECURITY_GROUP_ID', 'sg-xxxxxxxxx')
-        self.subnet_id = os.getenv('AWS_SUBNET_ID', 'subnet-xxxxxxxxx')
-        self.existing_instance_id = (os.getenv('AWS_GPU_EXISTING_INSTANCE_ID', '').strip() or None)
+        # Configuration
+        self.instance_type = settings.GPU_INSTANCE_TYPE
+        self.ami_id = settings.GPU_AMI_ID
+        self.key_name = settings.EC2_KEY_NAME
+        self.security_group_id = settings.EC2_SECURITY_GROUP_ID
+        self.subnet_id = settings.EC2_SUBNET_ID
+        self.iam_instance_profile = settings.EC2_IAM_INSTANCE_PROFILE
+        self.s3_bucket = settings.S3_BUCKET_NAME
+        self.training_script_path = '/home/ubuntu/ai-training'
+        
+        # Reuse existing instance if available
+        self.existing_instance_id = settings.EXISTING_GPU_INSTANCE_ID if hasattr(settings, 'EXISTING_GPU_INSTANCE_ID') else None
+        
+        # Skip setup flag - if True, assumes instance is pre-configured
+        self.skip_setup = getattr(settings, 'SKIP_GPU_SETUP', False)
         
         # Training configuration
-        self.training_script_path = '/home/ubuntu/ai-training'
-        self.s3_bucket = os.getenv('S3_BUCKET', 'your-s3-bucket')
         self.github_repo = os.getenv('AWS_GPU_GITHUB_REPO', 'https://github.com/your-repo/ai-training.git')
         
-        # IAM instance profile name
-        self.iam_instance_profile = os.getenv('AWS_IAM_INSTANCE_PROFILE', 'EC2-S3-Access')
-
     def is_available(self) -> bool:
         """Lightweight capability check to decide if GPU training can be attempted."""
         try:
@@ -516,37 +518,70 @@ echo "Instance setup completed at $(date)"
     async def _setup_training_environment(self, instance_id: str, job_id: str):
         """Setup training environment on the instance"""
         try:
-            # Create training script
-            training_script = self._generate_training_script()
-            
-            # Package script from local template to zip+b64 for maximum integrity
-            import zipfile
-            import io as _io
-            from pathlib import Path as _Path
-            tmpl_path = _Path(__file__).parent.parent / 'scripts' / 'train_gpu_template.py'
-            with open(tmpl_path, 'r') as _f:
-                training_script = _f.read()
-            buf = _io.BytesIO()
-            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr('train_gpu.py', training_script)
-            zip_bytes = buf.getvalue()
-            encoded = base64.b64encode(zip_bytes)
-            script_key = f'scripts/{job_id}/train_gpu_py_zip.b64'
-            self.s3_client.put_object(Bucket=self.s3_bucket, Key=script_key, Body=encoded, ContentType='text/plain')
-            
-            # Download and setup script on instance using SSM
-            setup_commands = [
-                f'mkdir -p {self.training_script_path}',
-                f'cd {self.training_script_path}',
-                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu_py_zip.b64',
-                # Decode and unzip using Python to avoid missing unzip
-                'python3 - <<\'PY\'\nimport base64,sys,zipfile,io\nenc=open("train_gpu_py_zip.b64","rb").read()\nraw=base64.b64decode(enc)\nzipfile.ZipFile(io.BytesIO(raw)).extractall(".")\nprint("Decoded and extracted train_gpu.py")\nPY',
-                'chmod +x train_gpu.py',
-                'rm -f train_gpu_py_zip.b64',
-                # Preflight syntax check with context dump on failure
-                'python3 -m py_compile train_gpu.py || (echo "Syntax check failed"; nl -ba train_gpu.py | sed -n "220,260p"; exit 1)',
-                f'echo "Setup complete for job {job_id}"'
-            ]
+            # If skip_setup is True, only upload the training script
+            if self.skip_setup:
+                logger.info("Skipping environment setup (using pre-configured instance)")
+                
+                # Just upload the training script
+                from pathlib import Path as _Path
+                tmpl_path = _Path(__file__).parent.parent / 'scripts' / 'train_gpu_template.py'
+                with open(tmpl_path, 'r') as _f:
+                    training_script = _f.read()
+                
+                # Upload script directly to S3
+                script_key = f'scripts/{job_id}/train_gpu.py'
+                self.s3_client.put_object(
+                    Bucket=self.s3_bucket, 
+                    Key=script_key, 
+                    Body=training_script.encode('utf-8'), 
+                    ContentType='text/plain'
+                )
+                
+                # Simple commands to download script
+                setup_commands = [
+                    f'mkdir -p {self.training_script_path}',
+                    f'cd {self.training_script_path}',
+                    f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py',
+                    'chmod +x train_gpu.py',
+                    f'echo "Script ready for job {job_id}"'
+                ]
+            else:
+                # Full setup for non-configured instances
+                logger.info("Running full environment setup")
+                
+                # Package script from local template to zip+b64 for maximum integrity
+                import zipfile
+                import io as _io
+                from pathlib import Path as _Path
+                tmpl_path = _Path(__file__).parent.parent / 'scripts' / 'train_gpu_template.py'
+                with open(tmpl_path, 'r') as _f:
+                    training_script = _f.read()
+                buf = _io.BytesIO()
+                with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr('train_gpu.py', training_script)
+                zip_bytes = buf.getvalue()
+                encoded = base64.b64encode(zip_bytes)
+                script_key = f'scripts/{job_id}/train_gpu_py_zip.b64'
+                self.s3_client.put_object(Bucket=self.s3_bucket, Key=script_key, Body=encoded, ContentType='text/plain')
+                
+                # Full setup commands including dependency installation
+                setup_commands = [
+                    # Install Python dependencies
+                    'pip3 install --upgrade pip',
+                    'pip3 install tensorflow==2.15.* pillow numpy boto3 scikit-learn',
+                    
+                    # Setup training directory
+                    f'mkdir -p {self.training_script_path}',
+                    f'cd {self.training_script_path}',
+                    f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu_py_zip.b64',
+                    # Decode and unzip using Python
+                    'python3 - <<\'PY\'\nimport base64,sys,zipfile,io\nenc=open("train_gpu_py_zip.b64","rb").read()\nraw=base64.b64decode(enc)\nzipfile.ZipFile(io.BytesIO(raw)).extractall(".")\nprint("Decoded and extracted train_gpu.py")\nPY',
+                    'chmod +x train_gpu.py',
+                    'rm -f train_gpu_py_zip.b64',
+                    # Preflight syntax check
+                    'python3 -m py_compile train_gpu.py || (echo "Syntax check failed"; exit 1)',
+                    f'echo "Setup complete for job {job_id}"'
+                ]
             
             response = self.ssm_client.send_command(
                 InstanceIds=[instance_id],
@@ -941,10 +976,13 @@ if __name__ == "__main__":
             command_id = response['Command']['CommandId']
             logger.info(f"Started training command {command_id} on instance {instance_id}")
             
-            # Monitor training progress
+            # Monitor training progress with better logging
             start_time = time.time()
             check_interval = 10  # Check every 10 seconds
             max_duration = 3600  # 1 hour max
+            last_output_len = 0
+            
+            logger.info(f"Monitoring training progress for job {job_id}...")
             
             while True:
                 await asyncio.sleep(check_interval)
@@ -956,9 +994,22 @@ if __name__ == "__main__":
                     )
                     
                     status = result['Status']
+                    elapsed = int(time.time() - start_time)
+                    
+                    # Log status updates
+                    logger.info(f"Training status: {status} (elapsed: {elapsed}s)")
                     
                     # Update progress based on output
                     output = result.get('StandardOutputContent', '')
+                    if len(output) > last_output_len:
+                        # New output detected
+                        new_output = output[last_output_len:]
+                        last_output_len = len(output)
+                        
+                        # Log key training events
+                        if 'Epoch' in new_output:
+                            logger.info(f"Training output: {new_output[-200:]}")  # Last 200 chars
+                        
                     if 'Training progress:' in output:
                         # Extract progress from output
                         lines = output.split('\n')
@@ -968,11 +1019,16 @@ if __name__ == "__main__":
                                     progress = float(line.split(':')[1].strip().replace('%', ''))
                                     job_queue.update_job_progress(job_id, 40 + (progress * 0.4), 
                                                                  f"Training in progress: {progress}%")
+                                    logger.info(f"Training progress: {progress}%")
                                 except:
                                     pass
                                 break
                     
                     if status in ['Success', 'Failed', 'Cancelled', 'TimedOut']:
+                        logger.info(f"Training completed with status: {status}")
+                        if status == 'Failed':
+                            error_output = result.get('StandardErrorContent', '')
+                            logger.error(f"Training failed with error: {error_output}")
                         break
                     
                     # Check timeout
