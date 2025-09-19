@@ -368,7 +368,8 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         if global_model_id is not None:
             payload["global_model_id"] = int(global_model_id)
         if logs_url:
-            payload["training_logs_path"] = logs_url
+            # training_logs_path column doesn't exist in DB schema
+            # payload["training_logs_path"] = logs_url
         
         model_record = await db_manager.create_trained_model(payload)
         logger.info(f"✅ Atomic DB write successful for student {student['id']}")
@@ -615,15 +616,15 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         if logs_url:
             # Optional field; ignore if DB schema lacks it
             try:
-                payload["training_logs_path"] = logs_url
+                # training_logs_path column doesn't exist in DB schema
+            # payload["training_logs_path"] = logs_url
             except Exception:
                 pass
         try:
             model_record = await db_manager.create_trained_model(payload)
         except Exception as e:
             # Retry without optional field if column missing
-            if "training_logs_path" in payload:
-                payload.pop("training_logs_path", None)
+            # training_logs_path column doesn't exist in DB schema - already removed
                 model_record = await db_manager.create_trained_model(payload)
             else:
                 raise e
@@ -1286,21 +1287,9 @@ async def run_global_gpu_training(job, student_ids, genuine_data, forged_data, u
                 "model_urls": gpu_result['model_urls']
             }
 
-            # Hybrid: also train individual models locally from the same preprocessed arrays (before completing job)
-            individual_count = 0
-            try:
-                for s in students:
-                    sid = int(s["id"])  # type: ignore[index]
-                    bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                    if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=int(model_record.get("id") if isinstance(model_record, dict) else 0) or None, use_s3_upload=use_s3_upload)
-                        individual_count += 1
-            except Exception as e:
-                logger.warning(f"Hybrid individual training (post-global GPU) encountered an error: {e}")
-
+            # GLOBAL TRAINING ONLY - No individual training
             if job:
-                result["individual_models_created"] = individual_count
-                job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+                job_queue.update_job_progress(job.job_id, 100.0, "Global training completed successfully!")
                 job_queue.complete_job(job.job_id, result)
         else:
             error_msg = gpu_result.get('error', 'Unknown GPU training error')
@@ -1435,32 +1424,9 @@ async def run_global_async_training(job, student_ids, genuine_data, forged_data,
         # Hybrid: also train and store individual models from the already preprocessed arrays (before completing job)
         individual_count = 0
         logger.info(f"Starting individual training for {len(students)} students")
-        try:
-            for i, s in enumerate(students):
-                sid = int(s["id"])  # type: ignore[index]
-                student_name = f"{s.get('firstname', '')} {s.get('surname', '')}".strip() or f"Student_{sid}"
-                bucket = per_student.get(sid, {"genuine_images": [], "forged_images": []})
-                logger.info(f"Processing student {i+1}/{len(students)}: {student_name} (ID: {sid}) with {len(bucket['genuine_images'])} genuine images")
-                
-                if bucket["genuine_images"]:  # Only need genuine signatures for owner identification
-                    try:
-                        global_model_id = int(model_record.get("id")) if model_record and isinstance(model_record, dict) else None
-                        logger.info(f"Starting individual training for {student_name}")
-                        await _train_and_store_individual_from_arrays(s, bucket["genuine_images"], bucket["forged_images"], job, global_model_id=global_model_id, use_s3_upload=use_s3_upload)
-                        individual_count += 1
-                        logger.info(f"✅ Completed individual training for {student_name}")
-                    except Exception as student_error:
-                        logger.error(f"❌ Individual training failed for {student_name}: {student_error}")
-                        # Continue with next student instead of failing completely
-                        continue
-                else:
-                    logger.warning(f"⚠️ Skipping {student_name} - no genuine images available")
-        except Exception as e:
-            logger.warning(f"Hybrid individual training (post-global local) encountered an error: {e}")
-
+        # GLOBAL TRAINING ONLY - No individual training
         if job:
-            result["individual_models_created"] = individual_count
-            job_queue.update_job_progress(job.job_id, 98.0, f"Saved {individual_count} individual models")
+            job_queue.update_job_progress(job.job_id, 100.0, "Global training completed successfully!")
             job_queue.complete_job(job.job_id, result)
             
     except Exception as e:
