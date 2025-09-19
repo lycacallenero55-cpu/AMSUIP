@@ -448,7 +448,7 @@ const Students = () => {
         <div className="mb-16"></div>
         
         {/* Search and Students Section */}
-        <div className="bg-white rounded-lg shadow-sm p-4">
+        <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-base font-semibold text-education-navy">List of Students {pagination.currentPage > 1 && `(Page ${pagination.currentPage})`}</h3>
             <div className="mt-0">
