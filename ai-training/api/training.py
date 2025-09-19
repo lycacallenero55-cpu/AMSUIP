@@ -370,6 +370,7 @@ async def _train_and_store_individual_from_arrays(student: dict, genuine_arrays:
         if logs_url:
             # training_logs_path column doesn't exist in DB schema
             # payload["training_logs_path"] = logs_url
+            pass
         
         model_record = await db_manager.create_trained_model(payload)
         logger.info(f"✅ Atomic DB write successful for student {student['id']}")
@@ -615,18 +616,17 @@ async def train_signature_model(student, genuine_data, forged_data, job=None):
         }
         if logs_url:
             # Optional field; ignore if DB schema lacks it
-            try:
-                # training_logs_path column doesn't exist in DB schema
+            # training_logs_path column doesn't exist in DB schema
             # payload["training_logs_path"] = logs_url
-            except Exception:
-                pass
+            pass
         try:
             model_record = await db_manager.create_trained_model(payload)
         except Exception as e:
             # Retry without optional field if column missing
             # training_logs_path column doesn't exist in DB schema - already removed
+            try:
                 model_record = await db_manager.create_trained_model(payload)
-            else:
+            except Exception:
                 raise e
 
         train_time = time.time() - t0
