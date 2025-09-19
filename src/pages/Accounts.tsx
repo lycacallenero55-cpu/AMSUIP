@@ -268,7 +268,7 @@ const Accounts = () => {
   return (
     <Layout>
       <PageWrapper skeletonType="table">
-        <div className="px-6 py-4 space-y-6">
+        <div className="px-6 py-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-lg font-bold tracking-tight">ACCOUNT MANAGEMENT</h1>
@@ -276,12 +276,12 @@ const Accounts = () => {
 
         </div>
         
-        {/* Big space between page title and card */}
+        {/* Match Allowed Terms spacing between title and card */}
         <div className="mb-16"></div>
 
         {/* Show accounts table only for admins */}
         {currentUserProfile?.role === 'admin' ? (
-          <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-base font-semibold text-education-navy">List of Accounts</h3>
             </div>

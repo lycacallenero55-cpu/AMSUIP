@@ -299,6 +299,9 @@ const TakeAttendanceContent: React.FC = () => {
         </div>
       </div>
 
+      {/* Space between title and content to match other pages */}
+      <div className="mb-16"></div>
+
       <div className="flex items-center space-x-4">
         {/* Search removed as per user request */}
       </div>
