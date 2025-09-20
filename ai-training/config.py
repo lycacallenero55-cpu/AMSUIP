@@ -5,8 +5,8 @@ load_dotenv()
 
 class Settings:
     # Supabase Configuration
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY")
     
     # AWS / S3 Configuration
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
@@ -23,24 +23,24 @@ class Settings:
     DEBUG = os.getenv("DEBUG", "True").lower() == "true"
     
     # Model Configuration
-    MODEL_IMAGE_SIZE = int(os.getenv("MODEL_IMAGE_SIZE", 224))
-    MODEL_BATCH_SIZE = int(os.getenv("MODEL_BATCH_SIZE", 16))  # Smaller batch size for small datasets
-    MODEL_EPOCHS = int(os.getenv("MODEL_EPOCHS", 50))  # More epochs for better convergence with small datasets
-    MODEL_LEARNING_RATE = float(os.getenv("MODEL_LEARNING_RATE", 0.0001))  # Lower learning rate for transfer learning
-    MODEL_FINE_TUNE_EPOCHS = int(os.getenv("MODEL_FINE_TUNE_EPOCHS", 10))  # Additional epochs for fine-tuning
+    MODEL_IMAGE_SIZE: int = int(os.getenv("MODEL_IMAGE_SIZE", 224))
+    MODEL_BATCH_SIZE: int = int(os.getenv("MODEL_BATCH_SIZE", 16))  # Smaller batch size for small datasets
+    MODEL_EPOCHS: int = int(os.getenv("MODEL_EPOCHS", 50))  # More epochs for better convergence with small datasets
+    MODEL_LEARNING_RATE: float = float(os.getenv("MODEL_LEARNING_RATE", 0.0001))  # Lower learning rate for transfer learning
+    MODEL_FINE_TUNE_EPOCHS: int = int(os.getenv("MODEL_FINE_TUNE_EPOCHS", 10))  # Additional epochs for fine-tuning
 
     # CPU Optimization
     USE_CPU_OPTIMIZATION: bool = True
     CPU_THREADS: int = 6  # For Ryzen 5 3400G
     
     # Storage Configuration
-    LOCAL_MODELS_DIR = os.getenv("LOCAL_MODELS_DIR", "./models")
-    SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "models")
+    LOCAL_MODELS_DIR: str = os.getenv("LOCAL_MODELS_DIR", "./models")
+    SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "models")
     
     # Training Configuration
-    MIN_GENUINE_SAMPLES = int(os.getenv("MIN_GENUINE_SAMPLES", 3))  # Reduced for minimal requirements like Teachable Machine
-    MIN_FORGED_SAMPLES = int(os.getenv("MIN_FORGED_SAMPLES", 0))   # Disabled - no forgery detection needed
-    MAX_TRAINING_TIME = int(os.getenv("MAX_TRAINING_TIME", 3600))
+    MIN_GENUINE_SAMPLES: int = int(os.getenv("MIN_GENUINE_SAMPLES", 3))  # Reduced for minimal requirements like Teachable Machine
+    MIN_FORGED_SAMPLES: int = int(os.getenv("MIN_FORGED_SAMPLES", 0))   # Disabled - no forgery detection needed
+    MAX_TRAINING_TIME: int = int(os.getenv("MAX_TRAINING_TIME", 3600))
 
     # Verification Settings
     DEFAULT_SIMILARITY_THRESHOLD: float = 0.7

@@ -21,6 +21,25 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+print("=" * 60)
+print("STARTING TRAINING SCRIPT")
+print("=" * 60)
+print(f"Python version: {sys.version}")
+print(f"TensorFlow version: {tf.__version__}")
+print(f"Arguments: {sys.argv}")
+
+if len(sys.argv) != 4:
+    print("Usage: train_gpu.py <training_data_key> <job_id> <student_id>")
+    sys.exit(1)
+
+training_data_key = sys.argv[1]
+job_id = sys.argv[2]
+student_id = int(sys.argv[3])
+
+print(f"Training data key: {training_data_key}")
+print(f"Job ID: {job_id}")
+print(f"Student ID: {student_id}")
+
 # GPU Configuration with memory growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
@@ -522,20 +541,10 @@ class SignatureEmbeddingModel:
 
 def train_on_gpu(training_data_key, job_id, student_id):
     try:
-        s3 = boto3.client('s3')
-        bucket = os.environ.get('S3_BUCKET', 'signatureai-uploads')
         print("Starting training for job {}".format(job_id))
-        print("S3 bucket: {}".format(bucket))
         print("Training data key: {}".format(training_data_key))
-        print("Downloading training data from s3://{}/{}".format(bucket, training_data_key))
-        try:
-            response = s3.get_object(Bucket=bucket, Key=training_data_key)
-            training_data_raw = json.loads(response['Body'].read())
-            print("Successfully downloaded training data")
-        except Exception as e:
-            print("Failed to download training data: {}".format(e))
-            traceback.print_exc()
-            raise
+        with open(training_data_key, 'r') as f:
+            training_data_raw = json.load(f)
         logger.info("Raw training data contains {} students".format(len(training_data_raw)))
         preprocessor = SignaturePreprocessor(target_size=(224, 224))
         model_manager = SignatureEmbeddingModel(max_students=150, image_size=224)
@@ -844,4 +853,3 @@ if __name__ == "__main__":
     print("  Student ID: {}".format(student_id))
     print("  TensorFlow version: {}".format(tf.__version__))
     train_on_gpu(training_data_key, job_id, student_id)
-

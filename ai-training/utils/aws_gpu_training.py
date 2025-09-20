@@ -94,16 +94,25 @@ class AWSGPUTrainingManager:
             
             # Step 4: Upload training data to S3
             job_queue.update_job_progress(job_id, 25.0, "Uploading training data to S3...")
+            logger.info("Uploading training data to S3...")
+            start_time = time.time()
             training_data_key = await self._upload_training_data(training_data, job_id)
+            logger.info(f"Training data uploaded to S3 in {time.time() - start_time} seconds")
             
             # Step 5: Setup and start training on GPU instance
             job_queue.update_job_progress(job_id, 30.0, "Setting up training environment...")
+            logger.info("Setting up training environment...")
+            start_time = time.time()
             await self._setup_training_environment(instance_id, job_id)
+            logger.info(f"Training environment setup completed in {time.time() - start_time} seconds")
             
             job_queue.update_job_progress(job_id, 40.0, "Starting training on GPU instance...")
+            logger.info("Starting training on GPU instance...")
+            start_time = time.time()
             training_result = await self._start_remote_training(
                 instance_id, training_data_key, job_id, student_id, job_queue
             )
+            logger.info(f"Training completed in {time.time() - start_time} seconds")
             
             if training_result.get('status') != 'success':
                 raise Exception(f"Training failed: {training_result.get('error', 'Unknown error')}")
@@ -766,112 +775,6 @@ class SignatureEmbeddingModel:
         if len(all_images) < 5:
             print("WARNING: Very few samples for training. Results may be poor.")
             validation_split = 0.0
-        print("Converting to numpy arrays...")
-        X = np.array(all_images)
-        y = keras.utils.to_categorical(all_labels, num_classes=len(training_data))
-        print("Final training data shape: {}".format(X.shape))
-        print("Labels shape: {}".format(y.shape))
-        print("Data type: {}, range: [{:.3f}, {:.3f}]".format(X.dtype, float(X.min()), float(X.max())))
-        model = keras.Sequential([
-            keras.layers.InputLayer(input_shape=(224, 224, 3)),
-            keras.layers.Conv2D(32, (3,3), activation='relu', padding='same'),
-            keras.layers.BatchNormalization(),
-            keras.layers.MaxPooling2D((2,2)),
-            keras.layers.Dropout(0.25),
-            keras.layers.Conv2D(64, (3,3), activation='relu', padding='same'),
-            keras.layers.BatchNormalization(),
-            keras.layers.MaxPooling2D((2,2)),
-            keras.layers.Dropout(0.25),
-            keras.layers.Conv2D(128, (3,3), activation='relu', padding='same'),
-            keras.layers.BatchNormalization(),
-            keras.layers.GlobalAveragePooling2D(),
-            keras.layers.Dropout(0.5),
-            keras.layers.Dense(256, activation='relu'),
-            keras.layers.BatchNormalization(),
-            keras.layers.Dropout(0.5),
-            keras.layers.Dense(len(training_data), activation='softmax')
-        ])
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
-        print("Model summary:")
-        model.summary()
-        print("Starting training with validation_split={}".format(validation_split))
-        callbacks = [
-            keras.callbacks.EarlyStopping(monitor='val_accuracy' if validation_split>0 else 'accuracy', patience=5, restore_best_weights=True),
-            keras.callbacks.ReduceLROnPlateau(monitor='val_loss' if validation_split>0 else 'loss', factor=0.5, patience=3, min_lr=0.0001),
-        ]
-        try:
-            if validation_split > 0:
-                history = model.fit(X, y, batch_size=min(32, len(X)), epochs=epochs, validation_split=validation_split, callbacks=callbacks, verbose=1)
-            else:
-                history = model.fit(X, y, batch_size=min(32, len(X)), epochs=epochs, callbacks=callbacks, verbose=1)
-        except Exception as e:
-            print("Training failed: {}".format(e))
-            traceback.print_exc()
-            raise
-        self.classification_head = model
-        self.embedding_model = keras.Model(inputs=model.input, outputs=model.layers[-3].output)
-        print("Training completed successfully!")
-        return {'classification_history': history.history, 'siamese_history': {}}
-
-def train_on_gpu(training_data_key, job_id, student_id):
-    try:
-        s3 = boto3.client('s3')
-        bucket = os.environ.get('S3_BUCKET', 'signatureai-uploads')
-        print("Starting training for job {}".format(job_id))
-        print("S3 bucket: {}".format(bucket))
-        print("Training data key: {}".format(training_data_key))
-        print("Downloading training data from s3://{}/{}".format(bucket, training_data_key))
-        try:
-            response = s3.get_object(Bucket=bucket, Key=training_data_key)
-            training_data_raw = json.loads(response['Body'].read())
-            print("Successfully downloaded training data")
-        except Exception as e:
-            print("Failed to download training data: {}".format(e))
-            traceback.print_exc()
-            raise
-        print("Raw training data contains {} students".format(len(training_data_raw)))
-        preprocessor = SignaturePreprocessor(target_size=(224, 224))
-        model_manager = SignatureEmbeddingModel(max_students=150)
-        print("Processing training data...")
-        processed_data = {}
-        for student_name, data in training_data_raw.items():
-            print("\nProcessing student: {}".format(student_name))
-            genuine_images = []
-            forged_images = []
-            genuine_raw = data.get('genuine', [])
-            print("  Found {} genuine images".format(len(genuine_raw)))
-            for i, img_data in enumerate(genuine_raw):
-                print("    Processing genuine image {}/{}".format(i+1, len(genuine_raw)))
-                processed_img = preprocessor.preprocess_signature(img_data, debug_name="{}_genuine_{}".format(student_name, i))
-                if processed_img is not None:
-                    genuine_images.append(processed_img)
-                    print("      \u2713 Successfully processed")
-                else:
-                    print("      x Failed to process")
-            forged_raw = data.get('forged', [])
-            print("  Found {} forged images".format(len(forged_raw)))
-            for i, img_data in enumerate(forged_raw):
-                print("    Processing forged image {}/{}".format(i+1, len(forged_raw)))
-                processed_img = preprocessor.preprocess_signature(img_data, debug_name="{}_forged_{}".format(student_name, i))
-                if processed_img is not None:
-                    forged_images.append(processed_img)
-                    print("      \u2713 Successfully processed")
-                else:
-                    print("      x Failed to process")
-            processed_data[student_name] = {'genuine': genuine_images, 'forged': forged_images}
-            total_processed = len(genuine_images) + len(forged_images)
-            total_raw = len(genuine_raw) + len(forged_raw)
-            success_rate = (total_processed / total_raw * 100) if total_raw > 0 else 0
-            print("  Final: {} genuine, {} forged".format(len(genuine_images), len(forged_images)))
-            print("  Success rate: {}/{} ({:.1f}%)".format(total_processed, total_raw, success_rate))
-        print("\n=== PREPROCESSING SUMMARY ===")
-        print("Total images processed successfully: {}".format(preprocessor.processed_count))
-        print("Total processing errors: {}".format(preprocessor.error_count))
-        total_samples = sum(len(d['genuine']) + len(d['forged']) for d in processed_data.values())
-        print("Total processed samples available for training: {}".format(total_samples))
-        if total_samples == 0:
-            raise ValueError("No valid training samples found after processing")
-        validation_split = 0.0 if total_samples < 5 else 0.2
         print("\n=== STARTING MODEL TRAINING ===")
         training_result = model_manager.train_models(processed_data, epochs=25, validation_split=validation_split)
         print("Training completed! Saving models...")
@@ -965,10 +868,26 @@ if __name__ == "__main__":
                                    job_id: str, student_id: int, job_queue) -> Dict:
         """Start training on remote GPU instance"""
         try:
-            # Run training command
+            # Upload the training script to the instance
+            from pathlib import Path as _Path
+            tmpl_path = _Path(__file__).parent.parent / 'scripts' / 'train_gpu_template.py'
+            with open(tmpl_path, 'r') as _f:
+                training_script = _f.read()
+            script_key = f'scripts/{job_id}/train_gpu.py'
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket, 
+                Key=script_key, 
+                Body=training_script.encode('utf-8'), 
+                ContentType='text/plain'
+            )
+            
+            # Run training command inside Docker container
             training_command = [
                 f'cd {self.training_script_path}',
-                f'python3 train_gpu.py {training_data_key} {job_id} {student_id}'
+                f'aws s3 cp s3://{self.s3_bucket}/{training_data_key} training_data.json',
+                f'aws s3 cp s3://{self.s3_bucket}/{script_key} train_gpu.py',
+                'chmod +x train_gpu.py',
+                f'docker exec ai-training-container python3 /workspace/train_gpu.py training_data.json {job_id} {student_id}'
             ]
             
             response = self.ssm_client.send_command(
