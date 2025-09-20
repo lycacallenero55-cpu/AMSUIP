@@ -7,7 +7,11 @@ import boto3
 import time
 import json
 import logging
-from typing import Dict, Optional, List
+import asyncio
+from typing import Dict, Optional
+import os
+from pathlib import Path
+from config import settings
 from botocore.exceptions import ClientError
 import asyncio
 import os

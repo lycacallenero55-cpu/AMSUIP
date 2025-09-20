@@ -66,23 +66,16 @@ class Settings:
     ENABLE_PERFORMANCE_MONITORING: bool = True
     LOG_LEVEL: str = "INFO"
     
-    # Docker Training Configuration
-    USE_DOCKER_TRAINING: bool = os.getenv("USE_DOCKER_TRAINING", "false").lower() == "true"
-    DOCKER_CONTAINER_NAME: str = os.getenv("DOCKER_CONTAINER_NAME", "ai-training-gpu")
-    DOCKER_CONTAINER_IMAGE: str = os.getenv("DOCKER_CONTAINER_IMAGE", "tensorflow/tensorflow:2.15.0-gpu")
-    HOST_MODELS_DIR: str = os.getenv("HOST_MODELS_DIR", "./models")
-    HOST_DATA_DIR: str = os.getenv("HOST_DATA_DIR", "./training_data")
-    
-    # AWS GPU Training Configuration (optional, if not using Docker)
-    GPU_INSTANCE_TYPE: str = os.getenv("GPU_INSTANCE_TYPE", "g4dn.xlarge")
-    GPU_AMI_ID: str = os.getenv("GPU_AMI_ID", "ami-0c55b159cbfafe1f0")
-    EC2_KEY_NAME: str = os.getenv("EC2_KEY_NAME", "")
-    EC2_SECURITY_GROUP_ID: str = os.getenv("EC2_SECURITY_GROUP_ID", "")
-    EC2_SUBNET_ID: str = os.getenv("EC2_SUBNET_ID", "")
-    EC2_IAM_INSTANCE_PROFILE: str = os.getenv("EC2_IAM_INSTANCE_PROFILE", "")
+    # EC2 GPU Training Configuration (using your existing env variables)
+    GPU_INSTANCE_TYPE: str = os.getenv("AWS_GPU_INSTANCE_TYPE", "g4dn.xlarge")
+    GPU_AMI_ID: str = os.getenv("AWS_GPU_AMI_ID", "ami-0bbdd8c17ed981ef9")
+    EC2_KEY_NAME: str = os.getenv("AWS_KEY_NAME", "gpu-training-key")
+    EC2_SECURITY_GROUP_ID: str = os.getenv("AWS_SECURITY_GROUP_ID", "sg-0b99dfa9c4107a3b8")
+    EC2_SUBNET_ID: str = os.getenv("AWS_SUBNET_ID", "subnet-021ae1656852b0225")
+    EC2_IAM_INSTANCE_PROFILE: str = os.getenv("AWS_IAM_INSTANCE_PROFILE", "EC2-S3-Access")
     S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", S3_BUCKET)
-    EXISTING_GPU_INSTANCE_ID: str = os.getenv("EXISTING_GPU_INSTANCE_ID", "")
-    SKIP_GPU_SETUP: bool = os.getenv("SKIP_GPU_SETUP", "false").lower() == "true"
+    EXISTING_GPU_INSTANCE_ID: str = os.getenv("AWS_GPU_EXISTING_INSTANCE_ID", "i-0756716b845e4c314")
+    SKIP_GPU_SETUP: bool = True  # Always skip setup since you have existing instance
     
     class Config:
         env_file = ".env"
